@@ -834,7 +834,16 @@ fn coast(args: &[String]) {
         c.step(0.02);
         if c.t_days >= next {
             next += every;
-            println!("t={:6.1} cells {} migrations {} | {:.1}s", c.t_days, c.cells(), c.stats.migrations, start.elapsed().as_secs_f64());
+            let (di, dn): (f64, usize) = c.sites.iter().map(|s| s.world.pigment_differentiation()).fold((0.0, 0), |a, (d, n)| (a.0 + d * n as f64, a.1 + n));
+            println!(
+                "t={:6.1} cells {} migrations {} | pigment differentiation in colonies {:.2} ({} colonial cells) | {:.1}s",
+                c.t_days,
+                c.cells(),
+                c.stats.migrations,
+                di / dn.max(1) as f64,
+                dn,
+                start.elapsed().as_secs_f64()
+            );
             for s in c.sites.iter_mut() {
                 let w = &mut s.world;
                 let ph = w.phenotype_means();

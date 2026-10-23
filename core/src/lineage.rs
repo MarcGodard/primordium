@@ -202,7 +202,8 @@ impl World {
         let mut dead = Vec::new();
         for (ci, c) in cells.iter_mut().enumerate() {
             let info = self.info(&c.genome);
-            let shade = c.colony.and_then(|k| colony_shade.get(&k).copied()).unwrap_or_else(|| self.own_shade(c, &info));
+            let own = self.own_shade(c, &info);
+            let (shade, _) = self.shades(c, own, &colony_shade);
             let site = self.patch_site(c.patch, shade);
             let x = self.lineage_features(c, &info, &site);
             if c.template.is_none() {

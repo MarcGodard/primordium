@@ -702,8 +702,10 @@ impl World {
         for (ci, c) in cells.iter_mut().enumerate() {
             let info = self.info(&c.genome);
             debug_assert_eq!(c.products.len(), info.genes.len());
-            let shade = c.colony.and_then(|k| colony_shade.get(&k).copied()).unwrap_or_else(|| self.own_shade(c, &info));
+            let own = self.own_shade(c, &info);
+            let (shade, sensed_shade) = self.shades(c, own, &colony_shade);
             let site = self.patch_site(c.patch, shade);
+            let light = self.patch_site(c.patch, sensed_shade).x[2];
             if logging {
                 samples.push(crate::lineage::LineageSample { x: self.lineage_features(c, &info, &site), ..Default::default() });
             }
@@ -716,7 +718,7 @@ impl World {
             // the surrogate learns only what the detailed interior adds on top of it
             self.exchange(c, &site, dt, &mut rng);
             let mut tally = PairTally::default();
-            self.interior_step(c, &info, &site, &x, dt, &mut tally, &mut rng);
+            self.interior_step(c, &info, &site, light, &x, dt, &mut tally, &mut rng);
             self.radiation(c, &site, dt, &mut rng);
             if c.mode == Mode::Detail && self.learn {
                 self.model.record_sample(&x);
@@ -940,7 +942,8 @@ impl World {
     /// The cell's interior. Detail copies messengers and genome letter by letter with Boltzmann
     /// pairing; surrogate mode keeps every count-level process (metabolism, expression, decay,
     /// insertion, fork progress, stalls) and draws only copy fidelity from the learned table.
-    fn interior_step(&mut self, c: &mut Cell, info: &GenomeInfo, site: &Site, x_feat: &[f64], dt: f64, tally: &mut PairTally, rng: &mut Rng) {
+    #[allow(clippy::too_many_arguments)]
+    fn interior_step(&mut self, c: &mut Cell, info: &GenomeInfo, site: &Site, light: f64, x_feat: &[f64], dt: f64, tally: &mut PairTally, rng: &mut Rng) {
         let learned = c.mode == Mode::Surrogate;
         let model = learned.then(|| self.learned_copy(x_feat));
         let kt = site.env.kt;
@@ -961,7 +964,7 @@ impl World {
 
         let free_total: i64 = c.free.iter().sum();
         let li_share = if free_total > 0 { c.free[1] as f64 / free_total as f64 } else { 0.0 };
-        let signals = [(site.x[2]).clamp(0.0, 1.0), ((1.05 - kt) / 0.2).clamp(0.0, 1.0), (1.0 - li_share / 0.3).clamp(0.0, 1.0)];
+        let signals = [light.clamp(0.0, 1.0), ((1.05 - kt) / 0.2).clamp(0.0, 1.0), (1.0 - li_share / 0.3).clamp(0.0, 1.0)];
 
         // transcription: each gene makes product copies; any copy error makes junk
         for (k, g) in info.genes.iter().enumerate() {
@@ -1205,8 +1208,8 @@ impl World {
         self.cp.max_shade * info.pigment * self.expressed_fraction(c, info, |g| g.func.pigment > 0.0)
     }
 
-    /// A colony shares its shade: each member sits under the colony's mean pigment cover.
-    pub(crate) fn colony_shades(&mut self, cells: &[Cell]) -> HashMap<u64, f64> {
+    /// Per colony: summed member shade and member count.
+    pub(crate) fn colony_shades(&mut self, cells: &[Cell]) -> HashMap<u64, (f64, f64)> {
         let mut acc: HashMap<u64, (f64, f64)> = HashMap::new();
         for c in cells {
             if let Some(k) = c.colony {
@@ -1216,7 +1219,17 @@ impl World {
                 e.1 += 1.0;
             }
         }
-        acc.into_iter().map(|(k, (s, n))| (k, s / n)).collect()
+        acc
+    }
+
+    /// (shade against UV, shade a cell's light sensing sees). UV protection is communal: the
+    /// colony's mean pigment cover. Sensing sees only the neighbours' pigment, not the cell's
+    /// own: a pigment maker among shaded mates still sees full sun, the mates see dimness.
+    pub(crate) fn shades(&self, c: &Cell, own: f64, colonies: &HashMap<u64, (f64, f64)>) -> (f64, f64) {
+        match c.colony.and_then(|k| colonies.get(&k)) {
+            Some(&(sum, n)) if n > 1.0 => (sum / n, (sum - own) / (n - 1.0)),
+            _ => (own, 0.0),
+        }
     }
 
     /// Whether a daughter stays stuck to its parent: odds rise with the adhesion the parent
@@ -1385,6 +1398,34 @@ impl World {
         }
         let total: f64 = by.iter().sum::<f64>().max(1.0);
         [by[0] / total, by[1] / total, by[2] / total, by[3] / total, pig_light / pig.max(1.0)]
+    }
+
+    /// Division-of-labour index for pigment: mean variance of members' pigment expression
+    /// within colonies over the variance across all cells. Clonal colonies sit below 1;
+    /// members taking different jobs push it up. Also returns the colonial cell count used.
+    pub fn pigment_differentiation(&self) -> (f64, usize) {
+        let frac = |c: &Cell| -> f64 {
+            let Some(info) = self.genomes.get(&c.genome) else { return 0.0 };
+            self.expressed_fraction(c, info, |g| g.func.pigment > 0.6)
+        };
+        let all: Vec<f64> = self.cells.iter().map(frac).collect();
+        let var = |v: &[f64]| {
+            let m = v.iter().sum::<f64>() / v.len().max(1) as f64;
+            v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len().max(1) as f64
+        };
+        let total = var(&all);
+        let mut groups: HashMap<u64, Vec<f64>> = HashMap::new();
+        for (c, f) in self.cells.iter().zip(&all) {
+            if let Some(k) = c.colony {
+                groups.entry(k).or_default().push(*f);
+            }
+        }
+        let (mut within, mut n) = (0.0, 0usize);
+        for g in groups.values().filter(|g| g.len() >= 2) {
+            within += var(g) * g.len() as f64;
+            n += g.len();
+        }
+        if n == 0 || total <= 0.0 { (0.0, n) } else { (within / n as f64 / total, n) }
     }
 
     /// Population means of the phenotype, for watching evolution.
