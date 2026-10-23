@@ -9,6 +9,7 @@ var pivot: Node3D
 var mm: MultiMesh
 var cam: Camera3D
 var radius := 4.0
+var skin: MeshInstance3D
 
 func _ready() -> void:
 	stretch = true
@@ -40,8 +41,8 @@ func _ready() -> void:
 	pivot = Node3D.new()
 	vp.add_child(pivot)
 	var sphere := SphereMesh.new()
-	sphere.radius = 0.62
-	sphere.height = 1.24
+	sphere.radius = 0.3
+	sphere.height = 0.6
 	sphere.radial_segments = 16
 	sphere.rings = 8
 	var mat := StandardMaterial3D.new()
@@ -57,6 +58,20 @@ func _ready() -> void:
 	var mi := MultiMeshInstance3D.new()
 	mi.multimesh = mm
 	pivot.add_child(mi)
+	# smooth skin over the cells (BodySkin, surface nets): glossy, a little translucent so the
+	# cells inside still show as cores
+	skin = MeshInstance3D.new()
+	var sm := StandardMaterial3D.new()
+	sm.vertex_color_use_as_albedo = true
+	sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sm.albedo_color = Color(1, 1, 1, 0.72)
+	sm.roughness = 0.22
+	sm.metallic_specular = 0.7
+	sm.rim_enabled = true
+	sm.rim = 0.6
+	sm.rim_tint = 0.3
+	skin.material_override = sm
+	pivot.add_child(skin)
 	# the rock it stood on
 	var rock := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
@@ -74,7 +89,7 @@ func _ready() -> void:
 
 ## A cell's colour from the traits it expresses more than its body's average: the body's jobs
 ## become distinct colours (the reef view compares to the whole reef instead).
-func tint(e: Array, mean: Array) -> Color:
+static func tint(e: Array, mean: Array) -> Color:
 	var c := Color(0, 0, 0)
 	var tot := 0.001
 	for k in 5:
@@ -96,6 +111,7 @@ func show_shape(shape: Array) -> void:
 	mm.instance_count = n
 	pivot.get_node("Rock").visible = n > 0
 	if n == 0:
+		skin.mesh = null
 		return
 	var lo := Vector3(INF, INF, INF)
 	var hi := -lo
@@ -112,10 +128,20 @@ func show_shape(shape: Array) -> void:
 	for i in n:
 		for k in 5:
 			mean[k] += float(shape[i * 8 + 3 + k]) / n
+	var sp := PackedVector3Array()
+	var sc := PackedColorArray()
 	for i in n:
 		var e := [shape[i * 8 + 3], shape[i * 8 + 4], shape[i * 8 + 5], shape[i * 8 + 6], shape[i * 8 + 7]]
+		var col := tint(e, mean)
 		mm.set_instance_transform(i, Transform3D(Basis(), pts[i] - mid))
-		mm.set_instance_color(i, tint(e, mean))
+		mm.set_instance_color(i, col.darkened(0.25))
+		sp.append(pts[i] - mid)
+		sc.append(col)
+	var arrays: Array = BodySkin.build(sp, sc)
+	var am := ArrayMesh.new()
+	if arrays.size() == Mesh.ARRAY_MAX:
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	skin.mesh = am
 	var ext := hi - lo
 	radius = max(2.5, max(ext.x, max(ext.y, ext.z)) * 0.5 + 1.0)
 	var rock: MeshInstance3D = pivot.get_node("Rock")

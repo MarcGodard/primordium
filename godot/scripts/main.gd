@@ -118,6 +118,9 @@ func _ready() -> void:
 					if kv2.size() == 2:
 						view._set_lever(kv2[0], float(kv2[1]))
 					view._show_levers()
+			"skins":
+				if "skin_all" in view:
+					view.skin_all = kv[1] == "1"
 			"keep":
 				if view.has_method("keep_selected"):
 					view.keep_selected()
@@ -563,7 +566,7 @@ func _show_creature(i: int) -> void:
 	var c: Dictionary = campaign.state.kept[i]
 	gallery.show_shape(c.get("shape", []))
 	var fate := "lives in your world" if c.get("released", false) else "waiting to be released in your world"
-	gallery_caption.text = "[b]%s[/b]%s\nfrom %s: %d cells doing %d jobs. %s.%s" % [c.name, "   [color=#ffd36b]creature[/color]" if c.creature else "", c.get("from", "a reef run"), c.cells, c.jobs, fate.capitalize().substr(0, 1) + fate.substr(1),
+	gallery_caption.text = ("[i]%s[/i]   " % c.species if c.has("species") else "") + "[b]%s[/b]%s\nfrom %s: %d cells doing %d jobs. %s.%s" % [c.name, "   [color=#ffd36b]creature[/color]" if c.creature else "", c.get("from", "a reef run"), c.cells, c.jobs, fate.capitalize().substr(0, 1) + fate.substr(1),
 		"\n[color=#9ab]Colour: what a cell does more than the rest of its body: [color=#40ccd9]copying[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color][/color]" if not c.get("shape", []).is_empty() else "\n[color=#9ab](no body shape recorded for this one)[/color]"]
 
 func _update_goal(delta: float) -> void:

@@ -48,6 +48,18 @@ var cells_mm: MultiMesh
 var cell_mat: ShaderMaterial
 var bites_mm: MultiMesh
 var rings_mm: MultiMesh
+## Smooth skins (BodySkin) over the selected body and the creatures, id -> MeshInstance3D.
+var skins := {}
+var skin_mat: StandardMaterial3D
+## S: skins on every body of SKIN_MIN+ cells, not only the selected one and the creatures.
+var skin_all := false
+const SKIN_MIN := 4
+## Bodies offered per half-second tick for a rebuild; the rest keep their last mesh.
+const SKIN_BATCH := 40
+## Time a tick may spend rebuilding skins (a 400-cell body takes ~4 ms plus upload).
+const SKIN_BUDGET_US := 6000
+var skin_turn := 0
+const Gallery := preload("res://scripts/gallery.gd")
 var creatures := PackedInt64Array()
 var creature_at := 0
 var speed_idx := 2
@@ -531,6 +543,9 @@ func new_run() -> void:
 	if campaign == null or garden or sim.busy():
 		return
 	var run: int = campaign.new_run()
+	for id in skins:
+		skins[id].queue_free()
+	skins.clear()
 	ok = sim.start(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), run)
 	selected = -1
 	organism = {}
@@ -622,8 +637,94 @@ func _process(delta: float) -> void:
 			if organism.is_empty():
 				selected = -1
 		_update_rings()
+		_update_skins()
 		profile.queue_redraw()
 		chart.queue_redraw()
+
+## Skins for the selected body and every creature: rebuilt on the half-second tick (bodies
+## grow, tear and crawl), dropped when the body is gone or no longer shown.
+func _update_skins() -> void:
+	if skin_mat == null:
+		# opaque: the water reads the screen after the opaque pass, so a translucent skin
+		# under the surface would vanish
+		skin_mat = StandardMaterial3D.new()
+		skin_mat.vertex_color_use_as_albedo = true
+		skin_mat.roughness = 0.22
+		skin_mat.metallic_specular = 0.7
+		skin_mat.rim_enabled = true
+		skin_mat.rim = 0.6
+		skin_mat.rim_tint = 0.3
+	var want := {}
+	if skin_all:
+		for id in sim.body_ids(SKIN_MIN):
+			want[id] = true
+	for id in creatures:
+		want[id] = true
+	if selected >= 0:
+		want[selected] = true
+	for id in skins.keys():
+		if not want.has(id):
+			skins[id].queue_free()
+			skins.erase(id)
+	# the selected body and creatures every tick, whatever the cost; then bodies with no skin
+	# yet and the rest in turns, within the time budget
+	var first := []
+	if selected >= 0:
+		first.append(selected)
+	for id in creatures:
+		if id != selected:
+			first.append(id)
+	for id in first:
+		_build_skin(id)
+	var ids: Array = want.keys()
+	var todo := []
+	for id in ids:
+		if not skins.has(id):
+			todo.append(id)
+	if ids.size() > 0:
+		for i in SKIN_BATCH:
+			todo.append(ids[(skin_turn + i) % ids.size()])
+		skin_turn = (skin_turn + SKIN_BATCH) % ids.size()
+	var done := {}
+	for id in first:
+		done[id] = true
+	var t0 := Time.get_ticks_usec()
+	for id in todo:
+		if done.has(id):
+			continue
+		if Time.get_ticks_usec() - t0 > SKIN_BUDGET_US:
+			break
+		done[id] = true
+		_build_skin(id)
+
+func _build_skin(id: int) -> void:
+	var pts: PackedVector3Array = sim.body_points(id)
+	var shape: PackedFloat32Array = sim.body_shape(id)
+	var n: int = min(pts.size(), shape.size() / 8)
+	if n < 3:
+		if skins.has(id):
+			skins[id].queue_free()
+			skins.erase(id)
+		return
+	var mean := [0.0, 0.0, 0.0, 0.0, 0.0]
+	for i in n:
+		for k in 5:
+			mean[k] += shape[i * 8 + 3 + k] / n
+	var cols := PackedColorArray()
+	for i in n:
+		cols.append(Gallery.tint([shape[i * 8 + 3], shape[i * 8 + 4], shape[i * 8 + 5], shape[i * 8 + 6], shape[i * 8 + 7]], mean))
+	var arrays: Array = BodySkin.build(pts.slice(0, n), cols)
+	if arrays.size() != Mesh.ARRAY_MAX:
+		return
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	if not skins.has(id):
+		var mi := MeshInstance3D.new()
+		mi.material_override = skin_mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+		skins[id] = mi
+	skins[id].mesh = am
 
 ## Gold rings over bodies that meet the creature goal right now.
 func _update_rings() -> void:
@@ -724,6 +825,10 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_G:
 				if not e.echo:
 					next_creature()
+			KEY_S:
+				if not e.echo:
+					skin_all = not skin_all
+					_update_skins()
 			KEY_T:
 				if not e.echo:
 					var days: float = FF_DAYS * (5.0 if e.shift_pressed else 1.0)
@@ -783,7 +888,7 @@ func hud_text() -> String:
 		t += "[color=#cbf]" + d + "[/color]\n"
 	if garden and stats.cells == 0:
 		t += "[color=#f9c]Nothing alive here. Keep creatures at the reef (K) to release them.[/color]\n"
-	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ["" if garden else ", N new run", "\nL environment levers" if garden else ""]
+	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ["" if garden else ", N new run", "\nL environment levers" if garden else ""]
 	return t
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.

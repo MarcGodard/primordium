@@ -19,6 +19,22 @@ const SHAPE_MAX: usize = 400;
 /// World units per unit of elevation (tide units).
 const VSCALE: f64 = 1.0 / CELL_RISE;
 
+/// Body shape for the gallery and skins: per cell (at most SHAPE_MAX), position relative to the
+/// body's lowest corner (lattice x, y, height) then its five expressed traits.
+fn shape_of(o: &Organism) -> PackedFloat32Array {
+    let lo = o.cells.iter().fold([i32::MAX; 3], |m, c| [m[0].min(c.pos[0]), m[1].min(c.pos[1]), m[2].min(c.pos[2])]);
+    let mut shape = PackedFloat32Array::new();
+    for c in o.cells.iter().take(SHAPE_MAX) {
+        for k in 0..3 {
+            shape.push((c.pos[k] - lo[k]) as f32);
+        }
+        for k in 0..5 {
+            shape.push(c.expr[k]);
+        }
+    }
+    shape
+}
+
 /// One row of `history` a day: see the field's doc.
 fn push_history(r: &Reef, history: &mut VecDeque<[f32; 11]>) {
     let last = history.back().map_or(-1.0, |h| h[0] as f64);
@@ -363,6 +379,32 @@ impl ReefSim {
         self.ff.is_some()
     }
 
+    /// World positions of a body's cells, in the order `organism()["shape"]` lists them (for its
+    /// skin); empty when gone.
+    #[func]
+    fn body_points(&self, id: i64) -> PackedVector3Array {
+        let Some(r) = self.reef.as_ref() else { return PackedVector3Array::new() };
+        // adrift bodies are drawn floating (cell_buffer), not at their lattice places: no skin
+        let Some(o) = r.organisms.iter().find(|o| o.id as i64 == id && o.settled()) else { return PackedVector3Array::new() };
+        o.cells.iter().take(SHAPE_MAX).map(|c| Self::world_pos(r, c.pos)).collect()
+    }
+
+    /// `organism()["shape"]` without the rest: the reef's skins rebuild many per tick.
+    #[func]
+    fn body_shape(&self, id: i64) -> PackedFloat32Array {
+        let Some(r) = self.reef.as_ref() else { return PackedFloat32Array::new() };
+        r.organisms.iter().find(|o| o.id as i64 == id).map_or(PackedFloat32Array::new(), shape_of)
+    }
+
+    /// Settled bodies of at least `min_cells`, biggest first.
+    #[func]
+    fn body_ids(&self, min_cells: i64) -> PackedInt64Array {
+        let Some(r) = self.reef.as_ref() else { return PackedInt64Array::new() };
+        let mut v: Vec<&Organism> = r.organisms.iter().filter(|o| o.settled() && o.cells.len() as i64 >= min_cells).collect();
+        v.sort_by_key(|o| std::cmp::Reverse(o.cells.len()));
+        v.iter().map(|o| o.id as i64).collect()
+    }
+
     /// Bodies meeting the creature goal right now, as ids (markers and "next creature").
     #[func]
     fn creatures(&self) -> PackedInt64Array {
@@ -530,19 +572,7 @@ impl ReefSim {
         d.set("genome", &PackedByteArray::from(o.genome.as_slice()));
         d.set("mass", &PackedInt64Array::from(o.cells.first().map_or(&[0; N_LETTERS], |c| &c.mass).as_slice()));
         d.set("jobs", jobs(o, self.goal.split) as i64);
-        // body shape for the gallery: per cell, position relative to the body's lowest corner
-        // (lattice x, y, height) then its five expressed traits
-        let lo = o.cells.iter().fold([i32::MAX; 3], |m, c| [m[0].min(c.pos[0]), m[1].min(c.pos[1]), m[2].min(c.pos[2])]);
-        let mut shape = PackedFloat32Array::new();
-        for c in o.cells.iter().take(SHAPE_MAX) {
-            for k in 0..3 {
-                shape.push((c.pos[k] - lo[k]) as f32);
-            }
-            for k in 0..5 {
-                shape.push(c.expr[k]);
-            }
-        }
-        d.set("shape", &shape);
+        d.set("shape", &shape_of(o));
         d.set("creature", self.goal.body_ok(o));
         d.set("store", o.store.iter().sum::<i64>());
         let tile = if o.settled() { r.tile_index(o.cells[0].pos[0] / TILE, o.cells[0].pos[1] / TILE).unwrap_or(0) } else { o.drift_tile };

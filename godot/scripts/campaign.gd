@@ -156,10 +156,11 @@ func keep(c: Dictionary, where: String) -> String:
 	state.named = int(state.named) + 1
 	var n: int = state.named
 	var name := "%s-%d" % [NAMES[n % NAMES.size()], n]
-	var rec := {"name": name, "genome": Array(c.genome), "mass": Array(c.mass), "cells": c.cells, "jobs": c.jobs, "creature": c.creature, "from": where, "released": false, "shape": _compact(c.get("shape", []))}
+	var species := "%s %s" % [c.get("genus", genus_of(int(c.get("lineage", 0)))), epithet_of(PackedByteArray(c.genome))]
+	var rec := {"species": species, "name": name, "genome": Array(c.genome), "mass": Array(c.mass), "cells": c.cells, "jobs": c.jobs, "creature": c.creature, "from": where, "released": false, "shape": _compact(c.get("shape", []))}
 	state.kept.append(rec)
 	if c.creature:
-		state.codex.append({"title": "Creature " + name, "text": "[b]%s[/b], kept from %s: %d cells doing %d jobs, crawling." % [name, where, c.cells, c.jobs], "scale": 6})
+		state.codex.append({"title": "Creature " + name, "text": "[b]%s[/b] ([i]%s[/i]), kept from %s: %d cells doing %d jobs, crawling." % [name, species, where, c.cells, c.jobs], "scale": 6})
 	save()
 	changed.emit()
 	if c.creature and not is_done(6):
@@ -178,6 +179,22 @@ func field_note(title: String, text: String) -> void:
 		state.codex.remove_at(notes[0])
 	save()
 	changed.emit()
+
+## Latin-sounding names from numbers: a genus per founding lineage (relatives share it, as in
+## real taxonomy), an epithet per genome (any mutation can make a new species name).
+const SYL_A := ["ve", "lo", "ta", "ri", "co", "mu", "sa", "ne", "tho", "ka", "pe", "lu", "di", "o", "zy", "fa"]
+const SYL_B := ["ra", "li", "na", "do", "ve", "si", "mo", "the", "ca", "lo", "ru", "pi", "xe", "ga", "tu", "ne"]
+const GENUS_END := ["ia", "us", "ella", "ops", "ora", "ium", "ax", "ina"]
+const EPITHET_END := ["is", "ensis", "ata", "oides", "ulus", "ea", "ans", "ifer"]
+
+static func genus_of(lineage: int) -> String:
+	var h := hash(lineage * 7919 + 17)
+	var g: String = SYL_A[h & 15] + SYL_B[(h >> 4) & 15] + GENUS_END[(h >> 8) & 7]
+	return g.capitalize()
+
+static func epithet_of(genome: PackedByteArray) -> String:
+	var h := hash(genome)
+	return SYL_B[h & 15] + SYL_A[(h >> 4) & 15] + EPITHET_END[(h >> 8) & 7]
 
 ## Shape for the save: positions as whole lattice steps, traits to 2 decimals.
 static func _compact(a) -> Array:

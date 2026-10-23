@@ -12,6 +12,7 @@ mod elements_sim;
 mod pond_sim;
 mod pool_sim;
 mod reef_sim;
+mod skin;
 
 struct PrimordiumExt;
 
