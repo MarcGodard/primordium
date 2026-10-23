@@ -198,6 +198,8 @@ pub struct Organism {
     pub adrift: f64,
     /// Tile the organism floats over while adrift.
     pub drift_tile: usize,
+    /// The founder this body descends from (by spores or fragments): its lineage.
+    pub clade: u32,
 }
 
 impl Organism {
@@ -429,7 +431,19 @@ impl Reef {
             let id = self.id();
             let cell = BodyCell { pos, birth_mass: mass.iter().sum::<i64>().max(1), mass, born: self.t_days, ready: false, expr: [0.0; 5], light: 0.0, open: 5, x: [0.0; 8] };
             self.occ.insert(pos, id);
-            self.organisms.push(Organism { id, parent: None, genome, info, generation: 0, born: self.t_days, cells: vec![cell], store, adrift: 0.0, drift_tile: usize::MAX });
+            self.organisms.push(Organism {
+                id,
+                parent: None,
+                genome,
+                info,
+                generation: 0,
+                born: self.t_days,
+                cells: vec![cell],
+                store,
+                adrift: 0.0,
+                drift_tile: usize::MAX,
+                clade: k as u32,
+            });
         }
         self.rng = rng;
     }
@@ -744,7 +758,7 @@ impl Reef {
         for (k, genome, mut d, home) in spores {
             let info = self.info_now(&genome);
             let id = self.id();
-            let (parent, generation) = (self.organisms[k].id, self.organisms[k].generation + 1);
+            let (parent, generation, clade) = (self.organisms[k].id, self.organisms[k].generation + 1, self.organisms[k].clade);
             d.pos = [0, 0, 0];
             self.stats.spores += 1;
             self.organisms.push(Organism {
@@ -758,6 +772,7 @@ impl Reef {
                 store: [0; N_LETTERS],
                 adrift: self.rp.drift_days * (0.5 + rng.f64()),
                 drift_tile: home,
+                clade,
             });
         }
     }
@@ -833,6 +848,7 @@ impl Reef {
             store,
             adrift: self.rp.drift_days * (0.5 + rng.f64()),
             drift_tile: tile,
+            clade: o.clade,
         };
         let id = self.id();
         self.stats.fragments += 1;
@@ -1158,5 +1174,49 @@ mod tests {
         let biggest = r.organisms.iter().map(|o| o.cells.len()).max().unwrap_or(0);
         assert!(biggest > 1, "no body grew past one cell: test would pass vacuously");
         assert!(r.stats.divisions > 0 && r.stats.spores > 0, "no divisions or spores");
+    }
+}
+
+impl Reef {
+    /// Living lineages: (clade, cells), biggest first.
+    pub fn clades(&self) -> Vec<(u32, usize)> {
+        let mut by: BTreeMap<u32, usize> = BTreeMap::new();
+        for o in &self.organisms {
+            *by.entry(o.clade).or_default() += o.cells.len();
+        }
+        let mut v: Vec<(u32, usize)> = by.into_iter().filter(|c| c.1 > 0).collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v
+    }
+
+    /// Division of labour: (share of genes, over cells of multicellular bodies, switched by height
+    /// or exposure; within-body variance of expressed adhesion and pigment shade over their
+    /// variance across all those cells: 0 = every body uniform, 1 = bodies as mixed as the reef).
+    pub fn labour(&self) -> (f64, f64) {
+        let (mut body_genes, mut genes) = (0.0, 0.0);
+        let mut all: Vec<[f64; 2]> = Vec::new();
+        let mut within = 0.0;
+        for o in self.organisms.iter().filter(|o| o.settled() && o.cells.len() > 1) {
+            let n = o.cells.len() as f64;
+            for g in &o.info.genes {
+                genes += n;
+                if matches!(g.promoter.signal, crate::cell::Signal::Height | crate::cell::Signal::Exposure) {
+                    body_genes += n;
+                }
+            }
+            let v: Vec<[f64; 2]> = o.cells.iter().map(|c| [c.expr[4] as f64, c.expr[3] as f64]).collect();
+            for k in 0..2 {
+                let m = v.iter().map(|x| x[k]).sum::<f64>() / n;
+                within += v.iter().map(|x| (x[k] - m).powi(2)).sum::<f64>();
+            }
+            all.extend(v);
+        }
+        let n = all.len() as f64;
+        let mut total = 0.0;
+        for k in 0..2 {
+            let m = all.iter().map(|x| x[k]).sum::<f64>() / n.max(1.0);
+            total += all.iter().map(|x| (x[k] - m).powi(2)).sum::<f64>();
+        }
+        (body_genes / genes.max(1.0), if total > 0.0 { within / total } else { 0.0 })
     }
 }

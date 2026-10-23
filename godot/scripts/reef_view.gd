@@ -48,6 +48,7 @@ var layer: CanvasLayer
 var profile: Control
 var chart: Control
 var active := false
+var by_lineage := false
 
 func _ready() -> void:
 	sim = ReefSim.new()
@@ -256,6 +257,10 @@ func warm(n: int) -> void:
 func selected_info() -> Dictionary:
 	return {}
 
+func set_lineage(on: bool) -> void:
+	by_lineage = on
+	cell_mat.set_shader_parameter("by_lineage", 1.0 if on else 0.0)
+
 ## Select the biggest body and fly to it (capture flag --pick).
 func pick_longest() -> void:
 	selected = sim.biggest()
@@ -297,9 +302,9 @@ func _process(delta: float) -> void:
 		timer = 0.5
 		stats = sim.stats()
 		history = sim.history()
-		var rows := history.size() / 10
+		var rows := history.size() / 11
 		if rows > 0:
-			var b := (rows - 1) * 10
+			var b := (rows - 1) * 11
 			cell_mat.set_shader_parameter("mean_expr", Vector4(history[b + 5], history[b + 6], history[b + 7], history[b + 8]))
 			cell_mat.set_shader_parameter("mean_adh", history[b + 9])
 		if selected >= 0:
@@ -408,6 +413,8 @@ func _unhandled_input(e: InputEvent) -> void:
 					dist = 40.0
 			KEY_O:
 				auto_orbit = not auto_orbit
+			KEY_C:
+				set_lineage(not by_lineage)
 			KEY_B:
 				pick_longest()
 			KEY_ESCAPE:
@@ -422,13 +429,21 @@ func hud_text() -> String:
 	var t := "[b]Reef[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
 		env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.biggest, stats.tallest, stats.generation,
 		stats.adrift, stats.spores, stats.tears, stats.bites, stats.bit_error * 100.0]
-	t += "[color=#9ab]tint: [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nred flash: a bite[/color]\n"
+	if not by_lineage:
+		t += "[color=#9ab]tint (C for lineage): [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nred flash: a bite[/color]\n"
+	t += "lineages alive %d of %d founders; largest: " % [stats.lineages, stats.founders]
+	var parts := []
+	for v in stats.top_lineages:
+		parts.append("#%d %.0f%%" % [int(v.x), v.y * 100.0])
+	t += ", ".join(PackedStringArray(parts)) + "\n"
+	if by_lineage:
+		t += "[color=#9ab]tint: lineage (C for jobs)[/color]\n"
 	if stats.unsure > 0:
 		t += "[color=#f9c]%d cells where the coast's table is thin[/color]\n" % stats.unsure
 	t += "[b]Discoveries[/b]\n"
 	for d in stats.discoveries:
 		t += "[color=#cbf]" + d + "[/color]\n"
-	t += "\n[color=#789]Tab: switch scale\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nO auto-orbit, space pause, 1-5 speed[/color]"
+	t += "\n[color=#789]Tab: switch scale\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]"
 	return t
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.
@@ -438,8 +453,8 @@ func _draw_profile() -> void:
 	var font := ThemeDB.fallback_font
 	var sz := profile.size
 	profile.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.05, 0.08, 0.82))
-	profile.draw_string(font, Vector2(10, 18), "Body #%d   %d cells, %d tall   gen %d   %s" % [
-		organism.id, organism.cells, organism.height, organism.generation, "adrift" if organism.adrift else "age %.0f d" % organism.age], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.9))
+	profile.draw_string(font, Vector2(10, 18), "Body #%d  lineage %d  %d cells, %d tall  gen %d  %s" % [
+		organism.id, organism.lineage, organism.cells, organism.height, organism.generation, "adrift" if organism.adrift else "age %.0f d" % organism.age], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.9))
 	profile.draw_string(font, Vector2(10, 34), "depth %.2f   waves %.2f   store %d" % [organism.depth, organism.waves, organism.store], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.8))
 	var layers: PackedFloat32Array = organism.layers
 	var nl := layers.size() / 6
@@ -489,20 +504,20 @@ func _draw_chart() -> void:
 	var font := ThemeDB.fallback_font
 	var sz := chart.size
 	chart.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.05, 0.08, 0.82))
-	chart.draw_string(font, Vector2(8, 14), "Reef over time: cells (white), mean body size (gold), tallest body (cyan)", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.75))
-	var rows := history.size() / 10
+	chart.draw_string(font, Vector2(8, 14), "Reef over time: cells (white), mean body size (gold), tallest body (cyan), lineages alive (violet)", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.75))
+	var rows := history.size() / 11
 	if rows < 2:
 		return
 	var area := Rect2(8, 22, sz.x - 16, sz.y - 30)
-	var series := [[1, Color(1, 1, 1, 0.85)], [3, Color(1.0, 0.75, 0.2, 0.9)], [4, Color(0.4, 0.9, 1.0, 0.9)]]
+	var series := [[1, Color(1, 1, 1, 0.85)], [3, Color(1.0, 0.75, 0.2, 0.9)], [4, Color(0.4, 0.9, 1.0, 0.9)], [10, Color(0.8, 0.5, 1.0, 0.9)]]
 	for s in series:
 		var k: int = s[0]
 		var top := 1.0
 		for i in rows:
-			top = max(top, history[i * 10 + k])
+			top = max(top, history[i * 11 + k])
 		var pts := PackedVector2Array()
 		for i in rows:
 			var x: float = area.position.x + area.size.x * i / (rows - 1)
-			var y: float = area.position.y + area.size.y * (1.0 - history[i * 10 + k] / top)
+			var y: float = area.position.y + area.size.y * (1.0 - history[i * 11 + k] / top)
 			pts.append(Vector2(x, y))
 		chart.draw_polyline(pts, s[1], 1.5, true)

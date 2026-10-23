@@ -1126,7 +1126,7 @@ fn reef_seed(args: &[String]) {
 }
 
 fn reef(args: &[String]) {
-    use primordium_core::reef::{Reef, ReefParams, ReefSeed};
+    use primordium_core::reef::{Reef, ReefParams, ReefSeed, TILE};
     use primordium_core::surrogate::RateTable;
     let days: f64 = arg(args, "days", 60.0);
     let every: f64 = arg(args, "every", 5.0);
@@ -1136,8 +1136,16 @@ fn reef(args: &[String]) {
     let start = Instant::now();
     let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
     println!("built in {:.1}s: {} founders", start.elapsed().as_secs_f64(), r.organisms.len());
+    let mut sig = std::collections::BTreeMap::new();
+    for o in &r.organisms {
+        for g in &o.info.genes {
+            *sig.entry(format!("{:?}", g.promoter.signal)).or_insert(0) += 1;
+        }
+    }
+    println!("founder promoters: {sig:?}");
     let m0 = r.matter();
-    let mut next = every;
+    // report at noon: light-switched genes are all off at midnight
+    let mut next = every - 0.5;
     while r.t_days < days {
         r.step(0.02);
         if r.t_days >= next {
@@ -1161,6 +1169,27 @@ fn reef(args: &[String]) {
                 st.divisions, st.spores, st.settled, st.lost_adrift, st.tears, st.fragments, st.bites,
                 st.bit_errors as f64 / st.bits_inherited.max(1) as f64, st.unsure_cells,
                 if r.matter() == m0 { "exact" } else { "DRIFT" }, start.elapsed().as_secs_f64()
+            );
+            let (body_genes, diff) = r.labour();
+            let genomes: std::collections::HashSet<&Vec<u8>> = r.organisms.iter().map(|o| &o.genome).collect();
+            // where each big lineage lives: mean rock elevation and depth under mean tide
+            let mut zones = Vec::new();
+            for (clade, n) in r.clades().into_iter().take(5) {
+                let cells: Vec<_> = r.organisms.iter().filter(|o| o.clade == clade && o.settled()).flat_map(|o| o.cells.iter()).collect();
+                let elev = cells.iter().map(|c| r.tiles[r.tile_index(c.pos[0] / TILE, c.pos[1] / TILE).unwrap_or(0)].elevation).sum::<f64>() / cells.len().max(1) as f64;
+                let h = cells.iter().map(|c| c.pos[2] as f64).sum::<f64>() / cells.len().max(1) as f64;
+                zones.push(format!("#{clade} {:.0}% elev {elev:.2} z {h:.1}", 100.0 * n as f64 / r.cells().max(1) as f64));
+            }
+            println!("        lineages {}: {}", r.clades().len(), zones.join(" | "));
+            let spore_bodies = r.organisms.iter().filter(|o| o.settled() && o.generation > 0 && o.cells.len() > 1).count();
+            println!("        multicellular bodies founded by spores {spore_bodies}");
+            let max_gen = r.organisms.iter().map(|o| o.generation).max().unwrap_or(0);
+            let mean_gen = r.organisms.iter().map(|o| o.generation as f64 * o.cells.len() as f64).sum::<f64>() / r.cells().max(1) as f64;
+            println!(
+                "        body-signal genes {:.1}%  within-body differentiation {:.2}  genomes {}  generation max {max_gen} cell-mean {mean_gen:.1}",
+                body_genes * 100.0,
+                diff,
+                genomes.len()
             );
         }
     }

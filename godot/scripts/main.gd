@@ -32,6 +32,9 @@ func _ready() -> void:
 			"frames": frames = int(kv[1])
 			"scale": switch_to(int(kv[1]))
 			"pick": view.pick_longest()
+			"lineage":
+				if view.has_method("set_lineage"):
+					view.set_lineage(kv[1] == "1")
 			"warm": view.warm(int(kv[1]))
 			"zoom":
 				if view.cam is Camera2D:

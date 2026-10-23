@@ -20,8 +20,8 @@ pub struct ReefSim {
     /// Matter at start, per letter and Ka: the HUD shows any drift from it.
     start: ([i64; N_LETTERS], i64),
     /// Sampled each day: t, cells, bodies, mean body size of multicellular bodies, tallest, then
-    /// mean expressed polymerase, metabolism, membrane, shade, adhesion.
-    history: VecDeque<[f32; 10]>,
+    /// mean expressed polymerase, metabolism, membrane, shade, adhesion, then living lineages.
+    history: VecDeque<[f32; 11]>,
     base: Base<Node>,
 }
 
@@ -54,7 +54,8 @@ impl ReefSim {
         }
         let settled: Vec<&Organism> = r.organisms.iter().filter(|o| o.settled()).collect();
         let multi: Vec<&&Organism> = settled.iter().filter(|o| o.cells.len() > 1).collect();
-        let mut row = [0f32; 10];
+        let mut row = [0f32; 11];
+        row[10] = r.clades().len() as f32;
         row[0] = r.t_days as f32;
         row[1] = r.cells() as f32;
         row[2] = settled.len() as f32;
@@ -137,7 +138,7 @@ impl ReefSim {
 
     /// MultiMesh buffer (transform 12, colour 4, custom 4 per instance) for every cell. Colour =
     /// expressed polymerase, metabolism, membrane, shade; custom = adhesion, light reaching the cell,
-    /// selected (1) or adrift (0.5), height in the body. Drifters float at the water surface.
+    /// selected (1) or adrift (0.5), height in the body + 64 x lineage. Drifters float at the water surface.
     #[func]
     fn cell_buffer(&self, selected: i64) -> PackedFloat32Array {
         let Some(r) = self.reef.as_ref() else { return PackedFloat32Array::new() };
@@ -165,7 +166,9 @@ impl ReefSim {
                 };
                 v.extend_from_slice(&[s, 0.0, 0.0, pos.x, 0.0, s, 0.0, pos.y, 0.0, 0.0, s, pos.z]);
                 v.extend_from_slice(&[c.expr[0], c.expr[1], c.expr[2], c.expr[3]]);
-                v.extend_from_slice(&[c.expr[4], c.light, if adrift { 0.5 } else { sel }, c.pos[2] as f32]);
+                // height and lineage share a slot: z + 64 x clade. Exact in f32 (Forward+); the
+                // Compatibility renderer stores custom data as half floats and would garble it
+                v.extend_from_slice(&[c.expr[4], c.light, if adrift { 0.5 } else { sel }, c.pos[2] as f32 + 64.0 * o.clade as f32]);
             }
         }
         PackedFloat32Array::from(v.as_slice())
@@ -216,6 +219,7 @@ impl ReefSim {
         d.set("cells", o.cells.len() as i64);
         d.set("height", o.height() as i64 + 1);
         d.set("generation", o.generation as i64);
+        d.set("lineage", o.clade as i64);
         d.set("age", r.t_days - o.born);
         d.set("adrift", !o.settled());
         d.set("genome_len", o.genome.len() as i64);
@@ -332,6 +336,15 @@ impl ReefSim {
         d.set("divisions", st.divisions as i64);
         d.set("bit_error", st.bit_errors as f64 / st.bits_inherited.max(1) as f64);
         d.set("unsure", st.unsure_cells as i64);
+        let clades = r.clades();
+        d.set("lineages", clades.len() as i64);
+        d.set("founders", r.rp.founders as i64);
+        let total = r.cells().max(1) as f64;
+        let mut top = VarArray::new();
+        for (c, n) in clades.iter().take(5) {
+            top.push(&Vector2::new(*c as f32, (*n as f64 / total) as f32).to_variant());
+        }
+        d.set("top_lineages", &top);
         let mut arr = VarArray::new();
         for e in r.discoveries.entries.iter().rev().take(3) {
             arr.push(&format!("day {:.1}: {}", e.t_days, e.note).to_variant());
@@ -340,7 +353,7 @@ impl ReefSim {
         d
     }
 
-    /// Flattened daily history, 10 values per row (see `history` field).
+    /// Flattened daily history, 11 values per row (see `history` field).
     #[func]
     fn history(&self) -> PackedFloat32Array {
         let v: Vec<f32> = self.history.iter().flatten().copied().collect();
