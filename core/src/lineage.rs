@@ -1,10 +1,12 @@
-//! Scale-4 surrogate: a cell as a lineage, not a chemistry. In lineage mode a cell keeps its
-//! contents frozen and divides or bursts at rates learned from detailed cells with the same
-//! genes in the same conditions (temperature, flooding, food, age). Division clones the cell's
-//! matter out of its patch, so matter stays exact and a starved patch cannot breed; the
-//! daughter genome takes heritable bit errors at the learned per-division rate. Tides,
-//! radiation, drift between patches and crowding still run for real.
-use crate::cell::{Cell, World, regulated_traits, regulation_signals, remap_products};
+//! Scale-4 surrogate: a cell as a lineage, not a chemistry. In lineage mode a cell's interior
+//! chemistry stops; it grows its membrane and divides or bursts at rates learned from detailed
+//! cells with the same (regulated) traits in the same conditions (temperature, flooding, Li
+//! supply, cycle age, daylight). Growth and the daughter genome are paid from the cell and its
+//! patch, and division (gated on size, as in detail) splits the cell in half, so matter stays
+//! exact, a starved patch cannot breed and cells keep a size cycle (engulfing needs size gaps). The daughter genome takes
+//! heritable bit errors at the learned per-division rate. Tides, radiation, drift, colonies,
+//! engulfing and crowding still run for real.
+use crate::cell::{Cell, World, pick_weighted, regulated_traits, regulation_signals, remap_products, round_flux};
 use crate::polymer::N_LETTERS;
 use crate::pool::Site;
 use crate::rng::Rng;
@@ -223,11 +225,13 @@ impl World {
             }
             let (div, burst, p_bit) = t.rates(&x, prior);
             self.radiation(c, &site, dt, &mut rng);
-            if rng.chance((burst * dt).min(1.0)) {
+            self.grow(c, div, dt, &mut rng);
+            // the same floor as detail: a membrane too small to hold a cell bursts
+            if c.area() < self.cp.burst_area || rng.chance((burst * dt).min(1.0)) {
                 dead.push(ci);
                 continue;
             }
-            // a cell due to divide stays due until its patch can pay for the daughter
+            // a cell due to divide stays due until it can pay for the daughter's genome
             if c.ready || rng.chance((div * dt).min(1.0)) {
                 c.ready = true;
                 born.push((ci, p_bit));
@@ -243,7 +247,12 @@ impl World {
         }
         let mut daughters = Vec::new();
         for (ci, p_bit) in born {
-            if let Some(mut d) = self.clone_cell(&mut cells[ci], p_bit, &mut rng) {
+            // the same size gate as detail: a cell that could not grow does not halve itself away
+            let c = &cells[ci];
+            if c.area() < (2 * c.birth_area).min(self.cp.divide_area) {
+                continue;
+            }
+            if let Some(mut d) = self.split_cell(&mut cells[ci], p_bit, &mut rng) {
                 cells[ci].ready = false;
                 d.template = Some(d.genome.clone());
                 daughters.push(d);
@@ -262,6 +271,7 @@ impl World {
             self.spill(c);
             self.stats.deaths += 1;
         }
+        self.predation(&mut cells, dt, &mut rng);
         self.colony_physics(&mut cells, dt, &mut rng);
         self.cells = cells;
         self.ctx.rng = rng;
@@ -270,18 +280,42 @@ impl World {
         self.t_days += dt;
     }
 
-    /// A daughter with the parent's contents, its genome copied with bit errors at `p_bit` (by
-    /// source letter) and written in canonical letters, as two rounds of templated copying do.
-    /// Its matter comes from the parent's patch: residues from loose monomers first, then raw
-    /// atoms; if the patch cannot pay for a whole cell, there is no division.
-    fn clone_cell(&mut self, c: &mut Cell, p_bit: [f64; N_LETTERS], rng: &mut Rng) -> Option<Cell> {
-        let info = self.info(&c.genome);
+    /// Lineage growth: the membrane builds toward twice its birth size at the pace the
+    /// division rate implies, letters in the membrane's own proportions, paid from the patch
+    /// (loose monomers first, then a raw letter plus raw Ka). Without it every lineage cell
+    /// stayed full size, and engulfing (which needs a size gap) misfired.
+    fn grow(&mut self, c: &mut Cell, div: f64, dt: f64, rng: &mut Rng) {
+        if c.area() >= (2 * c.birth_area).min(self.cp.divide_area) {
+            return;
+        }
+        let n = round_flux(c.birth_area as f64 * div * dt, rng).max(0);
+        let p = &mut self.patches[c.patch];
+        for _ in 0..n {
+            let Some(l) = pick_weighted(&c.membrane, rng) else { return };
+            if p.free[l] > 0 {
+                p.free[l] -= 1;
+            } else if p.raw[l] > 0 && p.raw_ka > 0 {
+                p.raw[l] -= 1;
+                p.raw_ka -= 1;
+            } else {
+                return;
+            }
+            c.membrane[l] += 1;
+        }
+    }
+
+    /// Division as in detail: the cell splits its contents in half with a daughter whose
+    /// genome is the cycle-start template copied with bit errors at `p_bit` (by source letter)
+    /// and written in canonical letters, as two rounds of templated copying do. The new
+    /// genome's letters come from the parent's loose monomers, then the patch; if neither can
+    /// pay, the division waits.
+    fn split_cell(&mut self, c: &mut Cell, p_bit: [f64; N_LETTERS], rng: &mut Rng) -> Option<Cell> {
         let mut genome = c.template.clone().unwrap_or_else(|| c.genome.clone());
-        let mut errors = 0;
         // canonical letter per bit: the fixed points of copying twice (Li 0, Fl 1)
         let canon: [u8; 2] =
             std::array::from_fn(|b| (0..N_LETTERS).find(|&l| self.comp[self.comp[l] as usize] as usize == l && self.bits[l] as usize == b).unwrap() as u8);
-        // tallied locally: a division the patch cannot pay for is retried, not counted
+        let mut errors = 0;
+        // tallied locally: a division that cannot be paid for is retried, not counted
         let mut by_letter = [(0u64, 0u64); N_LETTERS];
         for g in genome.iter_mut() {
             let src = *g as usize;
@@ -294,56 +328,89 @@ impl World {
             by_letter[src].1 += 1;
             *g = canon[bit];
         }
-        // price the daughter before deriving its genes: a division the patch cannot pay for is
-        // retried every step, and working out each throwaway genome's folds cost 3.5x the
-        // genomes of a detailed run. Its matter is the parent's contents with the new genome in
-        // place of the parent's genome and fork (dissolving products later only moves letters).
-        let (mut m, _) = c.matter(&info);
-        for &l in c.genome.iter().chain(c.fork.iter().flatten()) {
-            m[l as usize] -= 1;
-        }
+        // pay for the genome before deriving its genes (a waiting cell retries every step)
+        let mut need = [0i64; N_LETTERS];
         for &l in &genome {
-            m[l as usize] += 1;
+            need[l as usize] += 1;
         }
-        let p = &mut self.patches[c.patch];
-        // bound letters carry a Ka each: a loose monomer pays for one, else a raw letter + raw Ka
-        let mut from_free = [0i64; N_LETTERS];
-        let mut from_raw = [0i64; N_LETTERS];
-        let mut ka_needed = c.raw_ka;
+        let p = &self.patches[c.patch];
+        let (mut own, mut loose, mut raw) = ([0i64; N_LETTERS], [0i64; N_LETTERS], [0i64; N_LETTERS]);
         for l in 0..N_LETTERS {
-            let bound = m[l] - c.raw[l];
-            from_free[l] = bound.min(p.free[l]);
-            from_raw[l] = bound - from_free[l] + c.raw[l];
-            ka_needed += bound - from_free[l];
-            if from_raw[l] > p.raw[l] {
+            own[l] = need[l].min(c.free[l]);
+            loose[l] = (need[l] - own[l]).min(p.free[l]);
+            raw[l] = need[l] - own[l] - loose[l];
+            if raw[l] > p.raw[l] {
                 return None;
             }
         }
-        if ka_needed > p.raw_ka {
+        if raw.iter().sum::<i64>() > p.raw_ka {
             return None;
         }
+        let p = &mut self.patches[c.patch];
         for l in 0..N_LETTERS {
-            p.free[l] -= from_free[l];
-            p.raw[l] -= from_raw[l];
+            c.free[l] -= own[l];
+            p.free[l] -= loose[l];
+            p.raw[l] -= raw[l];
         }
-        p.raw_ka -= ka_needed;
-        let dinfo = self.info(&genome);
+        p.raw_ka -= raw.iter().sum::<i64>();
+        let info = self.info(&c.genome);
         let colony = self.stick(c, &info, rng);
-        let mut free = c.free;
-        let products = if genome == c.genome { c.products.clone() } else { remap_products(&info, &c.products, &dinfo, &mut free) };
-        let d = Cell {
-            id: 0,
+        // a fork left from detail mode belongs to the cycle that just ended: back to monomers
+        if let Some(f) = c.fork.take() {
+            for l in f {
+                c.free[l as usize] += 1;
+            }
+        }
+        let split = |n: i64, rng: &mut Rng| (0..n).filter(|_| rng.chance(0.5)).count() as i64;
+        let mut d_membrane = [0i64; N_LETTERS];
+        let mut d_free = [0i64; N_LETTERS];
+        let mut d_raw = [0i64; N_LETTERS];
+        let mut d_junk = [0i64; N_LETTERS];
+        for l in 0..N_LETTERS {
+            d_membrane[l] = split(c.membrane[l], rng);
+            c.membrane[l] -= d_membrane[l];
+            d_free[l] = split(c.free[l], rng);
+            c.free[l] -= d_free[l];
+            d_raw[l] = split(c.raw[l], rng);
+            c.raw[l] -= d_raw[l];
+            d_junk[l] = split(c.junk[l], rng);
+            c.junk[l] -= d_junk[l];
+        }
+        let d_ka = split(c.raw_ka, rng);
+        c.raw_ka -= d_ka;
+        let mut share = vec![0i64; c.products.len()];
+        for (k, n) in c.products.iter_mut().enumerate() {
+            share[k] = split(*n, rng);
+            *n -= share[k];
+        }
+        let dinfo = self.info(&genome);
+        let d_products = remap_products(&info, &share, &dinfo, &mut d_free);
+        let id = self.ctx.next_id();
+        c.generation += 1;
+        c.born = self.t_days;
+        c.birth_area = c.area().max(1);
+        c.template = Some(c.genome.clone());
+        self.stats.divisions += 1;
+        self.stats.births += 1;
+        self.stats.bits_inherited += genome.len() as u64;
+        self.stats.bit_errors += errors;
+        for (l, (e, n)) in by_letter.into_iter().enumerate() {
+            self.stats.errors_by_letter[l] += e;
+            self.stats.bits_by_letter[l] += n;
+        }
+        Some(Cell {
+            id,
             parent: Some(c.id),
             born: self.t_days,
-            generation: c.generation + 1,
+            generation: c.generation,
             genome,
-            products,
-            junk: c.junk,
-            membrane: c.membrane,
-            birth_area: c.area().max(1),
-            free,
-            raw: c.raw,
-            raw_ka: c.raw_ka,
+            products: d_products,
+            junk: d_junk,
+            membrane: d_membrane,
+            birth_area: d_membrane.iter().sum::<i64>().max(1),
+            free: d_free,
+            raw: d_raw,
+            raw_ka: d_ka,
             fork: None,
             patch: c.patch,
             mode: c.mode,
@@ -353,26 +420,6 @@ impl World {
             template: None,
             colony,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
-        };
-        debug_assert_eq!(d.matter(&dinfo).0, m, "daughter priced wrong");
-        let id = self.ctx.next_id();
-        c.generation += 1;
-        c.born = self.t_days;
-        c.template = Some(c.genome.clone());
-        // a fork left from detail mode belongs to the cycle that just ended: back to monomers
-        if let Some(f) = c.fork.take() {
-            for l in f {
-                c.free[l as usize] += 1;
-            }
-        }
-        self.stats.divisions += 1;
-        self.stats.births += 1;
-        self.stats.bits_inherited += d.genome.len() as u64;
-        self.stats.bit_errors += errors;
-        for (l, (e, n)) in by_letter.into_iter().enumerate() {
-            self.stats.errors_by_letter[l] += e;
-            self.stats.bits_by_letter[l] += n;
-        }
-        Some(Cell { id, ..d })
+        })
     }
 }

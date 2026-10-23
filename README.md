@@ -20,8 +20,9 @@ The chemistry is invented, not ours: elements come from a shell rule with capaci
 | 3 Cells | Binary genome, genetic code, regulated expression, gated division, proofreading, radiation mutation | done |
 | 4 Coast | Beaches along a latitude gradient, linked by along-shore currents; lineage surrogate | done (surrogate 96-98%, 2.3x faster) |
 | 5 Colonies | Adhesive products keep daughters attached: anchored, monomer-sharing, shade-sharing colonies | done (first step to multicellularity) |
+| 6 Ecology | Sticky cells engulf smaller ones; colonies resist | done (predation drives multicellularity) |
 
-Each scale's surrogate is measured against a "twin": the same detailed model with different dice. Agreement as a share of that ceiling (latest runs): scale 0 ~99% (10-day mean over 6 seeds), scale 1 95-104% (blend of cached relatives), scale 2 ~99-100%, scale 3 ~100%, scale 4 ~97% (lineage mode, mean of five windows, 2.2x faster). A mean-field surrogate can sit at or above the ceiling because it carries less noise than a second detailed run.
+Each scale's surrogate is measured against a "twin": the same detailed model with different dice. Agreement as a share of that ceiling (latest runs): scale 0 ~99% (10-day mean over 6 seeds), scale 1 95-104% (blend of cached relatives), scale 2 ~99-100%, scale 3 ~100%, scale 4 ~95% with engulfing (lineage mode, mean of five windows, 2.2x faster). A mean-field surrogate can sit at or above the ceiling because it carries less noise than a second detailed run.
 
 ## Findings so far
 

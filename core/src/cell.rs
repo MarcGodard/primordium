@@ -86,6 +86,15 @@ pub struct CellParams {
     pub colony_max: usize,
     /// Loose monomers flowing toward the colony average, fraction per day.
     pub share_rate: f64,
+    /// Engulfing: adhesion past `eat_floor` lets a cell grab a smaller one on its patch, at up
+    /// to `eat_rate` attempts per day (full at floor + span) scaled by patch crowding.
+    pub eat_floor: f64,
+    pub eat_span: f64,
+    pub eat_rate: f64,
+    /// Prey must be smaller than this fraction of the predator's membrane.
+    pub eat_size: f64,
+    /// Each colony mate makes a member this much harder to pull away (per mate, exp).
+    pub colony_shield: f64,
     pub auto: bool,
     pub lift_below: f64,
     pub restrict_above: f64,
@@ -124,6 +133,11 @@ impl Default for CellParams {
             stick_span: 0.2,
             colony_max: 16,
             share_rate: 2.0,
+            eat_floor: 0.25,
+            eat_span: 0.15,
+            eat_rate: 2.0,
+            eat_size: 0.6,
+            colony_shield: 0.5,
             auto: true,
             lift_below: 0.5,
             restrict_above: 0.85,
@@ -407,6 +421,8 @@ pub struct CellStats {
     pub colony_breakaways: u64,
     #[serde(default)]
     pub shared_monomers: u64,
+    #[serde(default)]
+    pub predations: u64,
 }
 
 pub fn cell_table() -> RateTable {
@@ -454,13 +470,13 @@ pub struct World {
     pub lineage_log: Option<Vec<crate::lineage::LineageSample>>,
 }
 
-fn round_flux(expected: f64, rng: &mut Rng) -> i64 {
+pub(crate) fn round_flux(expected: f64, rng: &mut Rng) -> i64 {
     let base = expected.trunc();
     let frac = expected - base;
     base as i64 + if rng.chance(frac.abs()) { frac.signum() as i64 } else { 0 }
 }
 
-fn pick_weighted(counts: &[i64; N_LETTERS], rng: &mut Rng) -> Option<usize> {
+pub(crate) fn pick_weighted(counts: &[i64; N_LETTERS], rng: &mut Rng) -> Option<usize> {
     let total: i64 = counts.iter().sum();
     if total <= 0 {
         return None;
@@ -800,6 +816,7 @@ impl World {
             self.spill(c);
             self.stats.deaths += 1;
         }
+        self.predation(&mut cells, dt, &mut rng);
         self.colony_physics(&mut cells, dt, &mut rng);
         self.cells = cells;
         self.ctx.rng = rng;
@@ -1294,6 +1311,85 @@ impl World {
         Some(*c.colony.get_or_insert_with(|| self.ctx.next_id()))
     }
 
+    /// Engulfing: a big sticky cell grabs a smaller cell on its patch and takes in all of it
+    /// (residues come apart into its loose monomers, raw atoms stay raw): matter exact.
+    /// Colony mates hold on to each other, so colonies are harder prey, and a cell never eats
+    /// its own colony.
+    pub(crate) fn predation(&mut self, cells: &mut Vec<Cell>, dt: f64, rng: &mut Rng) {
+        let n = cells.len();
+        if n < 2 {
+            return;
+        }
+        let mut by_patch: Vec<Vec<usize>> = vec![Vec::new(); self.patches.len()];
+        for (i, c) in cells.iter().enumerate() {
+            by_patch[c.patch].push(i);
+        }
+        let mut colony_size: HashMap<u64, f64> = HashMap::new();
+        for c in cells.iter() {
+            if let Some(k) = c.colony {
+                *colony_size.entry(k).or_default() += 1.0;
+            }
+        }
+        let mut eaten = vec![false; n];
+        let mut meals: Vec<(usize, usize)> = Vec::new();
+        for i in 0..n {
+            if eaten[i] {
+                continue;
+            }
+            let info = self.info(&cells[i].genome);
+            let e = self.expression(&cells[i], &info);
+            let adh = info.genes.iter().zip(&e).map(|(g, l)| g.func.adhesion * l).fold(0.0, f64::max);
+            let drive = ((adh - self.cp.eat_floor) / self.cp.eat_span).clamp(0.0, 1.0);
+            if drive <= 0.0 {
+                continue;
+            }
+            let mates = &by_patch[cells[i].patch];
+            let crowd = (mates.len() as f64 / (self.cp.max_cells as f64 / self.patches.len() as f64)).min(1.0);
+            if !rng.chance((self.cp.eat_rate * drive * crowd * dt).min(1.0)) {
+                continue;
+            }
+            let j = mates[rng.below(mates.len())];
+            let (pi, pj) = (&cells[i], &cells[j]);
+            if j == i || eaten[j] || (pi.colony.is_some() && pi.colony == pj.colony) || pj.area() as f64 > self.cp.eat_size * pi.area() as f64 {
+                continue;
+            }
+            let mates_of_prey = pj.colony.and_then(|k| colony_size.get(&k)).map_or(0.0, |n| n - 1.0);
+            if rng.chance(1.0 - (-self.cp.colony_shield * mates_of_prey).exp()) {
+                continue;
+            }
+            eaten[j] = true;
+            meals.push((i, j));
+        }
+        if meals.is_empty() {
+            return;
+        }
+        for &(i, j) in &meals {
+            let prey = cells[j].clone();
+            let pinfo = self.info(&prey.genome);
+            let p = &mut cells[i];
+            for &l in prey.genome.iter().chain(prey.fork.iter().flatten()) {
+                p.free[l as usize] += 1;
+            }
+            for (g, &k) in pinfo.genes.iter().zip(&prey.products) {
+                for &l in &g.product {
+                    p.free[l as usize] += k;
+                }
+            }
+            for l in 0..N_LETTERS {
+                p.free[l] += prey.free[l] + prey.junk[l] + prey.membrane[l];
+                p.raw[l] += prey.raw[l];
+            }
+            p.raw_ka += prey.raw_ka;
+            self.stats.predations += 1;
+            self.stats.deaths += 1;
+        }
+        let mut gone: Vec<usize> = meals.iter().map(|&(_, j)| j).collect();
+        gone.sort_unstable();
+        for &j in gone.iter().rev() {
+            cells.swap_remove(j);
+        }
+    }
+
     /// Colonies: oversized ones shed a member; members' loose monomers flow toward the
     /// colony mean. Transfers are whole monomers from donors to the needy, matter exact.
     pub(crate) fn colony_physics(&mut self, cells: &mut [Cell], dt: f64, rng: &mut Rng) {
@@ -1592,5 +1688,18 @@ mod tests {
         let (colonial, size, _) = w.colony_stats();
         assert!(colonial > 0.2 && size >= 2.0, "colonies did not form: {colonial} {size}");
         assert!(w.stats.shared_monomers > 0, "colony members never shared: test would pass vacuously");
+    }
+
+    #[test]
+    fn engulfing_keeps_matter() {
+        // sticky cells everywhere and eager to eat: predation must happen, matter must hold
+        let cp = CellParams { eat_floor: 0.0, eat_span: 0.01, eat_rate: 20.0, eat_size: 1.0, max_cells: 120, ..Default::default() };
+        let mut w = World::new(PoolParams::default(), cp, Cosmos::new(CosmosParams::default()), rates(), 13, 80);
+        let start = w.matter();
+        for _ in 0..800 {
+            w.step(0.02);
+        }
+        assert_eq!(w.matter(), start);
+        assert!(w.stats.predations > 0, "no cell was eaten: test would pass vacuously");
     }
 }
