@@ -2,6 +2,19 @@
 extends Node2D
 
 const CELL := 8.0
+const EXPLAIN := """[b]Scale 0: atoms and bonds[/b]
+
+[b]What you see.[/b] A strip of beach from the sea (left) to the dunes (right), drawn as a grid of atoms. Each dot is an atom, each line a chemical bond. Glowing atoms have just absorbed light. Bands marked SURROGATE are not simulated atom by atom right now (see below).
+
+[b]The elements.[/b] Atoms here follow the same rule as ours: electrons fill shells around the nucleus, and an atom bonds until its outer shell is full or empty. But this world's shells hold [b]2 and 6[/b] electrons instead of 2 and 8, so there are only 8 elements, with invented names (Tab back to the periodic table screen). How many bonds an atom makes is its [b]valence[/b].
+
+[b]What drives change.[/b] Sunlight excites atoms so bonds can form or break. UV light breaks them. Heat makes everything jiggle, and the tide wets and dries the sand twice a day. Energy flows through the beach, but atoms are never created or destroyed: "ledger drift 0" means every atom is accounted for.
+
+[b]Real world.[/b] This is the setting many scientists picture for the origin of life on Earth: shallow shores where sunlight and wet-dry cycles push simple atoms into bigger molecules.
+
+[b]How it stays fast.[/b] Simulating every atom everywhere is slow, so bands you are not looking at run a [b]learned model[/b] trained on real atom runs. Zoom in and real atoms come back. When conditions go somewhere the model never saw, it logs a [b]Discovery[/b].
+
+[b]Try.[/b] Zoom far in on one atom to see its electron shells. Click an atom for its molecule."""
 const SCALE_NAME := "scale 0: chemistry"
 const SPEEDS := [0, 1, 4, 16, 64]
 const PALETTE := [

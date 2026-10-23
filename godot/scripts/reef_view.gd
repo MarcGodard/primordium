@@ -9,6 +9,17 @@ const SPEEDS := [0, 1, 5, 20, 80]
 ## Days per second per speed unit.
 const DAYS_PER_UNIT := 0.05
 const DT := 0.02
+const EXPLAIN := """[b]Scale 5: a reef of many-celled bodies[/b]
+
+[b]What you see.[/b] A rocky shore in 3D, from deep water up to dry sand. Every sphere is a cell; cells stuck together are one [b]body[/b], all with the same genome (a clone, like a plant or coral). The sea rises and falls with the tide; sun, moons, clouds and seasons come from the same sky model as every other scale.
+
+[b]A body is a team.[/b] All its cells carry the same genes, but each switches them on by where it sits: how much light reaches it, how high it is, whether it touches the water. Tint shows what a cell does more than average ([color=#40ccd9]copying[/color], [color=#59cc4d]metabolism[/color], [color=#f2e0b8]membrane[/color], [color=#bf3852]pigment[/color], [color=#ffbf33]glue[/color]). That is [b]cell differentiation[/b], like leaf and root cells in one plant.
+
+[b]Life on the reef.[/b] Food comes in through the cells touching water, and flows inward. Waves tear tall bodies (glue at the base holds them). Pigment on top shades the cells below from UV. Sticky bodies graze on smaller ones (red flash). A daughter cell that does not stick floats away as a [b]spore[/b] (glowing on the surface) and starts a new body, with a few copy mistakes in its genome: that is how bodies evolve. Torn-off pieces drift and regrow too.
+
+[b]Evolution you can see.[/b] Press C to colour bodies by [b]lineage[/b] (which founder they descend from). Over a few hundred days most lineages die out and the survivors split the shore: tall bodies in calm deep water, low crusts where waves break.
+
+[b]Try.[/b] Click a body to see its layers and genes, B for the biggest, right-drag to orbit, dive under the surface."""
 const SCALE_NAME := "scale 5: reef"
 const ROLE_COLORS := [Color(0.25, 0.8, 0.85), Color(0.35, 0.8, 0.3), Color(0.95, 0.88, 0.72), Color(0.75, 0.22, 0.32), Color(0.6, 0.6, 0.65), Color(1.0, 0.75, 0.2)]
 const ROLE_NAMES := ["polymerase", "metabolism", "membrane", "pigment", "no clear role", "glue"]

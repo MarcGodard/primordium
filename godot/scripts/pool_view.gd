@@ -5,6 +5,17 @@ extends Node2D
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
 const DT := 0.01
+const EXPLAIN := """[b]Scale 1: chains (polymers)[/b]
+
+[b]What you see.[/b] A tide pool of chains. Each chain has a backbone of Ka atoms (the only atom that bonds three ways) with one side group hanging off each link: Hy, Li, Bo, Ox or Fl. That makes every chain a [b]sequence of letters[/b], like a word.
+
+[b]Folding.[/b] A chain curls up into a shape, driven by which side groups attract each other and which ones avoid water. The shape decides what the chain does: a pocket in the right place speeds up a chemical reaction (a [b]catalyst[/b], like an enzyme), oily chains form membranes, some absorb light (pigments).
+
+[b]Copying.[/b] When the pool dries, loose letters stick to a chain's side groups by weak pairing, and a copy forms, letter by letter, with mistakes. Wet water melts copies apart. That is the first step to inheritance: sequences that copy better become more common.
+
+[b]Real world.[/b] The "RNA world" idea: before DNA and proteins, chains like RNA may have both carried information and done chemistry.
+
+[b]Try.[/b] Click a chain to see its fold; click a letter in the close-up to see its atoms."""
 const SCALE_NAME := "scale 1: polymers"
 
 var sim: PoolSim

@@ -6,6 +6,17 @@ extends Node2D
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
 const DT := 0.02
+const EXPLAIN := """[b]Scale 3: cells[/b]
+
+[b]What you see.[/b] Cells on the beach, sea on the left. Each cell has a [b]genome[/b] (one long chain) and makes products from it. Tint shows what a cell's genes do: [color=#40ccd9]teal copying enzymes (polymerase)[/color], [color=#59cc4d]green metabolism[/color], [color=#f2e0b8]cream membrane builders[/color], [color=#f2a633]amber pigment[/color].
+
+[b]A genetic code, forced by chemistry.[/b] When a chain is copied twice, only two letters (Li and Fl) come back as themselves; the others get rewritten. So genes here are written in [b]binary[/b], and cells read them three letters at a time (a codon) to build products from all five letters, the way our cells read DNA to build proteins.
+
+[b]Life cycle.[/b] A cell copies its genome, then divides; copy mistakes are [b]mutations[/b]. UV and cosmic rays cause more. Genes switch on and off with light, cold, food and neighbours ([b]gene regulation[/b]). Sticky cells stay together after dividing ([b]colonies[/b], gold bridges) and big sticky cells swallow small ones (red flashes): the first predators.
+
+[b]Real world.[/b] Natural selection: cells whose genes work better leave more copies. Too many copying errors and nothing can be inherited (Eigen's error threshold); better copying enzymes are what got life past it.
+
+[b]Try.[/b] Zoom in to see genome rings, click a cell for its genes, a gene for its folded product."""
 const SCALE_NAME := "scale 3: cells"
 const BAND := 22.0
 const HEIGHT := 140.0

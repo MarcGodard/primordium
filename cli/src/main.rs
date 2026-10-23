@@ -1202,59 +1202,43 @@ fn reef(args: &[String]) {
 /// rule picks, side-group letters, each letter's pairing partner and which letters survive
 /// copying twice (the heritable alphabet a genome in that universe would be written in).
 fn elements(args: &[String]) {
-    use primordium_core::element::{bond_energies, element_in, shell_total};
+    use primordium_core::element::{NAME_POOL, Universe, shell_total};
     let Ok(shells) = arg(args, "shells", "2,6".to_string()).split(',').map(|v| v.trim().parse::<u8>()).collect::<Result<Vec<u8>, _>>() else {
         println!("--shells takes capacities like 2,6,6");
         return;
     };
     let n = shell_total(&shells);
-    if n > primordium_core::element::NAME_POOL.len() {
+    if n > NAME_POOL.len() {
         println!("{n} elements: more than NAME_POOL holds");
         return;
     }
-    let el: Vec<_> = (1..=n as u8).map(|z| element_in(&shells, z)).collect();
+    let u = Universe::new(&shells);
     println!("shells {shells:?}: {n} elements");
-    println!("  Z  name shell valence   chi   hydropathy");
-    for e in &el {
-        println!("{:3}  {:4} {:5} {:7} {:6.2} {:8.2}{}", e.z, e.name, e.shell, e.valence, e.chi, e.hydropathy, if e.valence == 0 { "  noble" } else { "" });
+    println!("  Z  name shell valence   chi   hydropathy  role");
+    for (e, r) in u.elements.iter().zip(&u.roles) {
+        println!("{:3}  {:4} {:5} {:7} {:6.2} {:8.2}     {r:?}", e.z, e.name, e.shell, e.valence, e.chi, e.hydropathy);
     }
-    let bondable: Vec<_> = el.iter().filter(|e| e.valence > 0).collect();
-    if bondable.is_empty() {
+    if u.backbone == 0 {
         println!("no element bonds: no chemistry");
         return;
     }
-    let top = bondable.iter().map(|e| e.valence).max().unwrap_or(0);
-    let backbone = bondable.iter().find(|e| e.valence == top).unwrap();
-    let rivals: Vec<&str> = bondable.iter().filter(|e| e.valence == top && e.z != backbone.z).map(|e| e.name).collect();
-    println!("backbone: {} (valence {top}){}", backbone.name, if rivals.is_empty() { String::new() } else { format!(", rivals {rivals:?}") });
-    if top < 3 {
+    let b = u.get(u.backbone);
+    println!("backbone: {} (valence {})", b.name, b.valence);
+    if b.valence < 3 {
         println!("  no atom can hold a chain plus a side group: no readable polymers");
         return;
-    } else if top > 3 {
-        println!("  valence {top}: chains carry {} side groups per link, sequences branch", top - 2);
+    } else if b.valence > 3 {
+        println!("  valence {}: chains carry {} side groups per link, sequences branch", b.valence, b.valence - 2);
     }
-    let letters: Vec<_> = bondable.iter().filter(|e| e.z != backbone.z).collect();
-    if letters.is_empty() {
+    if u.letters.is_empty() {
         println!("no side groups: chains carry no sequence");
         return;
     }
-    println!("side-group letters: {}", letters.iter().map(|e| e.name).collect::<Vec<_>>().join(" "));
-    // copying picks each template letter's strongest weak-bond partner
-    let comp: Vec<usize> = (0..letters.len()).map(|i| (0..letters.len()).max_by_key(|&j| bond_energies(letters[i], letters[j]).1).unwrap()).collect();
-    for (i, l) in letters.iter().enumerate() {
-        println!("  {} pairs with {}", l.name, letters[comp[i]].name);
+    let name = |z: u8| u.get(z).name;
+    println!("side-group letters: {}", u.letters.iter().map(|&z| name(z)).collect::<Vec<_>>().join(" "));
+    for (&l, &p) in u.letters.iter().zip(&u.partner) {
+        println!("  {} pairs with {}", name(l), name(p));
     }
-    // letters that come back after any number of double copies
-    let mut alive: Vec<usize> = (0..letters.len()).collect();
-    loop {
-        let mut next: Vec<usize> = alive.iter().map(|&i| comp[comp[i]]).collect();
-        next.sort_unstable();
-        next.dedup();
-        if next == alive {
-            break;
-        }
-        alive = next;
-    }
-    let names: Vec<&str> = alive.iter().map(|&i| letters[i].name).collect();
-    println!("heritable alphabet (letters that survive repeated double copies): {} ({} letters, {:.1} bits each)", names.join(" "), names.len(), (names.len() as f64).log2());
+    let h: Vec<&str> = u.heritable.iter().map(|&z| name(z)).collect();
+    println!("heritable alphabet (letters that survive repeated double copies): {} ({} letters, {:.1} bits each)", h.join(" "), h.len(), (h.len() as f64).log2());
 }

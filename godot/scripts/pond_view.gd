@@ -6,6 +6,17 @@ extends Node2D
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
 const DT := 0.01
+const EXPLAIN := """[b]Scale 2: protocells[/b]
+
+[b]What you see.[/b] A pond with bubbles (vesicles). Each ring is a membrane made of oily chains; the dots inside are the chains it has trapped.
+
+[b]Why bubbles matter.[/b] Oily chains in water clump into closed shells on their own, like soap bubbles. A shell keeps its chains together, so a chain that makes something useful helps [b]its own[/b] bubble, not the whole pond. Bubbles grow by soaking up more oily chains, get stretched by the tide and split in two, and can burst.
+
+[b]What drives change.[/b] Tides feed the pond from the ocean and wash it out; UV light erodes membranes (pigments inside give shade); the day's warmth changes how fast everything happens.
+
+[b]Real world.[/b] Fatty-acid vesicles that grow and divide are studied in labs as models of the first cells (protocells).
+
+[b]Try.[/b] Click a bubble to look inside, then a chain for its fold, then a letter for its atoms."""
 const SCALE_NAME := "scale 2: protocells"
 
 var sim: PondSim

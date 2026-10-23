@@ -13,7 +13,7 @@ The chemistry is invented, not ours: elements come from a shell rule with capaci
 
 | Scale | Detailed model | Status |
 |---|---|---|
-| -1 Subatomic | Shell rule generates the periodic table | done (rule + viewer zoom) |
+| -1 Subatomic | Shell rule generates the periodic table | done (rule, 3D periodic table screen, universe previews) |
 | 0 Chemistry | Lattice Monte-Carlo: bonds, exchange, weak pairing, photons, hydration | done |
 | 1 Polymers | Sequence-defined chains, lattice folding, pocket catalysis, templated copying | done |
 | 2 Protocells | Amphiphile vesicles with interior metabolism, growth, division | done |
@@ -62,6 +62,6 @@ cargo build --release -p primordium-godot
 godot --path godot          # Godot 4.7
 ```
 
-Viewer: Tab cycles scales (chemistry, polymers, protocells, cells, coast, reef). The reef is 3D: right-drag orbits, shift- or middle-drag pans, left-click picks a body (its make-up by height and its genes' switches appear on the left), B jumps to the biggest body, O toggles the slow auto-orbit. Mouse wheel zooms, right-drag pans, left-click inspects and drills down (cell -> gene -> fold -> residue atoms), space pauses, 1-5 sets speed, A toggles automatic resolution.
+Viewer: Tab cycles scales (elements, chemistry, polymers, protocells, cells, coast, reef). **H** (or F1) on any screen opens a guide: what you are looking at, what the colours mean, and the real-world idea behind it. The first screen is this world's periodic table in 3D: click an element for its atom (nucleus, electron shells, the empty slots that make it bond), its role in life here and its bond strengths with every other element; the buttons preview other universes (a third shell, our octets) and what their life would be built from. The reef is 3D: right-drag orbits, shift- or middle-drag pans, left-click picks a body (its make-up by height and its genes' switches appear on the left), B jumps to the biggest body, O toggles the slow auto-orbit. Mouse wheel zooms, right-drag pans, left-click inspects and drills down (cell -> gene -> fold -> residue atoms), space pauses, 1-5 sets speed, A toggles automatic resolution.
 
 Headless experiments: `train`, `shadow`, `pool`, `fold-shadow`, `pond`, `pond-shadow`, `selection`, `cells`, `cell-shadow`, `cell-selection`, `coast`, `coast-shadow`, `reef-seed` (evolve a coast and hand its lineage model and cells to the reef: `data/reef_seed.json`), `reef` (see `cli/src/main.rs`).

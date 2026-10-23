@@ -6,11 +6,16 @@ var label: RichTextLabel
 var orrery: Control
 var bars := {}
 var right: RichTextLabel
+var left_panel: PanelContainer
+var explain_panel: PanelContainer
+var explain: RichTextLabel
+var explaining := false
 
 const SEASONS := ["spring", "summer", "autumn", "winter"]
 
 func _ready() -> void:
 	var panel := PanelContainer.new()
+	left_panel = panel
 	panel.position = Vector2(12, 12)
 	panel.custom_minimum_size = Vector2(330, 0)
 	var sb := StyleBoxFlat.new()
@@ -68,11 +73,59 @@ func _ready() -> void:
 	right.custom_minimum_size = Vector2(300, 0)
 	rp.add_child(right)
 
+	# "what am I looking at": each view's EXPLAIN text, centred, toggled with H or F1
+	explain_panel = PanelContainer.new()
+	var eb := sb.duplicate()
+	eb.bg_color = Color(0.02, 0.04, 0.07, 0.94)
+	eb.border_color = Color(0.45, 0.65, 0.9, 0.6)
+	eb.set_border_width_all(1)
+	eb.content_margin_left = 22
+	eb.content_margin_right = 22
+	eb.content_margin_top = 18
+	eb.content_margin_bottom = 18
+	explain_panel.add_theme_stylebox_override("panel", eb)
+	explain_panel.anchor_left = 0.5
+	explain_panel.anchor_right = 0.5
+	explain_panel.anchor_top = 0.5
+	explain_panel.anchor_bottom = 0.5
+	explain_panel.offset_left = -390
+	explain_panel.offset_right = 390
+	explain_panel.offset_top = -330
+	explain_panel.offset_bottom = 330
+	explain = RichTextLabel.new()
+	explain.bbcode_enabled = true
+	explain.scroll_active = true
+	explain.add_theme_font_size_override("normal_font_size", 16)
+	explain.add_theme_font_size_override("bold_font_size", 17)
+	explain_panel.add_child(explain)
+	explain_panel.visible = false
+	# above every view's own overlay layers
+	var top := CanvasLayer.new()
+	top.layer = 10
+	add_child(top)
+	top.add_child(explain_panel)
+
+func _unhandled_input(e: InputEvent) -> void:
+	if e is InputEventKey and e.pressed and e.keycode in [KEY_H, KEY_F1]:
+		explaining = not explaining
+		get_viewport().set_input_as_handled()
+	elif e is InputEventKey and e.pressed and e.keycode == KEY_ESCAPE and explaining:
+		explaining = false
+		get_viewport().set_input_as_handled()
+
 func _process(_d: float) -> void:
 	if view == null:
 		return
+	explain_panel.visible = explaining
+	if explaining:
+		var txt: String = view.get("EXPLAIN") if view.get("EXPLAIN") != null else "No guide for this screen yet."
+		if explain.text != txt:
+			explain.text = txt
 	var e: Dictionary = view.env
+	left_panel.visible = not e.is_empty()
 	if e.is_empty():
+		if view.has_method("hud_text"):
+			right.text = view.hud_text()
 		return
 	var day := int(floor(e.t_days))
 	var mins := int(e.day_phase * 1440.0)
@@ -86,7 +139,7 @@ func _process(_d: float) -> void:
 	label.text = "[b]PRIMORDIUM[/b]  [color=#8ab]%s[/color]\n" % view.SCALE_NAME + \
 		"Day %d  %02d:%02d   year %d, %s\n" % [day, mins / 60, mins % 60, int(e.year), season] + \
 		"%.1f K   tide %.2f %s   cloud %.0f%%\n" % [e.temperature_k, e.tide_level, tide_dir, e.cloud * 100.0] + \
-		"speed x%d   ledger drift %d\n" % [view.speed(), e.ledger_drift] + alerts
+		"speed x%d   ledger drift %d\n" % [view.speed(), e.ledger_drift] + alerts + "[color=#8ab]H: what am I looking at?[/color]"
 	bars.visible.value = clamp(e.visible, 0.0, 1.0)
 	bars.uv.value = clamp(e.uv / 2.0, 0.0, 1.0)
 	bars.radio.value = clamp(e.radio / 2.0, 0.0, 1.0)

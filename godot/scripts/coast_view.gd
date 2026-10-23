@@ -7,6 +7,17 @@ extends Node2D
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
 const DT := 0.02
+const EXPLAIN := """[b]Scale 4: a coastline on an Earth-sized planet[/b]
+
+[b]What you see.[/b] Twelve beaches along one coast, from far south (bottom) to far north (top), on a planet the size of Earth: neighbours are about 1,270 km apart. The globe shows where they are, lit by the sun at this hour and season. Each strip is a whole beach of cells; the bars show its average genes.
+
+[b]Climate makes niches.[/b] Near the equator it is warm with long even days; near the poles the seasons swing hard. Tides are biggest in the bays at both ends. Ocean currents carry loose cells from beach to beach, so a good gene can spread along the coast.
+
+[b]Learned models.[/b] A whole coast of chemistry is slow, so a beach can switch to [b]lineage mode[/b] (purple frame): instead of simulating every cell's chemistry, cells divide and die at rates learned from the detailed beaches. The model is checked against the real thing (about 97% as close as two real runs are to each other).
+
+[b]Real world.[/b] Populations adapt to local climate: the bottom chart shows which trait each beach leads in, over time. Here, copying enzymes grew stronger at the warm equator and weaker at the cold poles, where cold alone keeps copying accurate.
+
+[b]Try.[/b] Click a beach (or a dot on the globe) and zoom in to see its real cells."""
 const SCALE_NAME := "scale 4: coastline"
 const BAND := 22.0
 const TILE_W := 220.0

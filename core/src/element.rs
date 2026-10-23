@@ -250,6 +250,14 @@ mod tests {
     }
 
     #[test]
+    fn universe_reads_our_table_as_the_sim_does() {
+        let u = Universe::new(&SHELLS);
+        assert_eq!(u.backbone, BACKBONE);
+        assert_eq!(u.letters, SIDE_GROUPS.to_vec());
+        assert_eq!(u.heritable, vec![3, 7]);
+    }
+
+    #[test]
     fn bonds_symmetric_and_nobles_inert() {
         let t = Table::new();
         for a in 1..=8 {
@@ -259,5 +267,79 @@ mod tests {
             assert_eq!(t.bond[2][a], 0);
             assert_eq!(t.bond[8][a], 0);
         }
+    }
+}
+
+/// What an element does in a universe's chemistry of life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Role {
+    /// Closed shell: bonds to nothing.
+    Noble,
+    /// Most-bonded atom: chains are built of it.
+    Backbone,
+    /// Another atom as bonded as the backbone; it would branch a chain as a side group.
+    Rival,
+    /// A side group on the backbone: a letter of the polymer alphabet.
+    Letter,
+}
+
+/// A whole periodic table under some shell capacities, read the way the sim reads ours:
+/// elements, the backbone the shell rule picks, side-group letters, each letter's pairing
+/// partner (copying puts a template letter's strongest weak-bond partner opposite it) and the
+/// heritable alphabet: letters that come back after any number of double copies.
+#[derive(Clone, Debug, Serialize)]
+pub struct Universe {
+    pub shells: Vec<u8>,
+    pub elements: Vec<Element>,
+    pub roles: Vec<Role>,
+    /// Z of the backbone atom; 0 when nothing bonds.
+    pub backbone: u8,
+    /// Letters as Z, then each letter's partner as Z.
+    pub letters: Vec<u8>,
+    pub partner: Vec<u8>,
+    pub heritable: Vec<u8>,
+}
+
+impl Universe {
+    pub fn new(shells: &[u8]) -> Self {
+        let n = shell_total(shells).min(NAME_POOL.len());
+        let elements: Vec<Element> = (1..=n as u8).map(|z| element_in(shells, z)).collect();
+        let top = elements.iter().map(|e| e.valence).max().unwrap_or(0);
+        let backbone = elements.iter().find(|e| e.valence == top && top > 0).map_or(0, |e| e.z);
+        let roles: Vec<Role> = elements
+            .iter()
+            .map(|e| match e.valence {
+                0 => Role::Noble,
+                _ if e.z == backbone => Role::Backbone,
+                v if v == top => Role::Rival,
+                _ => Role::Letter,
+            })
+            .collect();
+        // chains need two bonds plus a side group: below valence 3 there is no sequence to read
+        let letters: Vec<&Element> = if top >= 3 { elements.iter().filter(|e| e.valence > 0 && e.z != backbone).collect() } else { Vec::new() };
+        let comp: Vec<usize> = (0..letters.len()).map(|i| (0..letters.len()).max_by_key(|&j| bond_energies(letters[i], letters[j]).1).unwrap()).collect();
+        let mut alive: Vec<usize> = (0..letters.len()).collect();
+        loop {
+            let mut next: Vec<usize> = alive.iter().map(|&i| comp[comp[i]]).collect();
+            next.sort_unstable();
+            next.dedup();
+            if next == alive {
+                break;
+            }
+            alive = next;
+        }
+        Self {
+            shells: shells.to_vec(),
+            roles,
+            backbone,
+            partner: comp.iter().map(|&j| letters[j].z).collect(),
+            heritable: alive.iter().map(|&i| letters[i].z).collect(),
+            letters: letters.iter().map(|e| e.z).collect(),
+            elements,
+        }
+    }
+
+    pub fn get(&self, z: u8) -> &Element {
+        &self.elements[z as usize - 1]
     }
 }
