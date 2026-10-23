@@ -117,7 +117,6 @@ impl Default for Tally {
 }
 
 /// Advance a band by `sweeps` with tau-leaping. Returns the change in stored energy.
-/// `confident` = false means the caller should not be here; it still steps on the prior.
 pub fn step_band(s: &mut BandState, table: &RateTable, chem: &Table, x: &[f64], sweeps: f64, rng: &mut Rng) -> Energy {
     let before = s.stored(chem);
     // random channel order: clamping should not systematically favour low indices

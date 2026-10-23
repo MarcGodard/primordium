@@ -16,6 +16,8 @@ fn main() {
         "fold" => fold(&args),
         "train" => train(&args),
         "shadow" => shadow(&args),
+        "pool" => pool(&args),
+        "fold-shadow" => fold_shadow(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -60,6 +62,9 @@ fn fold(args: &[String]) {
         let (f, func) = express(&seq, &ph, kt, 1);
         let (p, cut) = func.best_catalysis();
         let (a, b) = pair_members(p);
+        let kk = primordium_core::kinetics::pair(3, 3);
+        let kl = primordium_core::kinetics::pair(1, 3);
+        println!("    Ka-Ka cut {:.3}  Li-Ka cut {:.3}", func.catalysis[kk], func.catalysis[kl]);
         println!(
             "{s}: E={:.2} stab={:.3} amph={:.2} pig={:.2} best cut {:.2} kT on {}-{}",
             f.energy, func.stability, func.amphiphile, func.pigment, cut,
@@ -146,4 +151,78 @@ fn shadow(args: &[String]) {
         "mean agreement {:.1}% | detail twin {:.1}% | frozen-null {:.1}% | relative to twin ceiling {:.1}% | speed detail {:.0} sweeps/s, hybrid {:.0} sweeps/s | ledger drift a={} b={} | lift shortfall {}",
         100.0 * sum_acc / n, 100.0 * sum_twin / n, 100.0 * sum_null / n, 100.0 * sum_acc / sum_twin, total as f64 / ta, total as f64 / tb, a.ledger.drift(), b.ledger.drift(), b.hybrid.lift_shortfall
     );
+}
+
+/// Scale-1 pool on learned scale-0 rates.
+fn pool(args: &[String]) {
+    use primordium_core::cosmos::Cosmos;
+    use primordium_core::pool::{Pool, PoolParams};
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 30.0);
+    let seed: u64 = arg(args, "seed", 1);
+    let dt: f64 = arg(args, "dt", 0.01);
+    let every: f64 = arg(args, "every", 2.0);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let mut p = Pool::new(PoolParams::default(), Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
+    let start = Instant::now();
+    let steps = (days / dt) as u64;
+    let per = (every / dt) as u64;
+    for s in 1..=steps {
+        p.step(dt);
+        if s % per == 0 {
+            let n = p.chains.len();
+            let mean_len = p.chains.iter().map(|c| c.seq.len()).sum::<usize>() as f64 / n.max(1) as f64;
+            let max_len = p.chains.iter().map(|c| c.seq.len()).max().unwrap_or(0);
+            let max_gen = p.chains.iter().map(|c| c.generation).max().unwrap_or(0);
+            let st = &p.stats;
+            println!(
+                "t={:6.1} T={:5.1}K {} | chains={} len mean {:.1} max {} gen {} | copies={} err={:.2} breaks={} lig={} | cut {:.2} best {:.2} | folds={} exact={} nn={}",
+                p.t_days, p.env.temperature_k, if p.wet() { "wet" } else { "dry" }, n, mean_len, max_len, max_gen, st.copies,
+                st.mutations as f64 / st.copied_letters.max(1) as f64, st.breaks, st.ligations, p.backbone_cut(), p.best_cut, p.model.folds, p.model.exact, p.model.nearest
+            );
+            println!("    top: {:?}", p.top_sequences(5));
+        }
+    }
+    for d in p.discoveries.entries.iter().rev().take(5) {
+        println!("discovery day {:.1}: {}", d.t_days, d.note);
+    }
+    println!("{:.1}s", start.elapsed().as_secs_f64());
+}
+
+/// Scale-1 surrogate accuracy: does a k-mutant share its parent's function?
+/// Ceiling = same sequence, different annealing dice. Null = population-mean function.
+fn fold_shadow(args: &[String]) {
+    use primordium_core::element::Table;
+    use primordium_core::polymer::{LetterPhysics, N_LETTERS, express_ensemble};
+    use primordium_core::rng::Rng;
+    use primordium_core::surrogate::agreement;
+    let n: usize = arg(args, "n", 150);
+    let k: usize = arg(args, "k", 1);
+    let sm: f64 = arg(args, "steps", 1.0);
+    let express = |s: &[u8], ph: &LetterPhysics, kt: f64, seed: u64| express_ensemble(s, ph, kt, seed, k, sm);
+    let kt: f64 = arg(args, "kt", 1.0);
+    let ph = LetterPhysics::new(&Table::new());
+    let mut rng = Rng::new(9);
+    for len in [8usize, 16, 24, 32] {
+        let seqs: Vec<Vec<u8>> = (0..n).map(|_| (0..len).map(|_| rng.below(N_LETTERS) as u8).collect()).collect();
+        let funcs: Vec<Vec<f64>> = seqs.iter().map(|s| express(s, &ph, kt, 1).1.as_vec()).collect();
+        let dim = funcs[0].len();
+        let mean: Vec<f64> = (0..dim).map(|k| funcs.iter().map(|f| f[k]).sum::<f64>() / n as f64).collect();
+        let avg = |v: &mut dyn Iterator<Item = f64>| { let (s, c) = v.fold((0.0, 0.0), |a, x| (a.0 + x, a.1 + 1.0)); 100.0 * s / c };
+        let ceiling = avg(&mut seqs.iter().zip(&funcs).map(|(s, f)| agreement(f, &express(s, &ph, kt, 77).1.as_vec())));
+        let null = avg(&mut funcs.iter().map(|f| agreement(f, &mean)));
+        let mut row = format!("len {len:2}: ceiling {ceiling:5.1}%  null {null:5.1}%  |");
+        for d in 1..=3 {
+            let acc = avg(&mut seqs.iter().zip(&funcs).map(|(s, f)| {
+                let mut m = s.clone();
+                for _ in 0..d {
+                    let k = rng.below(len);
+                    m[k] = ((m[k] as usize + 1 + rng.below(N_LETTERS - 1)) % N_LETTERS) as u8;
+                }
+                agreement(&express(&m, &ph, kt, 1).1.as_vec(), f)
+            }));
+            row += &format!("  {d}-mut {acc:5.1}%");
+        }
+        println!("{row}");
+    }
 }

@@ -57,7 +57,10 @@ impl LetterPhysics {
                 pair[i][j] = t.weak[zi as usize][zj as usize] as f64 / KT;
             }
             for (k, &zk) in BONDABLE.iter().enumerate() {
-                bind[i][k] = t.weak[zi as usize][zk as usize] as f64 / KT;
+                // polar grip (weak bond) plus hydrophobic burial: oily pockets hold oily reactants
+                let (hl, hr) = (t.get(zi).hydropathy, t.get(zk).hydropathy);
+                let burial = if hl < 0.0 && hr < 0.0 { HYDROPHOBIC_CONTACT * (hl * hr).sqrt() } else { 0.0 };
+                bind[i][k] = t.weak[zi as usize][zk as usize] as f64 / KT + burial;
             }
             let e = t.get(zi);
             // valence-2 letters carry an Hy cap: average the two atoms' water preference
@@ -67,6 +70,9 @@ impl LetterPhysics {
         Self { pair, bind, hydropathy, absorb }
     }
 }
+
+/// kT per unit sqrt(hydropathy product) when two oily groups exclude water together.
+pub const HYDROPHOBIC_CONTACT: f64 = 1.4;
 
 const SQ: [(i32, i32); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
 
@@ -81,7 +87,7 @@ pub struct Fold {
 /// Hydrophobic burial plus weak pairing between side groups.
 fn contact(ph: &LetterPhysics, a: u8, b: u8) -> f64 {
     let (ha, hb) = (ph.hydropathy[a as usize], ph.hydropathy[b as usize]);
-    let hydrophobic = if ha < 0.0 && hb < 0.0 { 1.4 * (ha * hb).sqrt() } else { 0.0 };
+    let hydrophobic = if ha < 0.0 && hb < 0.0 { HYDROPHOBIC_CONTACT * (ha * hb).sqrt() } else { 0.0 };
     -(hydrophobic + ph.pair[a as usize][b as usize])
 }
 
@@ -96,6 +102,60 @@ fn energy(seq: &[u8], pos: &[(i32, i32)], ph: &LetterPhysics) -> f64 {
         }
     }
     e
+}
+
+/// Occupancy grid centred on the chain start; any walk of n steps fits in (2n+1)^2.
+struct Occ {
+    n: i32,
+    cells: Vec<u16>,
+}
+
+impl Occ {
+    fn new(n: usize) -> Self {
+        let n = n as i32 + 1;
+        Self { n, cells: vec![0; ((2 * n + 1) * (2 * n + 1)) as usize] }
+    }
+
+    #[inline]
+    fn idx(&self, p: (i32, i32), origin: (i32, i32)) -> usize {
+        ((p.1 - origin.1 + self.n) * (2 * self.n + 1) + (p.0 - origin.0 + self.n)) as usize
+    }
+
+    /// Fills residue index + 1 per cell; false on a collision (leaves grid dirty: call clear).
+    fn fill(&mut self, pos: &[(i32, i32)]) -> bool {
+        let o = pos[0];
+        for (k, &p) in pos.iter().enumerate() {
+            let i = self.idx(p, o);
+            if self.cells[i] != 0 {
+                return false;
+            }
+            self.cells[i] = k as u16 + 1;
+        }
+        true
+    }
+
+    fn clear(&mut self, pos: &[(i32, i32)]) {
+        let o = pos[0];
+        for &p in pos {
+            let i = self.idx(p, o);
+            self.cells[i] = 0;
+        }
+    }
+
+    /// Energy with the grid filled: each residue looks at 4 neighbours, O(n).
+    fn energy(&self, seq: &[u8], pos: &[(i32, i32)], ph: &LetterPhysics) -> f64 {
+        let o = pos[0];
+        let mut e = 0.0;
+        for (k, &(x, y)) in pos.iter().enumerate() {
+            for (dx, dy) in SQ {
+                let j = self.cells[self.idx((x + dx, y + dy), o)] as usize;
+                if j > k + 2 {
+                    e += contact(ph, seq[k], seq[j - 1]);
+                }
+            }
+        }
+        e
+    }
 }
 
 fn self_avoiding(pos: &[(i32, i32)]) -> bool {
@@ -116,12 +176,14 @@ pub fn fold(seq: &[u8], ph: &LetterPhysics, kt: f64, steps: usize, seed: u64) ->
     let mut rng = Rng::new(seed ^ seq.iter().fold(0xcbf29ce484222325u64, |h, &l| (h ^ l as u64).wrapping_mul(0x100000001b3)));
     let mut e = energy(seq, &pos, ph);
     let mut best = (pos.clone(), e);
+    let mut occ = Occ::new(n);
+    let mut cand = pos.clone();
     for s in 0..steps {
         let temp = kt * (1.0 + 4.0 * (1.0 - s as f64 / steps as f64));
         let pivot = 1 + rng.below(n - 2);
         let rot = 1 + rng.below(3); // 90, 180, 270 degrees
         let (px, py) = pos[pivot];
-        let mut cand = pos.clone();
+        cand.copy_from_slice(&pos);
         for p in cand.iter_mut().skip(pivot + 1) {
             let (mut dx, mut dy) = (p.0 - px, p.1 - py);
             for _ in 0..rot {
@@ -129,12 +191,14 @@ pub fn fold(seq: &[u8], ph: &LetterPhysics, kt: f64, steps: usize, seed: u64) ->
             }
             *p = (px + dx, py + dy);
         }
-        if !self_avoiding(&cand) {
+        let ok = occ.fill(&cand);
+        let ce = if ok { occ.energy(seq, &cand, ph) } else { 0.0 };
+        occ.clear(&cand);
+        if !ok {
             continue;
         }
-        let ce = energy(seq, &cand, ph);
         if ce <= e || rng.chance(((e - ce) / temp).exp()) {
-            pos = cand;
+            std::mem::swap(&mut pos, &mut cand);
             e = ce;
             if e < best.1 {
                 best = (pos.clone(), e);
@@ -210,11 +274,11 @@ pub fn function_of(seq: &[u8], f: &Fold, ph: &LetterPhysics, kt: f64) -> Functio
             if pocket == 0.0 {
                 continue;
             }
+            // reactants must bind both sites; weaker grip limits the cut
+            let grip = |a: usize, b: usize| ph.bind[li][a].min(ph.bind[lj][b]);
             for a in 0..NB {
                 for b in 0..NB {
-                    // reactants must bind both sites; weaker grip limits the cut
-                    let grip = ph.bind[li][a].min(ph.bind[lj][b]);
-                    let cut = CUT_PER_GRIP * grip * pocket;
+                    let cut = CUT_PER_GRIP * grip(a, b) * pocket;
                     let p = pair(a, b);
                     if cut > catalysis[p] {
                         catalysis[p] = cut;
@@ -236,9 +300,44 @@ pub fn function_of(seq: &[u8], f: &Fold, ph: &LetterPhysics, kt: f64) -> Functio
 
 /// Convenience: fold then read function.
 pub fn express(seq: &[u8], ph: &LetterPhysics, kt: f64, seed: u64) -> (Fold, Function) {
-    let f = fold(seq, ph, kt, 400 + 60 * seq.len(), seed);
-    let func = function_of(seq, &f, ph, kt);
-    (f, func)
+    express_ensemble(seq, ph, kt, seed, ENSEMBLE, STEPS_MULT)
+}
+
+/// Annealing runs averaged per sequence. One run of a long chain lands in a
+/// different local minimum per seed, so a single fold's function is mostly dice.
+pub const ENSEMBLE: usize = 8;
+pub const STEPS_MULT: f64 = 0.5;
+
+/// Function = mean over `k` independent folds (a conformational ensemble).
+/// Returned fold is the lowest-energy member, for display.
+pub fn express_ensemble(seq: &[u8], ph: &LetterPhysics, kt: f64, seed: u64, k: usize, steps_mult: f64) -> (Fold, Function) {
+    let steps = ((400 + 60 * seq.len()) as f64 * steps_mult) as usize;
+    let mut best: Option<Fold> = None;
+    let mut acc: Option<Function> = None;
+    for r in 0..k {
+        let f = fold(seq, ph, kt, steps, seed.wrapping_add(r as u64 * 0x9E37));
+        let func = function_of(seq, &f, ph, kt);
+        acc = Some(match acc {
+            None => func,
+            Some(mut a) => {
+                for (x, y) in a.catalysis.iter_mut().zip(&func.catalysis) {
+                    *x += y;
+                }
+                a.stability += func.stability;
+                a.fold_energy += func.fold_energy;
+                a
+            }
+        });
+        if best.as_ref().is_none_or(|b| f.energy < b.energy) {
+            best = Some(f);
+        }
+    }
+    let mut a = acc.unwrap();
+    let kf = k as f64;
+    a.catalysis.iter_mut().for_each(|x| *x /= kf);
+    a.stability /= kf;
+    a.fold_energy /= kf;
+    (best.unwrap(), a)
 }
 
 /// Z of a letter, for scale-0 lookups.
@@ -270,6 +369,16 @@ mod tests {
     }
 
     #[test]
+    fn grid_energy_matches_pairwise() {
+        let ph = LetterPhysics::new(&Table::new());
+        let s = parse_seq("lfbhoolfhbfllofhlfbh");
+        let (f, _) = express(&s, &ph, 1.0, 2);
+        let mut occ = Occ::new(s.len());
+        assert!(occ.fill(&f.pos));
+        assert!((occ.energy(&s, &f.pos, &ph) - energy(&s, &f.pos, &ph)).abs() < 1e-9);
+    }
+
+    #[test]
     fn heat_unfolds() {
         let ph = LetterPhysics::new(&Table::new());
         let s = parse_seq("lflflflflflflflf");
@@ -289,7 +398,10 @@ mod tests {
                 assert_ne!(funcs[i].as_vec(), funcs[j].as_vec(), "{} vs {}", seqs[i], seqs[j]);
             }
         }
-        let best: std::collections::HashSet<usize> = funcs.iter().filter(|f| f.best_catalysis().1 > 0.1).map(|f| f.best_catalysis().0).collect();
-        assert!(best.len() >= 2, "specialists on more than one reaction: {best:?}");
+        // selection acts on specific channels (backbone Ka-Ka): sequences must differ there
+        let kk = pair(bidx(5).unwrap(), bidx(5).unwrap());
+        let cuts: Vec<f64> = funcs.iter().map(|f| f.catalysis[kk]).collect();
+        let (lo, hi) = cuts.iter().fold((f64::MAX, 0.0f64), |(l, h), &c| (l.min(c), h.max(c)));
+        assert!(hi > 0.2 && hi > 3.0 * lo, "backbone catalysis varies by sequence: {cuts:?}");
     }
 }

@@ -478,6 +478,10 @@ impl ChemWorld {
         } else if fa > 0 && b.nb > 0 {
             // Exchange: b-c becomes a-b. Partner c must not be a.
             let c = b.bonds[self.rng.below(b.nb as usize)];
+            // leaving partner may sit in a surrogate band: its cross-band bond is frozen
+            if self.frozen(c) {
+                return;
+            }
             let e_bc = self.table.bond[zb][self.atoms[c as usize].z as usize];
             let d = (e_bc - e_ab) as f64;
             if self.rng.chance(arrhenius(self.p.barrier_exchange)) && self.accept(d) {
@@ -583,7 +587,9 @@ impl ChemWorld {
                 self.unlink(i, j);
                 self.book(eb);
             }
-            self.break_weak(i);
+            if self.atoms[i as usize].weak != NONE && !self.frozen(self.atoms[i as usize].weak) {
+                self.break_weak(i);
+            }
         }
 
         // Radio: too soft for covalent bonds; can pop a weak pair.
@@ -594,7 +600,7 @@ impl ChemWorld {
             self.ledger.photon_in += e;
             self.ledger.bath += e;
             let a = self.atoms[i as usize];
-            if a.weak != NONE && self.table.weak[a.z as usize][self.atoms[a.weak as usize].z as usize] <= e {
+            if a.weak != NONE && !self.frozen(a.weak) && self.table.weak[a.z as usize][self.atoms[a.weak as usize].z as usize] <= e {
                 self.break_weak(i);
             }
         }
@@ -614,7 +620,8 @@ impl ChemWorld {
                 // Antenna hop to a bonded ground-state neighbour; stored unchanged.
                 let a = self.atoms[i];
                 let j = a.bonds[self.rng.below(a.nb as usize)] as usize;
-                if self.atoms[j].excite == 0 {
+                // frozen atoms carry no excitation: coarse-graining dropped it
+                if self.atoms[j].excite == 0 && !self.frozen(j as u32) {
                     self.atoms[j].excite = x;
                     self.atoms[i].excite = 0;
                 }
@@ -776,6 +783,8 @@ mod tests {
         let mut trainer = small();
         let table = crate::hybrid::train(&mut trainer, 2.0, |_| {});
         w.hybrid.rates = Some(table);
+        // the frozen-atom assert below assumes no band lifts mid-test
+        w.hybrid.hp.lift_below = 0.0;
         let before = w.census().element_totals;
         for _ in 0..100 {
             w.sweep();
@@ -784,9 +793,19 @@ mod tests {
             w.restrict(b);
         }
         assert_eq!(w.ledger.stored, w.recompute_stored());
+        let frozen_before: Vec<(usize, Atom)> = w.atoms.iter().enumerate().filter(|(i, _)| w.frozen(*i as u32)).map(|(i, a)| (i, *a)).collect();
+        assert!(!frozen_before.is_empty());
         for _ in 0..300 {
             w.sweep();
             assert_eq!(w.ledger.stored, w.recompute_stored(), "ledger during surrogate");
+        }
+        for (i, a) in &frozen_before {
+            let now = &w.atoms[*i];
+            let mut bonds_then = a.bonds[..a.nb as usize].to_vec();
+            let mut bonds_now = now.bonds[..now.nb as usize].to_vec();
+            bonds_then.sort();
+            bonds_now.sort();
+            assert_eq!((a.x, a.y, a.weak, a.excite, bonds_then), (now.x, now.y, now.weak, now.excite, bonds_now), "frozen atom {i} changed");
         }
         for b in [1, 3, 5] {
             w.lift(b);

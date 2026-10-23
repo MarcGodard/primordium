@@ -4,5 +4,6 @@ pub mod element;
 pub mod hybrid;
 pub mod kinetics;
 pub mod polymer;
+pub mod pool;
 pub mod rng;
 pub mod surrogate;
