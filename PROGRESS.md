@@ -41,6 +41,8 @@
 
 ## Log
 
+- 2026-10-23 Reef shadow harness (`primordium reef-shadow`): the reef cloned after a 200-day warm-up and run on with fresh dice agrees with itself 98.7% over 60 noons on what the scale above reads (`Reef::summary`: cells in five elevation bands, bodies, multicellular bodies, crawlers, mean body size, tallest, mean expressed traits). This is the ceiling for a reef surrogate. Crawler counts swing day to day (~800 to ~3600) with cloud and light, identically in both twins.
+
 - 2026-10-23 M17 crawling (seed 1, 1500 days): crawling peaks early (~4400 bodies at day 300, ~290 of them multicellular) and settles to ~700 (~70 multicellular) by day 1200-1500: moving costs food and loose grip is torn off in the surf, so most lineages anchor, and a mobile minority persists at up to ~2 cells/day. Height/skin-regulated genes keep rising (0.8% at day 300 to 10.6% at day 1500). In the viewer the biggest body at day 300 is a slow crawler shaped like a mushroom (7 cells on the rock, 18 across at height 3).
 
 - 2026-10-23 Reef recruits get a size refuge from grazing (`graze_min` = 2: a lone cell slips through). Without it, spore lineages stalled into clones (6000 days: spore generations capped at 11-13, genomes 240 -> ~80, within-body differentiation 0.55 -> 0.05; reproduction was by torn fragments). 2000 days, seed 1, by refuge size: none 142 genomes, max generation 11, height/skin genes 0.1%, differentiation 0.55, biggest body 238; 2 cells: 2925 genomes, generation 29, height/skin genes 10.7%, differentiation 0.35, biggest 104; 3 cells: 2435, 36, 13.5%, 0.15, 118; 4 cells: 2762, 27, 12.0%, 0.18, 80. Position-regulated genes, absent since day 100 before, now spread once spore lineages can evolve.

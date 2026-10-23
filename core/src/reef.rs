@@ -246,6 +246,7 @@ pub struct ReefStats {
     pub unsure_cells: u64,
 }
 
+#[derive(Clone)]
 pub struct Reef {
     pub rp: ReefParams,
     /// Reads genomes into genes and folded products (scale 1-3 machinery); runs no cells.
@@ -1281,6 +1282,41 @@ mod tests {
 }
 
 impl Reef {
+    /// Fresh dice, same state: shadow runs.
+    pub fn reseed(&mut self, seed: u64) {
+        self.seed = seed;
+        self.rng = Rng::new(seed ^ 0x5EEF);
+        self.interp.reseed(seed);
+    }
+
+    /// What the scale above would read off the reef, as one vector for shadow agreement: cells in
+    /// five elevation bands, bodies, multicellular bodies, crawlers, mean multicellular size,
+    /// tallest, and mean expressed traits (x100 so they weigh like counts of tens).
+    pub fn summary(&self) -> Vec<f64> {
+        let mut v = vec![0.0; 15];
+        let settled: Vec<&Organism> = self.organisms.iter().filter(|o| o.settled() && !o.cells.is_empty()).collect();
+        for o in &settled {
+            for c in &o.cells {
+                let e = self.tiles[self.tile_at(c.pos)].elevation;
+                v[((e * 5.0) as usize).min(4)] += 1.0;
+                for k in 0..5 {
+                    v[10 + k] += c.expr[k] as f64;
+                }
+            }
+        }
+        let n: f64 = v[..5].iter().sum::<f64>().max(1.0);
+        for k in 0..5 {
+            v[10 + k] *= 100.0 / n;
+        }
+        let multi: Vec<&&Organism> = settled.iter().filter(|o| o.cells.len() > 1).collect();
+        v[5] = settled.len() as f64;
+        v[6] = multi.len() as f64;
+        v[7] = settled.iter().filter(|o| o.speed > 0.0).count() as f64;
+        v[8] = multi.iter().map(|o| o.cells.len()).sum::<usize>() as f64 / multi.len().max(1) as f64;
+        v[9] = settled.iter().map(|o| o.height()).max().unwrap_or(0) as f64;
+        v
+    }
+
     /// Living lineages: (clade, cells), biggest first.
     pub fn clades(&self) -> Vec<(u32, usize)> {
         let mut by: BTreeMap<u32, usize> = BTreeMap::new();

@@ -31,6 +31,7 @@ fn main() {
         "reef-seed" => reef_seed(&args),
         "reef" => reef(&args),
         "elements" => elements(&args),
+        "reef-shadow" => reef_shadow(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -1246,4 +1247,40 @@ fn elements(args: &[String]) {
     }
     let h: Vec<&str> = u.heritable.iter().map(|&z| name(z)).collect();
     println!("heritable alphabet (letters that survive repeated double copies): {} ({} letters, {:.1} bits each)", h.join(" "), h.len(), (h.len() as f64).log2());
+}
+
+/// How reproducible the reef is: the same state run on with different dice, compared on what
+/// the scale above reads (`Reef::summary`), averaged over noon samples. The ceiling any reef
+/// surrogate is scored against.
+fn reef_shadow(args: &[String]) {
+    use primordium_core::reef::{Reef, ReefParams, ReefSeed};
+    use primordium_core::surrogate::{RateTable, agreement};
+    let warm: f64 = arg(args, "warm", 200.0);
+    let days: f64 = arg(args, "days", 60.0);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let start = Instant::now();
+    let mut a = Reef::new(ReefParams::default(), CosmosParams::default(), rates, &rs, 1);
+    while a.t_days < warm {
+        a.step(0.02);
+    }
+    let mut b = a.clone();
+    b.reseed(0xD1CE);
+    let (mut sum, mut n) = (0.0, 0);
+    let mut next = a.t_days.floor() + 1.5;
+    let end = a.t_days + days;
+    while a.t_days < end {
+        a.step(0.02);
+        b.step(0.02);
+        if a.t_days >= next {
+            next += 1.0;
+            let g = agreement(&a.summary(), &b.summary());
+            sum += g;
+            n += 1;
+            if n % 10 == 0 {
+                println!("t={:6.1} twin agreement {:.1}%  a {:?}", a.t_days, g * 100.0, a.summary().iter().map(|v| v.round()).collect::<Vec<_>>());
+            }
+        }
+    }
+    println!("mean twin agreement {:.1}% over {n} noons ({warm}-day warm-up, {:.0}s)", sum / n.max(1) as f64 * 100.0, start.elapsed().as_secs_f64());
 }
