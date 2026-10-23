@@ -86,7 +86,7 @@ func _build_overlay() -> void:
 	row.anchor_right = 0.5
 	row.offset_left = -330
 	row.offset_right = 330
-	row.offset_top = 14
+	row.offset_top = 40
 	row.add_theme_constant_override("separation", 10)
 	layer.add_child(row)
 	for u in UNIVERSES:
@@ -101,7 +101,7 @@ func _build_overlay() -> void:
 	title.anchor_right = 0.5
 	title.offset_left = -300
 	title.offset_right = 300
-	title.offset_top = 52
+	title.offset_top = 78
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	title.add_theme_font_size_override("font_size", 14)

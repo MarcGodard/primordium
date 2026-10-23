@@ -20,7 +20,7 @@ Multiscale artificial-life sim: invented chemistry up through the cell, each sca
 
 - Tests: `cargo test`. Headless: `cargo run --release -p primordium -- chem --days=3`.
 - Viewer: `cargo build --release -p primordium-godot` then `godot --path godot`. The `.gdextension` loads `target/release`.
-- Captures (window opens briefly, exits itself): `godot --path godot --resolution 1600x960 -- --shot=../out/x.png --warm=500 --frames=15 [--zoom=Z --focus=X,Y]`. Output goes in `out/` (ignored).
+- Captures (window opens briefly, exits itself): `godot --path godot --resolution 1600x960 -- --shot=../out/x.png --warm=500 --frames=15 [--zoom=Z --focus=X,Y]`. Output goes in `out/` (ignored). Starts in the hub; `--scale=K` opens view K first (0 elements .. 6 reef, before `--warm`), `--warp=K` plays the transition (frames of the warp only: content flags still act on the hub's first view), `--explain=1` opens the guide, `--pick=1` and `--lineage=1` are view-specific.
 
 ## Progress
 
