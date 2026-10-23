@@ -169,7 +169,7 @@ impl World {
         let p = &self.patches[c.patch];
         let raw = (p.raw[LI] + p.free[LI]) as f64 / self.cp.patch_cells * LI_SCALE;
         // traits as currently switched on, so promoters count in lineage fitness too
-        let (poly, synth, amph) = regulated_traits(info, regulation_signals(c, light, site.env.kt));
+        let (poly, synth, amph) = regulated_traits(info, regulation_signals(c, light, site.env.kt, self.cp.colony_max));
         [
             site.env.kt,
             if site.wet { 1.0 } else { 0.0 },
@@ -423,6 +423,7 @@ impl World {
             ready: false,
             template: None,
             colony,
+            mates: 0,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
         })
     }

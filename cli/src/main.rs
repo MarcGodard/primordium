@@ -851,7 +851,7 @@ fn coast(args: &[String]) {
                 let reg = w.regulation_stats();
                 let st = &w.stats;
                 println!(
-                    "   lat {:+5.2} tide x{:.2} T {:5.1}K | cells {:3} gen {:3} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:3.0} | bit err {:.3} | adh {adh:.3} colonial {:3.0}% size {size:4.1} | genes on light {:.2} cold {:.2} Li {:.2}, pigment light-on {:.2} | eaten {}",
+                    "   lat {:+5.2} tide x{:.2} T {:5.1}K | cells {:3} gen {:3} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:3.0} | bit err {:.3} | adh {adh:.3} colonial {:3.0}% size {size:4.1} | genes on light {:.2} cold {:.2} Li {:.2} mates {:.2}, pigment light-on {:.2} | eaten {}",
                     s.latitude,
                     s.tide_scale,
                     w.env.temperature_k,
@@ -868,6 +868,7 @@ fn coast(args: &[String]) {
                     reg[2],
                     reg[3],
                     reg[4],
+                    reg[5],
                     st.predations
                 );
             }

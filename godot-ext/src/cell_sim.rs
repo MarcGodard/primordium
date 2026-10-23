@@ -187,6 +187,7 @@ impl CellSim {
                 Signal::Light => "light".into(),
                 Signal::Cold => "cold".into(),
                 Signal::LiScarce => "Li short".into(),
+                Signal::Mates => "mates".into(),
             };
             // "light+" = on in light; "cold-" = off when cold
             gd.set("promoter", if name.is_empty() { name } else { format!("{name}{}", if pr.on_high { "+" } else { "-" }) });

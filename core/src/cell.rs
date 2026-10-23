@@ -228,6 +228,8 @@ pub enum Signal {
     Cold,
     /// The cell's own loose Li running short.
     LiScarce,
+    /// How many colony mates the cell has (0 alone, 1 at the colony size cap).
+    Mates,
 }
 
 /// Gene regulation: a signal, a sign (on when the signal is high, or low) and a gain.
@@ -238,33 +240,36 @@ pub struct Promoter {
     pub gain: f64,
 }
 
-/// Bits before a gene's preceding stop codon: [signal, signal, sign, gain]. Genes too close to
-/// the genome start have no room for a promoter and stay constitutive. Promoter bits may
-/// overlap the previous gene's last codon, so rewiring one can recode the other.
-pub const PROMOTER_BITS: usize = 4;
+/// Bits before a gene's preceding stop codon: [signal x3, sign, gain]. Genes too close to the
+/// genome start have no room for a promoter and stay constitutive. Promoter bits may overlap
+/// the previous gene's last codon, so rewiring one can recode the other.
+pub const PROMOTER_BITS: usize = 5;
 
 pub fn promoter(genome: &[u8], start: usize, bits: &[u8; N_LETTERS]) -> Promoter {
     if start < 3 + PROMOTER_BITS {
         return Promoter::default();
     }
     let b = |k: usize| bits[genome[start - 3 - PROMOTER_BITS + k] as usize];
-    let signal = match (b(0), b(1)) {
-        (0, 0) => Signal::None,
-        (0, 1) => Signal::Light,
-        (1, 0) => Signal::Cold,
-        _ => Signal::LiScarce,
+    // codes 5..7 are unassigned and read as constitutive
+    let signal = match (b(0), b(1), b(2)) {
+        (0, 0, 1) => Signal::Light,
+        (0, 1, 0) => Signal::Cold,
+        (0, 1, 1) => Signal::LiScarce,
+        (1, 0, 0) => Signal::Mates,
+        _ => Signal::None,
     };
-    Promoter { signal, on_high: b(2) == 1, gain: if b(3) == 1 { 10.0 } else { 4.0 } }
+    Promoter { signal, on_high: b(3) == 1, gain: if b(4) == 1 { 10.0 } else { 4.0 } }
 }
 
 impl Promoter {
-    /// Expression level 0..1 at signal strengths (light, cold, li_scarce), each 0..1.
-    pub fn level(&self, sig: [f64; 3]) -> f64 {
+    /// Expression level 0..1 at signal strengths (light, cold, li_scarce, mates), each 0..1.
+    pub fn level(&self, sig: [f64; 4]) -> f64 {
         let s = match self.signal {
             Signal::None => return 1.0,
             Signal::Light => sig[0],
             Signal::Cold => sig[1],
             Signal::LiScarce => sig[2],
+            Signal::Mates => sig[3],
         };
         let x = if self.on_high { s - 0.5 } else { 0.5 - s };
         1.0 / (1.0 + (-self.gain * x).exp())
@@ -272,17 +277,23 @@ impl Promoter {
 }
 
 /// Signal strengths 0..1 a cell's promoters read: light reaching it, cold, its own Li running
-/// short (Li's share of its loose monomers).
-pub fn regulation_signals(c: &Cell, light: f64, kt: f64) -> [f64; 3] {
+/// short (Li's share of its loose monomers), and its colony mates (`Cell::mates` over the
+/// cap's `colony_max - 1`).
+pub fn regulation_signals(c: &Cell, light: f64, kt: f64, colony_max: usize) -> [f64; 4] {
     let free_total: i64 = c.free.iter().sum();
     let li_share = if free_total > 0 { c.free[1] as f64 / free_total as f64 } else { 0.0 };
-    [light.clamp(0.0, 1.0), ((1.05 - kt) / 0.2).clamp(0.0, 1.0), (1.0 - li_share / 0.3).clamp(0.0, 1.0)]
+    [
+        light.clamp(0.0, 1.0),
+        ((1.05 - kt) / 0.2).clamp(0.0, 1.0),
+        (1.0 - li_share / 0.3).clamp(0.0, 1.0),
+        (c.mates as f64 / colony_max.saturating_sub(1).max(1) as f64).min(1.0),
+    ]
 }
 
 /// Traits as the genes are switched under `signals`: (polymerase, metabolism, membrane), each
 /// the best gene's strength times its expression level. Genotype potential alone hides what
 /// regulation does to fitness.
-pub fn regulated_traits(info: &GenomeInfo, signals: [f64; 3]) -> (f64, f64, f64) {
+pub fn regulated_traits(info: &GenomeInfo, signals: [f64; 4]) -> (f64, f64, f64) {
     let ka = bidx(KA).unwrap();
     let (mut poly, mut synth, mut amph) = (0.0f64, 0.0f64, 0.0f64);
     for g in &info.genes {
@@ -336,6 +347,9 @@ pub struct Cell {
     /// Colony this cell is stuck in (daughters of sticky cells stay attached).
     #[serde(default)]
     pub colony: Option<u64>,
+    /// Colony mates at the last colony update (a regulation signal).
+    #[serde(default)]
+    pub mates: u32,
 }
 
 impl Cell {
@@ -651,6 +665,7 @@ impl World {
                 ready: false,
                 template: None,
                 colony: None,
+                mates: 0,
                 y: rng.f64(),
             };
             self.cells.push(cell);
@@ -1008,7 +1023,7 @@ impl World {
             None => Copier::Pairing { gain, kt, pair: &self.ctx.ph.pair, fray: clip_odds(poly, kt) },
         };
 
-        let signals = regulation_signals(c, light, kt);
+        let signals = regulation_signals(c, light, kt, self.cp.colony_max);
 
         // transcription: each gene makes product copies; any copy error makes junk
         for (k, g) in info.genes.iter().enumerate() {
@@ -1244,6 +1259,7 @@ impl World {
             template: None,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
             colony,
+            mates: 0,
         })
     }
 
@@ -1252,7 +1268,7 @@ impl World {
     /// each mutation; there each gene's steady expression under current signals stands in.
     fn expression(&self, c: &Cell, info: &GenomeInfo) -> Vec<f64> {
         if self.lineage_mode {
-            let signals = regulation_signals(c, self.patch_site(c.patch, 0.0).x[2], self.env.kt);
+            let signals = regulation_signals(c, self.patch_site(c.patch, 0.0).x[2], self.env.kt, self.cp.colony_max);
             info.genes.iter().map(|g| g.promoter.level(signals)).collect()
         } else {
             (0..info.genes.len()).map(|k| (c.products.get(k).copied().unwrap_or(0) as f64 / 3.0).min(1.0)).collect()
@@ -1399,6 +1415,9 @@ impl World {
                 members.entry(k).or_default().push(i);
             }
         }
+        for c in cells.iter_mut() {
+            c.mates = 0;
+        }
         let k_share = (self.cp.share_rate * dt).min(1.0);
         let mut ids: Vec<u64> = members.keys().copied().collect();
         ids.sort_unstable();
@@ -1408,6 +1427,9 @@ impl World {
                 let j = m.swap_remove(rng.below(m.len()));
                 cells[j].colony = None;
                 self.stats.colony_breakaways += 1;
+            }
+            for &i in &m {
+                cells[i].mates = m.len() as u32 - 1;
             }
             if m.len() < 2 {
                 // mates died or broke away: a colony of one is a free cell again
@@ -1525,11 +1547,11 @@ impl World {
         (colonial as f64 / n, if groups > 0 { colonial as f64 / groups as f64 } else { 0.0 }, adh / n)
     }
 
-    /// Share of genes (over all cells) on each signal: none, light, cold, Li scarcity; then the
-    /// share of pigment-making genes switched on by light.
-    pub fn regulation_stats(&mut self) -> [f64; 5] {
+    /// Share of genes (over all cells) on each signal: none, light, cold, Li scarcity, mates;
+    /// then the share of pigment-making genes switched on by light.
+    pub fn regulation_stats(&mut self) -> [f64; 6] {
         let genomes: Vec<Seq> = self.cells.iter().map(|c| c.genome.clone()).collect();
-        let mut by = [0.0; 4];
+        let mut by = [0.0; 5];
         let (mut pig, mut pig_light) = (0.0f64, 0.0f64);
         for g in &genomes {
             let info = self.info(g);
@@ -1544,7 +1566,7 @@ impl World {
             }
         }
         let total: f64 = by.iter().sum::<f64>().max(1.0);
-        [by[0] / total, by[1] / total, by[2] / total, by[3] / total, pig_light / pig.max(1.0)]
+        [by[0] / total, by[1] / total, by[2] / total, by[3] / total, by[4] / total, pig_light / pig.max(1.0)]
     }
 
     /// Division-of-labour index for pigment: mean variance of members' pigment expression
