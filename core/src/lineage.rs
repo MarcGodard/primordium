@@ -112,6 +112,8 @@ impl LineageModel {
 
     /// Evolution moves the rates (copy error keeps falling as polymerases improve): old data
     /// fades with time constant `tau` days, so the table tracks the present.
+    /// One memory for all tables: a longer one for conditions alone (to remember seasons)
+    /// scored worse over five warm-ups (95.8% vs 97.1% of ceiling).
     pub fn forget(&mut self, dt: f64, tau: f64) {
         let k = (-dt / tau).exp();
         self.base.decay(k);
@@ -157,13 +159,15 @@ fn fidelity_x(x: &[f64]) -> [f64; 2] {
 impl World {
     /// Food and age saturate at the table edge (more of either changes little); temperature
     /// does not: an unseen climate is a discovery.
-    pub fn lineage_features(&self, c: &Cell, info: &crate::cell::GenomeInfo, site: &Site) -> [f64; 8] {
+    /// `light` is what the cell's promoters sense (through neighbours' pigment, as detailed
+    /// regulation sees it).
+    pub fn lineage_features(&self, c: &Cell, info: &crate::cell::GenomeInfo, site: &Site, light: f64) -> [f64; 8] {
         // food is the scarce genome partner, not raw Ka: division waits on Li for the second
         // strand (shadow agreement 94.9% -> 98.2% of ceiling with this one change)
         let p = &self.patches[c.patch];
         let raw = (p.raw[LI] + p.free[LI]) as f64 / self.cp.patch_cells * LI_SCALE;
         // traits as currently switched on, so promoters count in lineage fitness too
-        let (poly, synth, amph) = regulated_traits(info, regulation_signals(c, site.x[2], site.env.kt));
+        let (poly, synth, amph) = regulated_traits(info, regulation_signals(c, light, site.env.kt));
         [
             site.env.kt,
             if site.wet { 1.0 } else { 0.0 },
@@ -181,11 +185,15 @@ impl World {
         // runs before this step's sample: refresh so the check sees today's light
         self.daylight = self.cosmos.sample(self.t_days.floor() + 0.5).visible;
         let cells = std::mem::take(&mut self.cells);
+        let colony_shade = self.colony_shades(&cells);
         let mut sum = 0.0;
         for c in &cells {
             let info = self.info(&c.genome);
-            let site = self.patch_site(c.patch, 0.0);
-            sum += t.confidence(&self.lineage_features(c, &info, &site));
+            let own = self.own_shade(c, &info);
+            let (shade, sensed) = self.shades(c, own, &colony_shade);
+            let site = self.patch_site(c.patch, shade);
+            let light = self.patch_site(c.patch, sensed).x[2];
+            sum += t.confidence(&self.lineage_features(c, &info, &site, light));
         }
         let n = cells.len();
         self.cells = cells;
@@ -206,9 +214,10 @@ impl World {
         for (ci, c) in cells.iter_mut().enumerate() {
             let info = self.info(&c.genome);
             let own = self.own_shade(c, &info);
-            let (shade, _) = self.shades(c, own, &colony_shade);
+            let (shade, sensed) = self.shades(c, own, &colony_shade);
             let site = self.patch_site(c.patch, shade);
-            let x = self.lineage_features(c, &info, &site);
+            let light = self.patch_site(c.patch, sensed).x[2];
+            let x = self.lineage_features(c, &info, &site, light);
             if c.template.is_none() {
                 c.template = Some(c.genome.clone());
             }

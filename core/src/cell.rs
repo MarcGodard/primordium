@@ -736,7 +736,7 @@ impl World {
             let site = self.patch_site(c.patch, shade);
             let light = self.patch_site(c.patch, sensed_shade).x[2];
             if logging {
-                samples.push(crate::lineage::LineageSample { x: self.lineage_features(c, &info, &site), ..Default::default() });
+                samples.push(crate::lineage::LineageSample { x: self.lineage_features(c, &info, &site, light), ..Default::default() });
             }
             let x = Self::features(c, &info, site.env.kt);
             // a lineage-mode division queued before this cell came back to chemistry

@@ -986,7 +986,7 @@ fn coast_shadow(args: &[String]) {
                 for c in &cells {
                     let info = w.info(&c.genome);
                     let site = w.patch_site(c.patch, 0.0);
-                    let x = w.lineage_features(c, &info, &site);
+                    let x = w.lineage_features(c, &info, &site, site.x[2]);
                     predicted[k] += b.model.rates(&x, &prior).0 * 0.02;
                 }
             }
