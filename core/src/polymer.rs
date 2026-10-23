@@ -158,6 +158,7 @@ impl Occ {
     }
 }
 
+#[cfg(test)]
 fn self_avoiding(pos: &[(i32, i32)]) -> bool {
     let mut v: Vec<_> = pos.to_vec();
     v.sort();
@@ -252,37 +253,46 @@ pub const UNFOLD_ENTROPY: f64 = 0.35;
 /// Barrier cut per kT of reactant grip at a perfect pocket.
 pub const CUT_PER_GRIP: f64 = 1.6;
 
+/// Catalytic sites: exposed, non-consecutive residues in contact, with pocket depth 0..1.
+/// A site flanked by chain holds reactants; a bare edge (pocket 0) does not and is omitted.
+pub fn sites(f: &Fold) -> Vec<(usize, usize, f64)> {
+    let n = f.pos.len();
+    let occupied: std::collections::HashSet<(i32, i32)> = f.pos.iter().cloned().collect();
+    let walls = |k: usize| SQ.iter().filter(|(dx, dy)| occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy))).count();
+    let exposed = |k: usize| walls(k) < 4;
+    let mut out = Vec::new();
+    for i in 0..n {
+        for j in (i + 2)..n {
+            let d = (f.pos[i].0 - f.pos[j].0).abs() + (f.pos[i].1 - f.pos[j].1).abs();
+            if d != 1 || !exposed(i) || !exposed(j) {
+                continue;
+            }
+            let pocket = ((walls(i) + walls(j)) as f64 - 4.0).clamp(0.0, 3.0) / 3.0;
+            if pocket > 0.0 {
+                out.push((i, j, pocket));
+            }
+        }
+    }
+    out
+}
+
 /// Read function off a fold at temperature kt (units of kT at 300 K).
 pub fn function_of(seq: &[u8], f: &Fold, ph: &LetterPhysics, kt: f64) -> Function {
     let n = seq.len();
-    let occupied: std::collections::HashSet<(i32, i32)> = f.pos.iter().cloned().collect();
-    let exposed: Vec<bool> = f.pos.iter().map(|&(x, y)| SQ.iter().any(|(dx, dy)| !occupied.contains(&(x + dx, y + dy)))).collect();
     // two-state folding: dG = E_fold + T*S_unfold*n ; stability = 1/(1+exp(dG/kT))
     let dg = f.energy + kt * UNFOLD_ENTROPY * n as f64;
     let stability = 1.0 / (1.0 + (dg / kt).exp());
     let mut catalysis = vec![0.0; N_PAIRS];
-    for i in 0..n {
-        for j in (i + 2)..n {
-            let d = (f.pos[i].0 - f.pos[j].0).abs() + (f.pos[i].1 - f.pos[j].1).abs();
-            if d != 1 || !exposed[i] || !exposed[j] {
-                continue;
-            }
-            let (li, lj) = (seq[i] as usize, seq[j] as usize);
-            // pocket: a site flanked by chain holds reactants; a bare edge does not
-            let walls = |k: usize| SQ.iter().filter(|(dx, dy)| occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy))).count();
-            let pocket = ((walls(i) + walls(j)) as f64 - 4.0).clamp(0.0, 3.0) / 3.0;
-            if pocket == 0.0 {
-                continue;
-            }
-            // reactants must bind both sites; weaker grip limits the cut
-            let grip = |a: usize, b: usize| ph.bind[li][a].min(ph.bind[lj][b]);
-            for a in 0..NB {
-                for b in 0..NB {
-                    let cut = CUT_PER_GRIP * grip(a, b) * pocket;
-                    let p = pair(a, b);
-                    if cut > catalysis[p] {
-                        catalysis[p] = cut;
-                    }
+    for (i, j, pocket) in sites(f) {
+        let (li, lj) = (seq[i] as usize, seq[j] as usize);
+        // reactants must bind both sites; weaker grip limits the cut
+        let grip = |a: usize, b: usize| ph.bind[li][a].min(ph.bind[lj][b]);
+        for a in 0..NB {
+            for b in 0..NB {
+                let cut = CUT_PER_GRIP * grip(a, b) * pocket;
+                let p = pair(a, b);
+                if cut > catalysis[p] {
+                    catalysis[p] = cut;
                 }
             }
         }

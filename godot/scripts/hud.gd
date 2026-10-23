@@ -83,7 +83,7 @@ func _process(_d: float) -> void:
 		alerts += "[color=#ff70ff]STELLAR FLARE[/color]  "
 	if e.supernova > 0.05:
 		alerts += "[color=#ffffff][b]SUPERNOVA[/b][/color]"
-	label.text = "[b]PRIMORDIUM[/b]  [color=#8ab]scale 0: chemistry[/color]\n" + \
+	label.text = "[b]PRIMORDIUM[/b]  [color=#8ab]%s[/color]\n" % view.SCALE_NAME + \
 		"Day %d  %02d:%02d   year %d, %s\n" % [day, mins / 60, mins % 60, int(e.year), season] + \
 		"%.1f K   tide %.2f %s   cloud %.0f%%\n" % [e.temperature_k, e.tide_level, tide_dir, e.cloud * 100.0] + \
 		"speed x%d   ledger drift %d\n" % [view.speed(), e.ledger_drift] + alerts
@@ -95,6 +95,9 @@ func _process(_d: float) -> void:
 	bars.tide.value = e.tide_level
 	orrery.queue_redraw()
 
+	if view.has_method("hud_text"):
+		right.text = view.hud_text()
+		return
 	var c: Dictionary = view.census
 	var t := "[b]Census[/b]\n"
 	if not c.is_empty():
@@ -113,7 +116,7 @@ func _process(_d: float) -> void:
 		t += "[b]Discoveries[/b] %d\n" % h.discoveries
 		for d in view.discoveries:
 			t += "[color=#cbf]" + d + "[/color]\n"
-	t += "\n[color=#789]wheel zoom (zoom far in for atom shells)\nright-drag pan, left-click inspect\nspace pause, 1-5 speed, A auto-resolution, R reseed[/color]"
+	t += "\n[color=#789]Tab: switch scale\nwheel zoom (zoom far in for atom shells)\nright-drag pan, left-click inspect\nspace pause, 1-5 speed, A auto-resolution, R reseed[/color]"
 	right.text = t
 
 func _draw_orrery() -> void:

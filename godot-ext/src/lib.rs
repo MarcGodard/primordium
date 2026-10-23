@@ -6,6 +6,8 @@ use primordium_core::element::{KT, N_ELEMENTS};
 use primordium_core::hybrid::Mode;
 use primordium_core::surrogate::RateTable;
 
+mod pool_sim;
+
 struct PrimordiumExt;
 
 #[gdextension]

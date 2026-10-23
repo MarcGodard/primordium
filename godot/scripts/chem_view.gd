@@ -2,6 +2,7 @@
 extends Node2D
 
 const CELL := 8.0
+const SCALE_NAME := "scale 0: chemistry"
 const SPEEDS := [0, 1, 4, 16, 64]
 const PALETTE := [
 	Color(0, 0, 0),
@@ -93,6 +94,16 @@ func _ready() -> void:
 	if sim.load_rates(rates):
 		sim.set_auto(auto)
 	_refresh()
+
+func activate(on: bool) -> void:
+	visible = on
+	set_process(on)
+	set_process_unhandled_input(on)
+	for c in get_children():
+		if c is CanvasLayer:
+			c.visible = on
+	if on:
+		cam.make_current()
 
 func px_per_cell() -> float:
 	return CELL * cam.zoom.x
@@ -233,3 +244,6 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_R:
 				sim.reset(randi() % 100000, sim.grid_size().x, sim.grid_size().y)
 				mm.instance_count = sim.atom_count()
+
+func warm(n: int) -> void:
+	sim.step(n)
