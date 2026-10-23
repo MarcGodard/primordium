@@ -91,9 +91,13 @@ fn fold(args: &[String]) {
         let (f, func) = express(&seq, &ph, kt, 1);
         let (p, cut) = func.best_catalysis();
         let (a, b) = pair_members(p);
-        let kk = primordium_core::kinetics::pair(3, 3);
-        let kl = primordium_core::kinetics::pair(1, 3);
-        println!("    Ka-Ka cut {:.3}  Li-Ka cut {:.3}", func.catalysis[kk], func.catalysis[kl]);
+        use primordium_core::kinetics::{bidx, pair};
+        let ka = bidx(primordium_core::element::BACKBONE).unwrap();
+        let food = primordium_core::polymer::LETTERS[primordium_core::cell::genetic_code().food as usize];
+        let (kk, kl) = (pair(ka, ka), pair(bidx(food).unwrap(), ka));
+        let name = |z: u8| primordium_core::element::NAMES[z as usize - 1];
+        let bb = name(primordium_core::element::BACKBONE);
+        println!("    {bb}-{bb} cut {:.3}  {}-{bb} cut {:.3}", func.catalysis[kk], name(food), func.catalysis[kl]);
         println!(
             "{s}: E={:.2} stab={:.3} amph={:.2} pig={:.2} best cut {:.2} kT on {}-{}",
             f.energy,
@@ -935,19 +939,21 @@ fn coast_shadow(args: &[String]) {
         let (e1, n1) = a.sites.iter().fold((0, 0), |acc, s| (acc.0 + s.world.stats.bit_errors_on1, acc.1 + s.world.stats.ones_inherited));
         let (et, nt) = (e.0, e.1);
         println!("   detail spectrum: error on 1-bits {:.4}, on 0-bits {:.4}", e1 as f64 / n1.max(1) as f64, (et - e1) as f64 / (nt - n1).max(1) as f64);
-        let mut el = [0u64; 5];
-        let mut bl = [0u64; 5];
+        let mut el = [0u64; primordium_core::polymer::N_LETTERS];
+        let mut bl = [0u64; primordium_core::polymer::N_LETTERS];
         for s in &a.sites {
-            for l in 0..5 {
+            for l in 0..primordium_core::polymer::N_LETTERS {
                 el[l] += s.world.stats.errors_by_letter[l];
                 bl[l] += s.world.stats.bits_by_letter[l];
             }
         }
         let letters: Vec<u8> = a.sites[6].world.cells.iter().flat_map(|c| c.genome.clone()).collect();
-        let comp: Vec<usize> = (0..5).map(|l| letters.iter().filter(|&&g| g as usize == l).count()).collect();
+        let n = primordium_core::polymer::N_LETTERS;
+        let comp: Vec<usize> = (0..n).map(|l| letters.iter().filter(|&&g| g as usize == l).count()).collect();
         println!(
-            "   by source letter (Hy Li Bo Ox Fl): error {:?} share {:?} | genome letters now {:?}",
-            (0..5).map(|l| format!("{:.3}", el[l] as f64 / bl[l].max(1) as f64)).collect::<Vec<_>>(),
+            "   by source letter ({}): error {:?} share {:?} | genome letters now {:?}",
+            primordium_core::polymer::LETTER_NAMES.join(" "),
+            (0..n).map(|l| format!("{:.3}", el[l] as f64 / bl[l].max(1) as f64)).collect::<Vec<_>>(),
             bl,
             comp
         );

@@ -71,7 +71,7 @@ func _ready() -> void:
 	res_node.multimesh = mm
 	var am := ShaderMaterial.new()
 	am.shader = load("res://shaders/atom.gdshader")
-	am.set_shader_parameter("palette", load("res://scripts/chem_view.gd").PALETTE)
+	am.set_shader_parameter("palette", load("res://scripts/chem_view.gd").palette())
 	res_node.material = am
 	world.add_child(res_node)
 

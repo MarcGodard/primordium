@@ -29,7 +29,17 @@ const PALETTE := [
 	Color(0.75, 0.55, 0.95), # Ar (noble)
 ]
 
+## Colour per Z for this world's table: the hand-picked first eight, then one hue per element
+## (golden-angle steps) for bigger tables. Index 0 unused.
+static func palette() -> Array:
+	var out: Array = PALETTE.duplicate()
+	var n: int = ElementsSim.n_elements()
+	for z in range(out.size(), n + 1):
+		out.append(Color.from_hsv(fmod(z * 0.618034, 1.0), 0.55, 0.9))
+	return out
+
 var sim: ChemSim
+var pal: Array = palette()
 var world: Node2D
 var beach: ColorRect
 var bonds: Node2D
@@ -84,7 +94,7 @@ func _ready() -> void:
 	atoms_node.multimesh = mm
 	var am := ShaderMaterial.new()
 	am.shader = load("res://shaders/atom.gdshader")
-	am.set_shader_parameter("palette", PALETTE)
+	am.set_shader_parameter("palette", palette())
 	atoms_node.material = am
 	world.add_child(atoms_node)
 
@@ -197,8 +207,8 @@ func _draw_pair_bars(pairs: Array, area: Rect2) -> void:
 			break
 		var w: float = (area.size.x - 4) * float(p.n) / float(top)
 		var y := area.position.y + k * h
-		overlay.draw_rect(Rect2(area.position.x, y + 14, w * 0.5, h - 18), PALETTE[p.za])
-		overlay.draw_rect(Rect2(area.position.x + w * 0.5, y + 14, w * 0.5, h - 18), PALETTE[p.zb])
+		overlay.draw_rect(Rect2(area.position.x, y + 14, w * 0.5, h - 18), pal[p.za])
+		overlay.draw_rect(Rect2(area.position.x + w * 0.5, y + 14, w * 0.5, h - 18), pal[p.zb])
 		overlay.draw_string(font, Vector2(area.position.x, y + 12), "%s %d" % [p.name, p.n], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.7))
 
 func _draw_bonds() -> void:

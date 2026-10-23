@@ -6,7 +6,8 @@ shader_type canvas_item;
 render_mode blend_mix;
 
 uniform float px_per_cell = 8.0;
-uniform vec4 palette[9];
+// one colour per Z (index 0 unused): room for the largest table the name pool allows
+uniform vec4 palette[41];
 uniform float light = 1.0;
 
 varying flat vec4 custom;

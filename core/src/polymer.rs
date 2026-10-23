@@ -21,7 +21,7 @@ use crate::rng::Rng;
 use serde::{Deserialize, Serialize};
 
 /// Letter alphabet as side-group Z. Nobles cannot bond; Ka as side group is a branch (excluded).
-pub const LETTERS: [u8; crate::element::N_BONDABLE - 1] = crate::element::SIDE_GROUPS;
+pub const LETTERS: [u8; crate::element::N_SIDE] = crate::element::SIDE_GROUPS;
 pub const N_LETTERS: usize = LETTERS.len();
 pub const LETTER_NAMES: [&str; N_LETTERS] = letter_names();
 
@@ -42,12 +42,17 @@ const _: () = assert!(N_LETTERS == 5, "scales 1+ assume 5 side-group letters: ge
 
 pub type Seq = Vec<u8>;
 
+/// A letter in sequence text: its element name's lowercase initial ("hlbof" in [2, 6]).
+pub fn letter_char(l: u8) -> char {
+    LETTER_NAMES[l as usize].chars().next().unwrap().to_ascii_lowercase()
+}
+
 pub fn seq_string(s: &[u8]) -> String {
-    s.iter().map(|&l| ['h', 'l', 'b', 'o', 'f'][l as usize]).collect()
+    s.iter().map(|&l| letter_char(l)).collect()
 }
 
 pub fn parse_seq(s: &str) -> Seq {
-    s.chars().filter_map(|c| "hlbof".find(c).map(|i| i as u8)).collect()
+    s.chars().filter_map(|c| (0..N_LETTERS as u8).find(|&l| letter_char(l) == c)).collect()
 }
 
 /// Per-letter physics, derived once from the scale-0 table.
@@ -409,6 +414,15 @@ pub fn letter_bidx(l: u8) -> usize {
 
 #[cfg(test)]
 mod tests {
+    /// Sequence text needs one character per letter: the initials must not collide.
+    #[test]
+    fn letter_chars_unique_and_round_trip() {
+        let chars: std::collections::HashSet<char> = (0..N_LETTERS as u8).map(letter_char).collect();
+        assert_eq!(chars.len(), N_LETTERS, "two letters share an initial");
+        let all: Vec<u8> = (0..N_LETTERS as u8).collect();
+        assert_eq!(parse_seq(&seq_string(&all)), all);
+    }
+
     use super::*;
 
     #[test]
@@ -457,7 +471,7 @@ mod tests {
             }
         }
         // selection acts on specific channels (backbone Ka-Ka): sequences must differ there
-        let kk = pair(bidx(5).unwrap(), bidx(5).unwrap());
+        let kk = pair(bidx(crate::element::BACKBONE).unwrap(), bidx(crate::element::BACKBONE).unwrap());
         let cuts: Vec<f64> = funcs.iter().map(|f| f.catalysis[kk]).collect();
         let (lo, hi) = cuts.iter().fold((f64::MAX, 0.0f64), |(l, h), &c| (l.min(c), h.max(c)));
         assert!(hi > 0.2 && hi > 3.0 * lo, "backbone catalysis varies by sequence: {cuts:?}");

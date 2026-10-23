@@ -187,7 +187,7 @@ impl PoolSim {
             cat.push(&format!("{} {:.2} kT", pair_name(p), cut).to_variant());
         }
         d.set("catalysis", &cat);
-        let ka = primordium_core::kinetics::bidx(5).unwrap();
+        let ka = primordium_core::kinetics::bidx(primordium_core::element::BACKBONE).unwrap();
         d.set("backbone_cut", c.func.catalysis.get(primordium_core::kinetics::pair(ka, ka)).copied().unwrap_or(0.0));
         let f = polymer::Fold { pos: fold, energy: 0.0 };
         let mut sites = PackedVector2Array::new();
@@ -199,9 +199,10 @@ impl PoolSim {
         d
     }
 
-    /// The atoms of one residue: backbone Ka plus side group (valence-2 letters carry an Hy cap).
+    /// The atoms of one residue: the backbone atom plus its side group, which carries an Hy cap on
+    /// every bond beyond the one to the backbone.
     #[func]
-    fn residue_atoms(&self, letter: i64) -> VarArray {
+    fn residue_atoms(letter: i64) -> VarArray {
         let mut arr = VarArray::new();
         let z = LETTERS[letter as usize];
         let mut add = |z: u8, x: f32, y: f32, nb: i64| {
@@ -211,10 +212,13 @@ impl PoolSim {
             d.set("bonds", nb);
             arr.push(&d.to_variant());
         };
-        add(5, 0.0, 0.0, 3);
-        add(z, 0.0, 1.0, if z == 4 || z == 6 { 2 } else { 1 });
-        if z == 4 || z == 6 {
-            add(1, 0.0, 2.0, 1);
+        let bb = primordium_core::element::BACKBONE;
+        add(bb, 0.0, 0.0, primordium_core::element::MAX_VALENCE as i64);
+        let v = primordium_core::element::element(z).valence as i64;
+        add(z, 0.0, 1.0, v);
+        // caps fan out below the side atom, each bonded to it alone
+        for k in 1..v {
+            add(1, (k as f32 - v as f32 * 0.5) * 0.9, 2.0, 1);
         }
         arr
     }

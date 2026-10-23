@@ -42,10 +42,11 @@ var thumbs: Control
 var inset: Control
 var ok := false
 var palette: Array = []
+var letter_z: PackedByteArray = ElementsSim.letters_z()
 var auto := true
 
 func _ready() -> void:
-	palette = load("res://scripts/chem_view.gd").PALETTE
+	palette = load("res://scripts/chem_view.gd").palette()
 	sim = PondSim.new()
 	add_child(sim)
 	ok = sim.start(ProjectSettings.globalize_path("res://../data/rates0.json"), 1, auto)
@@ -236,7 +237,7 @@ func _draw_thumbs() -> void:
 		var off: Vector2 = box.position + (box.size - span * s) * 0.5 - lo * s + Vector2(s, s) * 0.5
 		var letters: PackedByteArray = ch.letters
 		for i in fold.size():
-			thumbs.draw_circle(fold[i] * s + off, max(s * 0.35, 1.0), palette[[1, 3, 4, 6, 7][letters[i]]])
+			thumbs.draw_circle(fold[i] * s + off, max(s * 0.35, 1.0), palette[letter_z[letters[i]]])
 
 func _thumb_input(e: InputEvent) -> void:
 	if not (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT):

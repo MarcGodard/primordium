@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const NONE: u32 = u32::MAX;
-pub const MAX_BONDS: usize = 3;
+pub const MAX_BONDS: usize = crate::element::MAX_VALENCE as usize;
 
 /// 8-neighbourhood, index order fixed: viewer and tests rely on it.
 pub const DIRS: [(i32, i32); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
@@ -727,8 +727,12 @@ pub fn default_composition() -> [f64; N_ELEMENTS] {
 pub fn formula(counts: &[u32; N_ELEMENTS]) -> String {
     use crate::element::NAMES;
     let mut s = String::new();
-    // backbone-first order, like Hill notation puts carbon first
-    for z in [5usize, 4, 6, 3, 7, 1, 2, 8] {
+    // backbone first, like Hill notation puts carbon first; then by bonds made, the lightest
+    // element (Hy) last among its peers as Hill puts hydrogen after carbon; nobles at the end
+    let mut order: Vec<usize> = (1..=N_ELEMENTS).collect();
+    let val = |z: usize| crate::element::element(z as u8).valence;
+    order.sort_by_key(|&z| (z != crate::element::BACKBONE as usize, std::cmp::Reverse(val(z)), z == 1, z));
+    for z in order {
         let c = counts[z - 1];
         if c == 0 {
             continue;
@@ -755,6 +759,12 @@ pub struct Census {
 
 #[cfg(test)]
 mod tests {
+    /// Derived formula order reproduces the hand-written one for [2, 6]: Ka Bo Ox Li Fl Hy Ne Ar.
+    #[test]
+    fn formula_order_is_hill_like() {
+        assert_eq!(formula(&[1; N_ELEMENTS]), "KaBoOxLiFlHyNeAr");
+    }
+
     use super::*;
 
     fn small() -> ChemWorld {

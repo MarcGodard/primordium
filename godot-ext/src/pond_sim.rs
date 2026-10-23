@@ -29,11 +29,11 @@ fn radius(area: i64) -> f32 {
 }
 
 fn dominant_z(seq: &[u8]) -> f32 {
-    let mut n = [0; 5];
+    let mut n = [0; LETTERS.len()];
     for &l in seq {
         n[l as usize] += 1;
     }
-    LETTERS[(0..5).max_by_key(|&k| n[k]).unwrap()] as f32
+    LETTERS[(0..LETTERS.len()).max_by_key(|&k| n[k]).unwrap()] as f32
 }
 
 impl PondSim {

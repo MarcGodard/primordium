@@ -2,9 +2,11 @@
 ## Self-contained: give it `info` (chain dictionary from a bridge) and a size.
 extends Control
 
-const LETTER_Z := [1, 3, 4, 6, 7]
-const LETTER_NAMES := ["Hy", "Li", "Bo", "Ox", "Fl"]
-const NAMES := ["", "Hy", "Ne", "Li", "Bo", "Ka", "Ox", "Fl", "Ar"]
+## Residue letter -> element Z, from the table.
+var LETTER_Z: PackedByteArray = ElementsSim.letters_z()
+var LETTER_NAMES: PackedStringArray = ElementsSim.letter_names()
+var NAMES: PackedStringArray = ElementsSim.element_names()
+var LETTER_CHARS: String = ElementsSim.letter_chars()
 
 var info := {}
 var residue := -1
@@ -12,7 +14,7 @@ var fold_h := 230.0
 var palette: Array = []
 
 func _ready() -> void:
-	palette = load("res://scripts/chem_view.gd").PALETTE
+	palette = load("res://scripts/chem_view.gd").palette()
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	gui_input.connect(_on_input)
 
@@ -41,13 +43,12 @@ func _layout() -> Dictionary:
 	var off: Vector2 = box.position + (box.size - span * s) * 0.5 - lo * s + Vector2(s, s) * 0.5
 	return {"s": s, "off": off}
 
-## Residue atoms: Ka backbone + side atom; valence-2 side atoms (Bo, Ox) carry an Hy cap.
+## Residue atoms from the table (PoolSim.residue_atoms): backbone, side atom, Hy caps.
 func residue_atoms(letter: int) -> Array:
-	var z: int = LETTER_Z[letter]
-	var out := [{"z": 5, "pos": Vector2(0, 0), "bonds": 3}, {"z": z, "pos": Vector2(0, 1), "bonds": 2 if z == 4 or z == 6 else 1}]
-	if z == 4 or z == 6:
-		out.append({"z": 1, "pos": Vector2(0, 2), "bonds": 1})
-	return out
+	return PoolSim.residue_atoms(letter)
+
+## Backbone Z: the first atom of any residue.
+var backbone_z: int = int(PoolSim.residue_atoms(0)[0].z)
 
 func _on_input(e: InputEvent) -> void:
 	if not (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT) or info.is_empty():
@@ -81,19 +82,21 @@ func _draw() -> void:
 		draw_circle(c, s * 0.32, palette[LETTER_Z[letters[k]]])
 		if k == residue:
 			draw_arc(c, s * 0.45, 0, TAU, 24, Color(1, 1, 0.4), 2.0)
-		draw_string(font, c + Vector2(-4, 4), "hlbof"[letters[k]], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.8))
+		draw_string(font, c + Vector2(-4, 4), LETTER_CHARS[letters[k]], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.8))
 	var y0 := fold_h + 6.0
 	if residue < 0 or residue >= letters.size():
 		draw_string(font, Vector2(10, y0), "click a residue to see its atoms", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.5))
 		return
 	var letter: int = letters[residue]
-	draw_string(font, Vector2(10, y0), "Residue %d: Ka backbone + %s side group" % [residue, LETTER_NAMES[letter]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
+	draw_string(font, Vector2(10, y0), "Residue %d: %s backbone + %s side group" % [residue, NAMES[backbone_z], LETTER_NAMES[letter]], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
 	var atoms := residue_atoms(letter)
 	var spacing: float = min(62.0, (size.y - y0 - 40.0) / 2.2)
 	var origin := Vector2(size.x * 0.5, y0 + 34.0)
 	var t := Time.get_ticks_msec() / 1000.0
 	for k in range(1, atoms.size()):
-		draw_line(origin + atoms[k - 1].pos * spacing, origin + atoms[k].pos * spacing, Color(1, 1, 1, 0.7), 3.0)
+		# the side atom bonds to the backbone, every cap to the side atom
+		var parent: int = 0 if k == 1 else 1
+		draw_line(origin + atoms[parent].pos * spacing, origin + atoms[k].pos * spacing, Color(1, 1, 1, 0.7), 3.0)
 	for k in atoms.size():
 		var a: Dictionary = atoms[k]
 		var c: Vector2 = origin + a.pos * spacing

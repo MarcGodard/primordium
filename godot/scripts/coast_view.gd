@@ -227,7 +227,7 @@ func _draw_coast() -> void:
 		for r in 4:
 			var bw: float = 40.0 * clamp(vals[r], 0.0, 1.5) / 1.5
 			art.draw_rect(Rect2(o + Vector2(TILE_W + 6, 4 + r * 9), Vector2(bw, 6)), ROLE_COLORS[r])
-		# what this site's genes listen to: always on, light, cold, Li short, mates, height, skin (stacked)
+		# what this site's genes listen to: always on, light, cold, food short, mates, height, skin (stacked)
 		var reg: PackedFloat32Array = s.get("reg", PackedFloat32Array())
 		if reg.size() >= 7:
 			var x0 := TILE_W + 6.0
@@ -313,7 +313,7 @@ func hud_text() -> String:
 	var t := "[b]Coast[/b] %d sites, north at top\n" % n_sites + "[color=#9ab]Earth-sized planet (radius %.0f km): sites %.0f km apart, current %.1f m/s[/color]\n" % [stats.radius_km, stats.spacing_km, stats.current_m_s] + "cells %d   migrations %d\n[b]Resolution[/b] %s   lineage sites %d   lifts %d\n" % [
 		stats.cells, stats.migrations, "auto (A)" if stats.auto else "detail (A)", stats.lineage_sites, stats.lifts]
 	t += "[color=#cbf]purple frame: site runs as lineages (learned division rates)[/color]\n"
-	t += "[color=#9ab]thin bar under traits: what genes listen to: grey always on, [color=#ffe65a]light[/color], [color=#73bfff]cold[/color], [color=#d973e6]Li short[/color], [color=#ff9959]mates[/color][/color]\n"
+	t += "[color=#9ab]thin bar under traits: what genes listen to: grey always on, [color=#ffe65a]light[/color], [color=#73bfff]cold[/color], [color=#d973e6]food short[/color], [color=#ff9959]mates[/color][/color]\n"
 	if selected >= 0 and selected < sites.size():
 		var s: Dictionary = sites[selected]
 		t += "\n[b]Site %+.0f°[/b]  %.1f K  tide x%.1f\ncells %d   generation %d   divisions %d\nbit error %.2f%%   genome %.0f letters\nin colonies %.0f%% (mean size %.1f)   adhesion %.2f\nengulfed %d\npolymerase %.2f  metabolism %.2f\nmembrane %.2f  pigment %.2f\n" % [

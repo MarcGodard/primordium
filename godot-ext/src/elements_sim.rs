@@ -72,6 +72,35 @@ impl ElementsSim {
         arr
     }
 
+    /// This world's side-group letters as Z, in letter order (residue k is element letters_z()[k]).
+    #[func]
+    fn letters_z() -> PackedByteArray {
+        PackedByteArray::from(primordium_core::polymer::LETTERS.as_slice())
+    }
+
+    /// Element names by Z ("" at 0), and the side-group letters' names in letter order.
+    #[func]
+    fn element_names() -> PackedStringArray {
+        std::iter::once("").chain(primordium_core::element::NAMES.iter().copied()).map(GString::from).collect()
+    }
+
+    #[func]
+    fn letter_names() -> PackedStringArray {
+        primordium_core::polymer::LETTER_NAMES.iter().map(|n| GString::from(*n)).collect()
+    }
+
+    /// Sequence-text character per letter (`polymer::letter_char`).
+    #[func]
+    fn letter_chars() -> GString {
+        GString::from(&(0..primordium_core::polymer::N_LETTERS as u8).map(primordium_core::polymer::letter_char).collect::<String>())
+    }
+
+    /// Elements in this world's table.
+    #[func]
+    fn n_elements() -> i64 {
+        primordium_core::element::N_ELEMENTS as i64
+    }
+
     /// The table's summary: backbone, letters, heritable alphabet (as Z).
     #[func]
     fn summary(&self) -> VarDictionary {

@@ -113,14 +113,30 @@ const fn backbone() -> u8 {
     best
 }
 
-/// Side-group letters: every bondable element but the backbone (as a side group it would branch).
-pub const SIDE_GROUPS: [u8; N_BONDABLE - 1] = side_groups();
+/// Most bonds any element makes: the backbone's valence.
+pub const MAX_VALENCE: u8 = valence_in(&SHELLS, BACKBONE);
 
-const fn side_groups() -> [u8; N_BONDABLE - 1] {
-    let mut out = [0u8; N_BONDABLE - 1];
+/// Side-group letters: bondable elements with fewer bonds than the backbone. One with as many (a
+/// rival backbone) would branch the chain as a side group, so it is no letter.
+pub const N_SIDE: usize = count_side();
+pub const SIDE_GROUPS: [u8; N_SIDE] = side_groups();
+
+const fn count_side() -> usize {
+    let (mut n, mut i) = (0, 0);
+    while i < N_BONDABLE {
+        if valence_in(&SHELLS, BONDABLE_Z[i]) < MAX_VALENCE {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+}
+
+const fn side_groups() -> [u8; N_SIDE] {
+    let mut out = [0u8; N_SIDE];
     let (mut k, mut i) = (0, 0);
     while i < N_BONDABLE {
-        if BONDABLE_Z[i] != BACKBONE {
+        if valence_in(&SHELLS, BONDABLE_Z[i]) < MAX_VALENCE {
             out[k] = BONDABLE_Z[i];
             k += 1;
         }
@@ -316,7 +332,7 @@ impl Universe {
             })
             .collect();
         // chains need two bonds plus a side group: below valence 3 there is no sequence to read
-        let letters: Vec<&Element> = if top >= 3 { elements.iter().filter(|e| e.valence > 0 && e.z != backbone).collect() } else { Vec::new() };
+        let letters: Vec<&Element> = if top >= 3 { elements.iter().filter(|e| e.valence > 0 && e.valence < top).collect() } else { Vec::new() };
         let comp: Vec<usize> = (0..letters.len()).map(|i| (0..letters.len()).max_by_key(|&j| bond_energies(letters[i], letters[j]).1).unwrap()).collect();
         let mut alive: Vec<usize> = (0..letters.len()).collect();
         loop {
