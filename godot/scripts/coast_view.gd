@@ -171,6 +171,15 @@ func _draw_coast() -> void:
 		for r in 4:
 			var bw: float = 40.0 * clamp(vals[r], 0.0, 1.5) / 1.5
 			art.draw_rect(Rect2(o + Vector2(TILE_W + 6, 4 + r * 9), Vector2(bw, 6)), ROLE_COLORS[r])
+		# what this site's genes listen to: always on, light, cold, Li short (stacked)
+		var reg: PackedFloat32Array = s.get("reg", PackedFloat32Array())
+		if reg.size() >= 4:
+			var x0 := TILE_W + 6.0
+			var cols := [Color(0.55, 0.55, 0.6), Color(1.0, 0.9, 0.35), Color(0.45, 0.75, 1.0), Color(0.85, 0.45, 0.9)]
+			for r in 4:
+				var w: float = 40.0 * reg[r]
+				art.draw_rect(Rect2(o + Vector2(x0, 39), Vector2(w, 4)), cols[r])
+				x0 += w
 		art.draw_string(font, o + Vector2(TILE_W + 50, 13), "%d cells" % s.cells, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.8))
 		art.draw_string(font, o + Vector2(TILE_W + 50, 25), "gen %d" % s.max_generation, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.65))
 		art.draw_string(font, o + Vector2(TILE_W + 50, 37), "err %.1f%%" % (s.bit_error * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.65))
@@ -232,6 +241,7 @@ func hud_text() -> String:
 	var t := "[b]Coast[/b] %d sites, north at top\ncells %d   migrations %d\n[b]Resolution[/b] %s   lineage sites %d   lifts %d\n" % [
 		n_sites, stats.cells, stats.migrations, "auto (A)" if stats.auto else "detail (A)", stats.lineage_sites, stats.lifts]
 	t += "[color=#cbf]purple frame: site runs as lineages (learned division rates)[/color]\n"
+	t += "[color=#9ab]thin bar under traits: what genes listen to: grey always on, [color=#ffe65a]light[/color], [color=#73bfff]cold[/color], [color=#d973e6]Li short[/color][/color]\n"
 	if selected >= 0 and selected < sites.size():
 		var s: Dictionary = sites[selected]
 		t += "\n[b]Site %+.0f°[/b]  %.1f K  tide x%.1f\ncells %d   generation %d   divisions %d\nbit error %.2f%%   genome %.0f letters\nin colonies %.0f%% (mean size %.1f)   adhesion %.2f\npolymerase %.2f  metabolism %.2f\nmembrane %.2f  pigment %.2f\n" % [

@@ -103,6 +103,8 @@ impl CoastSim {
             d.set("colonial", colonial);
             d.set("colony_size", size);
             d.set("adhesion", adh);
+            let reg = w.regulation_stats();
+            d.set("reg", &PackedFloat32Array::from(&reg.map(|v| v as f32)[..]));
             d.set("confidence", s.conf);
             arr.push(&d.to_variant());
         }
