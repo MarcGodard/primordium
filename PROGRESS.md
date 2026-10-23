@@ -13,7 +13,7 @@
 
 ## Next
 
-- **Heredity below the error threshold (Eigen's paradox).** With pocket-catalysed proofreading, bit error is ~4.5% per division (130-bit genomes need < ~0.8%) and polymerase strength creeps up 0.24 -> 0.27 over 400 days, then stalls: genomes cannot hold improvements at this error. Free proofreading for every cell reaches 0.57% but removes the pressure on polymerases. Levers left: per-letter error is driven by scarce Li (wrong letters dominate the pool when copying starts), so supply-gated forks or Li-selective metabolism; shorter genomes; repair genes.
+- **Heredity below the error threshold (Eigen's paradox): reached on the coast in the long run** (see log, 2000 days); a single crowded beach still sits above it. With pocket-catalysed proofreading, bit error is ~4.5% per division (130-bit genomes need < ~0.8%) and polymerase strength creeps up 0.24 -> 0.27 over 400 days, then stalls: genomes cannot hold improvements at this error. Free proofreading for every cell reaches 0.57% but removes the pressure on polymerases. Levers left: per-letter error is driven by scarce Li (wrong letters dominate the pool when copying starts), so supply-gated forks or Li-selective metabolism; shorter genomes; repair genes.
 - **Niches by elevation:** patches differ in wet/dry and UV but phenotypes do not yet sort by them.
 - **Coast lineage surrogate: long-run drift.** 98.2% of ceiling over 40 days after a 120-day warm-up, but 96.2% after a 200-day one, and the polymerase mean runs ~1 point under detail. Candidates: fitness interactions with climate (the factored model cannot express them), the 30-day memory.
 - **Coast lineage: window-to-window spread.** Averaged over five warm-ups (120-280 days) the coast shadow is 97.1% of ceiling, single windows 94.9-98.3%. Tried and rejected: a longer memory for the conditions table (to remember seasons): 95.8% mean; 120 days for all tables: 96.3%.
@@ -21,6 +21,8 @@
 - **Scale 1 cost:** folding dominates every scale above; the blend predicts well near cached relatives but cannot reach novel sequences, so scales 2/3 are no faster in surrogate mode. A lineage-level surrogate (a cell genome -> division time and mutation spectrum) is what would buy speed for the scales above the cell.
 
 ## Log
+
+- 2026-10-23 Coast, 2000 days (lineage mode from day 200, 58 s): lifetime heritable bit error falls to 0.6-0.8% per division, at or under the ~0.8% threshold for a 130-bit genome; the poles cross first (~day 1200), the equator by day 2000. Polymerases specialise by climate: at the warm equator mean polymerase keeps rising (0.33 -> 0.38) to hold fidelity against heat, at the cold poles it falls (0.33 -> ~0.24) because cold copying is accurate enough without it. Colonies reach 50-65% of cells. (Lineage-mode evolution: the surrogate's, not detail's.)
 
 - 2026-10-23 Coast lineage features now read the light that promoters actually sense (through neighbours' pigment), as detailed regulation does; before, training features, detailed regulation and lineage inference used three different light inputs. Coast shadow mean over five warm-ups: **97.1% of ceiling** (94.9-98.3). Single-window numbers swing ~1.5% between warm-ups, so tuning now uses the five-window mean.
 

@@ -31,6 +31,7 @@ Each scale's surrogate is measured against a "twin": the same detailed model wit
 - The pairing chemistry forces a binary heritable alphabet, so cells need a genetic code to reach the 5-letter working alphabet.
 - Proofreading that needs the polymerase pocket (clipping is the pocket's reverse reaction) makes polymerase quality the strongest target of selection.
 - Copy errors come mostly from a scarce monomer: less crowded beaches copy 2-4x more faithfully, and cold polar beaches most of all.
+- Over 2000 days the coast crosses the error threshold, and polymerases specialise by climate: they strengthen at the warm equator and wither at the cold poles, where cold alone keeps copying accurate.
 
 ## Environment: change drives evolution
 
