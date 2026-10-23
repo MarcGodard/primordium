@@ -1,0 +1,4 @@
+target/
+godot/.godot/
+*.log
+/out/

@@ -1,0 +1,11 @@
+[package]
+name = "primordium-godot"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+primordium-core = { path = "../core" }
+godot = { version = "0.5.5", features = ["api-4-7"] }
