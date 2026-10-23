@@ -13,6 +13,7 @@
 //! every copy and ligation, so it helps rivals as much as itself. Compartments
 //! (scale 2) are what make catalysts selfish enough to be selected.
 
+use crate::copying::{Copier, LearnedCopy, PairTally};
 use crate::cosmos::{Cosmos, EnvSample};
 use crate::element::Table;
 use crate::kinetics::{CH_BREAK, CH_FORM, bidx, pair};
@@ -440,12 +441,18 @@ impl Contents {
 
     /// Advance `dt` days. Order: metabolism, hydrolysis, melting, copying, ligation.
     pub fn step(&mut self, ctx: &mut Ctx, site: &Site, dt: f64) {
+        self.step_with(ctx, site, dt, None, &mut PairTally::default());
+    }
+
+    /// One interior step. `learned` replaces Boltzmann pairing in copying (surrogate mode);
+    /// detailed copies add to `tally` for learning it.
+    pub fn step_with(&mut self, ctx: &mut Ctx, site: &Site, dt: f64, learned: Option<&LearnedCopy>, tally: &mut PairTally) {
         let mut rng = std::mem::replace(&mut ctx.rng, Rng::new(0));
-        self.step_inner(ctx, site, dt, &mut rng);
+        self.step_inner(ctx, site, dt, learned, tally, &mut rng);
         ctx.rng = rng;
     }
 
-    fn step_inner(&mut self, ctx: &mut Ctx, site: &Site, dt: f64, rng: &mut Rng) {
+    fn step_inner(&mut self, ctx: &mut Ctx, site: &Site, dt: f64, learned: Option<&LearnedCopy>, tally: &mut PairTally, rng: &mut Rng) {
         let kt = site.env.kt;
         let sweeps = dt * ctx.p.sweeps_per_day;
         let cells = self.cells.max(1.0);
@@ -529,36 +536,25 @@ impl Contents {
                 let mut copy = Vec::with_capacity(template.len());
                 let mut mutations = 0;
                 // read 3' to 5': the copy is the reverse complement
+                let how = match learned {
+                    Some(m) => Copier::Learned(m),
+                    None => Copier::Pairing { gain, kt, pair: &ctx.ph.pair, stall_on_mismatch: true },
+                };
                 for &t in template.iter().rev() {
-                    let mut w = [0.0; N_LETTERS];
-                    let mut sum = 0.0;
-                    for l in 0..N_LETTERS {
-                        w[l] = self.free[l].max(0) as f64 * (gain * ctx.ph.pair[t as usize][l] / kt).exp();
-                        sum += w[l];
-                    }
-                    if sum <= 0.0 || rng.chance(ctx.p.stall) {
+                    if rng.chance(ctx.p.stall) {
                         break;
                     }
-                    let mut r = rng.f64() * sum;
-                    // fallback: last available letter, in case rounding walks r past the end
-                    let mut pick = (0..N_LETTERS).rev().find(|&l| w[l] > 0.0).unwrap();
-                    for (l, &wl) in w.iter().enumerate() {
-                        if r < wl {
-                            pick = l;
-                            break;
-                        }
-                        r -= wl;
-                    }
-                    let best = (0..N_LETTERS).max_by(|&a, &b| ctx.ph.pair[t as usize][a].total_cmp(&ctx.ph.pair[t as usize][b])).unwrap();
+                    let t = t as usize;
+                    let best = (0..N_LETTERS).max_by(|&a, &b| ctx.ph.pair[t][a].total_cmp(&ctx.ph.pair[t][b])).unwrap();
+                    let Some((pick, stall)) = how.pick(t, best, &self.free, tally, rng) else { break };
                     self.free[pick] -= 1;
                     copy.push(pick as u8);
                     if pick != best {
                         mutations += 1;
-                        // a frayed end extends badly: stall odds grow with the pairing shortfall
-                        let shortfall = gain * (ctx.ph.pair[t as usize][best] - ctx.ph.pair[t as usize][pick]);
-                        if rng.chance(1.0 - (-shortfall / kt).exp()) {
-                            break;
-                        }
+                    }
+                    // a frayed end extends badly: stall odds grow with the pairing shortfall
+                    if stall {
+                        break;
                     }
                 }
                 self.stats.copied_letters += copy.len() as u64;

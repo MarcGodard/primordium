@@ -14,10 +14,11 @@
 //! and environment; chains (the genome) are kept, so heredity survives. Membrane
 //! physics, permeation, division and damage run the same in both modes.
 
+use crate::copying::{COPY_CHANNELS, LearnedCopy, PairTally};
 use crate::cosmos::{Cosmos, EnvSample};
 use crate::hybrid::Mode;
 use crate::polymer::N_LETTERS;
-use crate::pool::{Chain, Contents, Ctx, PoolParams, PoolStats, Site};
+use crate::pool::{Contents, Ctx, PoolParams, PoolStats, Site};
 use crate::rng::Rng;
 use crate::surrogate::{Axis, Discovery, RateTable};
 use serde::{Deserialize, Serialize};
@@ -146,46 +147,19 @@ pub struct PondStats {
     pub max_generation: u32,
     pub lifts: u64,
     pub restricts: u64,
-    /// Events run by surrogate interiors (synthesis, decay, ligation, join, break, copy).
-    pub surrogate_events: u64,
+    /// Letters copied by surrogate interiors (learned pairing).
+    pub surrogate_letters: u64,
 }
 
-/// Vesicle surrogate channels.
-pub const V_COPY: usize = 0;
-pub const V_MUT: usize = 1;
-pub const V_SYNTH: usize = 2;
-pub const V_BREAK: usize = 3;
-pub const V_LIG: usize = 4;
-pub const V_DECAY: usize = 5;
-/// Chain-chain joins: exposure ~ n(n-1)/cells, unlike monomer ligation.
-pub const V_JOIN: usize = 6;
-pub const V_CHANNELS: usize = 7;
-
+/// Vesicle surrogate: the interior runs its count-level chemistry in both modes; only
+/// templated copying is learned (see `copying`), as a function of temperature and the
+/// backbone catalysis that sets polymerase gain.
 pub fn vesicle_table() -> RateTable {
-    RateTable::new(
-        vec![
-            Axis::new("kT", 0.85, 1.15, 4),
-            Axis::new("wet", 0.0, 1.0, 2),
-            Axis::new("backbone_cut", 0.0, 0.8, 4),
-            Axis::new("synthesis_cut", 0.0, 0.8, 4),
-            Axis::new("free_monomer_conc", 0.0, 0.6, 4),
-            Axis::new("chains_per_kcell", 0.0, 40.0, 4),
-        ],
-        V_CHANNELS,
-    )
+    RateTable::new(vec![Axis::new("kT", 0.85, 1.15, 12), Axis::new("backbone_cut", 0.0, 0.8, 10)], COPY_CHANNELS)
 }
 
-pub fn vesicle_features(v: &Vesicle, site: &Site) -> [f64; 6] {
-    let i = &v.interior;
-    let cells = i.cells.max(1.0);
-    [
-        site.env.kt,
-        if site.wet { 1.0 } else { 0.0 },
-        i.backbone_cut(),
-        i.synthesis_cut(),
-        i.free.iter().sum::<i64>() as f64 / cells,
-        i.chains.len() as f64 * 1000.0 / cells,
-    ]
+pub fn vesicle_features(v: &Vesicle, site: &Site) -> [f64; 2] {
+    [site.env.kt, v.interior.backbone_cut()]
 }
 
 #[derive(Clone)]
@@ -274,6 +248,7 @@ impl Pond {
             self.flush(dt, &mut rng);
         }
 
+        let prior = LearnedCopy::priors(&self.model, 0);
         let mut vs = std::mem::take(&mut self.vesicles);
         for v in vs.iter_mut() {
             let shade = self.pp.max_shade * v.pigment();
@@ -281,27 +256,19 @@ impl Pond {
             let x = vesicle_features(v, &vsite);
             v.conf = self.model.confidence(&x);
             self.resolve_mode(v, &x, &vsite);
+            let learned = (v.mode == Mode::Surrogate).then(|| LearnedCopy::at(&self.model, &x, &prior, 0));
+            let mut tally = PairTally::default();
+            let letters0 = v.interior.stats.copied_letters;
+            self.ctx.rng = std::mem::replace(&mut rng, Rng::new(0));
+            v.interior.step_with(&mut self.ctx, &vsite, dt, learned.as_ref(), &mut tally);
+            rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
             match v.mode {
-                Mode::Detail => {
-                    let before = v.interior.stats.clone();
-                    let expo = surrogate_exposures(&v.interior);
-                    self.ctx.rng = std::mem::replace(&mut rng, Rng::new(0));
-                    v.interior.step(&mut self.ctx, &vsite, dt);
-                    rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
-                    if self.learn {
-                        record(&mut self.model, &x, &before, &v.interior.stats, &expo, dt);
-                    }
+                Mode::Detail if self.learn => {
+                    self.model.record_sample(&x);
+                    tally.record(&mut self.model, &x, 0);
                 }
-                Mode::Surrogate => {
-                    let before = v.interior.stats.clone();
-                    surrogate_step(&mut v.interior, &self.model, &x, &mut self.ctx, dt, &mut rng);
-                    let a = &v.interior.stats;
-                    self.stats.surrogate_events += (a.synthesized - before.synthesized)
-                        + (a.decayed - before.decayed)
-                        + (a.ligations - before.ligations)
-                        + (a.breaks - before.breaks)
-                        + (a.copies - before.copies);
-                }
+                Mode::Surrogate => self.stats.surrogate_letters += v.interior.stats.copied_letters - letters0,
+                _ => {}
             }
             self.membrane_and_permeation(v, &vsite, dt, &mut rng);
         }
@@ -358,17 +325,13 @@ impl Pond {
                         region: v.id as usize,
                         confidence: v.conf,
                         features: x.to_vec(),
-                        note: format!("protocell {} in untrained state (cut {:.2}, synth {:.2})", v.id, x[2], x[3]),
+                        note: format!("protocell {} copying in untrained state (kT {:.3}, backbone cut {:.2})", v.id, x[0], x[1]),
                     },
                 );
             }
             Mode::Detail if self.pp.auto && v.conf >= self.pp.restrict_above => {
                 v.mode = Mode::Surrogate;
                 self.stats.restricts += 1;
-                // surrogate does not model duplex state: release strands
-                for c in v.interior.chains.iter_mut() {
-                    c.paired = false;
-                }
             }
             _ => {}
         }
@@ -660,175 +623,6 @@ fn pick_weighted(counts: &[i64; N_LETTERS], rng: &mut Rng) -> usize {
     (0..N_LETTERS).rev().find(|&l| counts[l] > 0).unwrap_or(0)
 }
 
-/// Exposure of each surrogate channel at the start of a detailed step (per day).
-/// Mass action, matching how the detailed model drives each process.
-fn surrogate_exposures(c: &Contents) -> [f64; V_CHANNELS] {
-    let residues: i64 = c.chains.iter().map(|ch| ch.seq.len() as i64).sum();
-    let cells = c.cells.max(1.0);
-    let free: i64 = c.free.iter().sum();
-    let synth = c.raw_ka as f64 * c.raw.iter().sum::<i64>() as f64 / cells;
-    let lig = free as f64 * (2.0 * c.chains.len() as f64 + free as f64) / cells;
-    let n = c.chains.len() as f64;
-    let join = 2.0 * n * (n - 1.0).max(0.0) / cells;
-    [c.chains.len() as f64, 0.0, synth, residues as f64, lig, free as f64, join]
-}
-
-fn record(t: &mut RateTable, x: &[f64], before: &PoolStats, after: &PoolStats, expo: &[f64; V_CHANNELS], dt: f64) {
-    t.record_sample(x);
-    t.record(x, V_COPY, (after.copies - before.copies) as f64, expo[V_COPY] * dt);
-    // fidelity: mutations per copied letter
-    t.record(x, V_MUT, (after.mutations - before.mutations) as f64, (after.copied_letters - before.copied_letters) as f64);
-    t.record(x, V_SYNTH, (after.synthesized - before.synthesized) as f64, expo[V_SYNTH] * dt);
-    t.record(x, V_DECAY, (after.decayed - before.decayed) as f64, expo[V_DECAY] * dt);
-    t.record(x, V_BREAK, (after.breaks - before.breaks) as f64, expo[V_BREAK] * dt);
-    let joins = (after.joins - before.joins) as f64;
-    t.record(x, V_LIG, (after.ligations - before.ligations) as f64 - joins, expo[V_LIG] * dt);
-    t.record(x, V_JOIN, joins, expo[V_JOIN] * dt);
-}
-
-/// Learned interior: copies with learned fidelity, net synthesis, breakage. Matter closed.
-fn surrogate_step(c: &mut Contents, t: &RateTable, x: &[f64], ctx: &mut Ctx, dt: f64, rng: &mut Rng) {
-    let rate = |ch: usize| t.rate(x, ch, t.global_rate(ch), 1.0);
-    let expo = surrogate_exposures(c);
-    // synthesis: raw Ka + side atom -> monomer, letter drawn by raw availability
-    let make = round_flux(rate(V_SYNTH) * expo[V_SYNTH] * dt, rng).max(0);
-    for _ in 0..make {
-        if c.raw_ka == 0 || c.raw.iter().sum::<i64>() == 0 {
-            break;
-        }
-        let l = pick_weighted(&c.raw, rng);
-        c.raw[l] -= 1;
-        c.raw_ka -= 1;
-        c.free[l] += 1;
-        c.stats.synthesized += 1;
-    }
-    // decay: monomers fall apart into raw atoms
-    let lose = round_flux(rate(V_DECAY) * expo[V_DECAY] * dt, rng).max(0);
-    for _ in 0..lose {
-        if c.free.iter().sum::<i64>() == 0 {
-            break;
-        }
-        let l = pick_weighted(&c.free, rng);
-        c.free[l] -= 1;
-        c.raw[l] += 1;
-        c.raw_ka += 1;
-        c.stats.decayed += 1;
-    }
-    // ligation: a monomer joins a chain end, or two monomers make a dimer
-    let joins = round_flux(rate(V_LIG) * expo[V_LIG] * dt, rng).max(0);
-    for _ in 0..joins {
-        let free: i64 = c.free.iter().sum();
-        if free == 0 {
-            break;
-        }
-        let l = pick_weighted(&c.free, rng);
-        c.free[l] -= 1;
-        let target = rng.below(c.chains.len() + free as usize);
-        if target < c.chains.len() && c.chains[target].seq.len() >= ctx.p.max_len {
-            // full-length chain cannot take a letter: no event, as in detail
-            c.free[l] += 1;
-            continue;
-        }
-        if target < c.chains.len() {
-            let old = c.chains.swap_remove(target);
-            let mut seq = old.seq.clone();
-            seq.push(l as u8);
-            let (func, conf, pending) = ctx.function_for(&seq, x[0]);
-            let id = ctx.next_id();
-            c.chains.push(Chain { id, seq, parent: Some(old.id), born: old.born, paired: false, func, conf, generation: old.generation, pending });
-            c.stats.ligations += 1;
-        } else if c.free.iter().sum::<i64>() > 0 {
-            let m = pick_weighted(&c.free, rng);
-            c.free[m] -= 1;
-            let seq = vec![l as u8, m as u8];
-            let (func, conf, pending) = ctx.function_for(&seq, x[0]);
-            let id = ctx.next_id();
-            c.chains.push(Chain { id, seq, parent: None, born: 0.0, paired: false, func, conf, generation: 0, pending });
-            c.stats.ligations += 1;
-        } else {
-            c.free[l] += 1;
-        }
-    }
-    // chain-chain joins
-    for _ in 0..round_flux(rate(V_JOIN) * expo[V_JOIN] * dt, rng).max(0) {
-        let len = c.chains.len();
-        if len < 2 {
-            break;
-        }
-        let (i, j) = (rng.below(len), rng.below(len));
-        if i == j || c.chains[i].seq.len() + c.chains[j].seq.len() > ctx.p.max_len {
-            continue;
-        }
-        let (hi, lo) = (i.max(j), i.min(j));
-        let a = c.chains.swap_remove(hi);
-        let b = c.chains.swap_remove(lo);
-        let mut seq = a.seq.clone();
-        seq.extend_from_slice(&b.seq);
-        let (func, conf, pending) = ctx.function_for(&seq, x[0]);
-        let id = ctx.next_id();
-        c.chains.push(Chain { id, seq, parent: Some(a.id), born: a.born, paired: false, func, conf, generation: a.generation.max(b.generation), pending });
-        c.stats.ligations += 1;
-        c.stats.joins += 1;
-    }
-    // breakage: random backbone bonds; pieces of one letter become monomers
-    let residues: i64 = c.chains.iter().map(|ch| ch.seq.len() as i64).sum();
-    let breaks = round_flux(rate(V_BREAK) * residues as f64 * dt, rng).max(0);
-    for _ in 0..breaks {
-        if c.chains.is_empty() {
-            break;
-        }
-        let k = rng.below(c.chains.len());
-        if c.chains[k].seq.len() < 2 {
-            continue;
-        }
-        let ch = c.chains.swap_remove(k);
-        let cut = 1 + rng.below(ch.seq.len() - 1);
-        c.stats.breaks += 1;
-        for piece in [ch.seq[..cut].to_vec(), ch.seq[cut..].to_vec()] {
-            if piece.len() == 1 {
-                c.free[piece[0] as usize] += 1;
-            } else {
-                // a fragment has its own fold: never the parent's function
-                let (func, conf, pending) = ctx.function_for(&piece, x[0]);
-                let id = ctx.next_id();
-                c.chains.push(Chain { id, seq: piece, parent: Some(ch.id), born: ch.born, paired: false, func, conf, generation: ch.generation, pending });
-            }
-        }
-    }
-    // copying: reverse complement with learned per-letter error, needs monomers
-    let p_copy = (rate(V_COPY) * dt).min(1.0);
-    let p_mut = rate(V_MUT).clamp(0.0, 1.0);
-    let n = c.chains.len();
-    for k in 0..n {
-        if !rng.chance(p_copy) {
-            continue;
-        }
-        let template = c.chains[k].seq.clone();
-        let mut copy = Vec::with_capacity(template.len());
-        for &tl in template.iter().rev() {
-            let best = (0..N_LETTERS).max_by(|&a, &b| ctx.ph.pair[tl as usize][a].total_cmp(&ctx.ph.pair[tl as usize][b])).unwrap();
-            let want = if rng.chance(p_mut) { (best + 1 + rng.below(N_LETTERS - 1)) % N_LETTERS } else { best };
-            if c.free[want] == 0 {
-                break;
-            }
-            c.free[want] -= 1;
-            copy.push(want as u8);
-        }
-        if copy.len() < 2 {
-            for l in copy {
-                c.free[l as usize] += 1;
-            }
-            continue;
-        }
-        let (func, conf, pending) = ctx.function_for(&copy, x[0]);
-        let parent = c.chains[k].id;
-        let generation = c.chains[k].generation + 1;
-        let id = ctx.next_id();
-        c.chains.push(Chain { id, seq: copy, parent: Some(parent), born: 0.0, paired: false, func, conf, generation, pending });
-        c.stats.copies += 1;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -860,6 +654,6 @@ mod tests {
             pond.step(0.01);
         }
         assert_eq!(pond.matter(), start);
-        assert!(pond.stats.surrogate_events > 0, "surrogate never ran an event: test would pass vacuously");
+        assert!(pond.stats.surrogate_letters > 0, "surrogate never copied a letter: test would pass vacuously");
     }
 }

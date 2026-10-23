@@ -1,5 +1,6 @@
 pub mod cell;
 pub mod chem;
+pub mod copying;
 pub mod cosmos;
 pub mod element;
 pub mod hybrid;

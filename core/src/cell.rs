@@ -23,6 +23,7 @@
 //! (growth, replication speed, fidelity) over the genome's phenotype and the
 //! patch environment; product counts freeze until the cell is lifted again.
 
+use crate::copying::{COPY_CHANNELS, Copier, LearnedCopy, PairTally};
 use crate::cosmos::{Cosmos, EnvSample};
 use crate::hybrid::Mode;
 use crate::kinetics::{CH_BREAK, bidx, pair};
@@ -285,36 +286,11 @@ pub struct CellStats {
     pub products_inserted: u64,
 }
 
-/// Detail copying tallies for learning selectivity, per (template, partner): wrong picks, and
-/// the summed supply ratio free[partner] / free[right] over right picks. Their ratio estimates
-/// 1 / selectivity exactly in expectation.
-#[derive(Clone, Debug, Default)]
-pub struct PairTally {
-    pub picks: [[f64; N_LETTERS]; N_LETTERS],
-    pub odds: [[f64; N_LETTERS]; N_LETTERS],
-}
-
-/// Cell surrogate channels: inverse selectivity of templated copying per (template letter,
-/// wrong partner): odds of that partner over the right one, relative to their supply ratio.
-/// Supply is applied at copy time, so the table holds only what pairing chemistry decides.
-pub const C_CHANNELS: usize = N_LETTERS * N_LETTERS;
-
-fn c_sel(template: usize, partner: usize) -> usize {
-    template * N_LETTERS + partner
-}
-
-/// How a strand is copied: Boltzmann pairing (detail) or a learned selectivity (surrogate).
-#[derive(Clone, Copy)]
-enum Copier {
-    Pairing { gain: f64, kt: f64 },
-    Learned { inv_sel: [[f64; N_LETTERS]; N_LETTERS] },
-}
-
 pub fn cell_table() -> RateTable {
     RateTable::new(
         // selectivity is pairing chemistry: temperature and the polymerase actually present
         vec![Axis::new("kT", 0.85, 1.15, 12), Axis::new("poly", 0.0, 1.0, 10)],
-        C_CHANNELS,
+        COPY_CHANNELS,
     )
 }
 
@@ -339,7 +315,7 @@ pub struct World {
     pub best_poly: f64,
     /// Re-deriving phenotypes after folds land: not new genomes.
     refreshing: bool,
-    /// Pooled selectivity per channel, refreshed each step: the prior for thin bins.
+    /// Pooled copy model per channel, refreshed each step: the prior for thin bins.
     sel_prior: Vec<f64>,
 }
 
@@ -453,7 +429,7 @@ impl World {
             learn: true,
             best_poly: 0.0,
             refreshing: false,
-            sel_prior: vec![0.0; C_CHANNELS],
+            sel_prior: vec![0.0; COPY_CHANNELS],
         };
         w.seed_founders(founders);
         w
@@ -592,7 +568,7 @@ impl World {
 
     pub fn step(&mut self, dt: f64) {
         self.env = self.cosmos.sample(self.t_days);
-        self.sel_prior = (0..C_CHANNELS).map(|ch| self.model.global_rate(ch)).collect();
+        self.sel_prior = LearnedCopy::priors(&self.model, 0);
         let mut rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
         self.tides(dt, &mut rng);
 
@@ -615,13 +591,7 @@ impl World {
             self.radiation(c, &site, dt, &mut rng);
             if c.mode == Mode::Detail && self.learn {
                 self.model.record_sample(&x);
-                for t in 0..N_LETTERS {
-                    for l in 0..N_LETTERS {
-                        if tally.odds[t][l] > 0.0 || tally.picks[t][l] > 0.0 {
-                            self.model.record(&x, c_sel(t, l), tally.picks[t][l], tally.odds[t][l]);
-                        }
-                    }
-                }
+                tally.record(&mut self.model, &x, 0);
             }
             if c.area() < self.cp.burst_area {
                 dead.push(ci);
@@ -766,15 +736,8 @@ impl World {
         }
     }
 
-    fn inv_selectivity(&self, x: &[f64]) -> [[f64; N_LETTERS]; N_LETTERS] {
-        let mut m = [[0.0; N_LETTERS]; N_LETTERS];
-        for (t, row) in m.iter_mut().enumerate() {
-            for (l, v) in row.iter_mut().enumerate() {
-                let ch = c_sel(t, l);
-                *v = self.model.rate(x, ch, self.sel_prior[ch], 1.0).max(0.0);
-            }
-        }
-        m
+    fn learned_copy(&self, x: &[f64]) -> LearnedCopy {
+        LearnedCopy::at(&self.model, x, &self.sel_prior, 0)
     }
 
     /// Templated copy of `template` (reverse complement) using the cell's monomers.
@@ -789,40 +752,7 @@ impl World {
             if free[right] <= 0 {
                 break;
             }
-            let mut w = [0.0; N_LETTERS];
-            match how {
-                Copier::Pairing { gain, kt } => {
-                    for l in 0..N_LETTERS {
-                        w[l] = free[l].max(0) as f64 * (gain * self.ctx.ph.pair[t as usize][l] / kt).exp();
-                    }
-                }
-                Copier::Learned { inv_sel } => {
-                    for l in 0..N_LETTERS {
-                        w[l] = free[l].max(0) as f64 * inv_sel[t as usize][l];
-                    }
-                    w[right] = free[right] as f64;
-                }
-            }
-            let sum: f64 = w.iter().sum();
-            let mut r = rng.f64() * sum;
-            let mut pick = right;
-            for (l, &wl) in w.iter().enumerate() {
-                if r < wl {
-                    pick = l;
-                    break;
-                }
-                r -= wl;
-            }
-            if let Copier::Pairing { .. } = how {
-                let t = t as usize;
-                if pick != right {
-                    tally.picks[t][pick] += 1.0;
-                } else {
-                    for l in (0..N_LETTERS).filter(|&l| l != right) {
-                        tally.odds[t][l] += free[l].max(0) as f64 / free[right] as f64;
-                    }
-                }
-            }
+            let Some((pick, _)) = how.pick(t as usize, right, free, tally, rng) else { break };
             free[pick] -= 1;
             if pick != right {
                 errors += 1;
@@ -856,7 +786,7 @@ impl World {
     /// insertion, fork progress, stalls) and draws only copy fidelity from the learned table.
     fn interior_step(&mut self, c: &mut Cell, info: &GenomeInfo, site: &Site, x_feat: &[f64], dt: f64, tally: &mut PairTally, rng: &mut Rng) {
         let learned = c.mode == Mode::Surrogate;
-        let inv_sel = if learned { self.inv_selectivity(x_feat) } else { [[0.0; N_LETTERS]; N_LETTERS] };
+        let model = learned.then(|| self.learned_copy(x_feat));
         let kt = site.env.kt;
         let x = site.x;
         let cells_in = c.cells(self.cp.vol_k);
@@ -868,7 +798,10 @@ impl World {
         let gain = DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly);
         // copying a long template unaided is slow; a polymerase pocket makes it practical
         let boost = UNAIDED_COPY + POLY_SPEEDUP * ((poly / kt).exp() - 1.0);
-        let how = if learned { Copier::Learned { inv_sel } } else { Copier::Pairing { gain, kt } };
+        let how = match &model {
+            Some(m) => Copier::Learned(m),
+            None => Copier::Pairing { gain, kt, pair: &self.ctx.ph.pair, stall_on_mismatch: false },
+        };
 
         // transcription: each gene makes product copies; any copy error makes junk
         for (k, g) in info.genes.iter().enumerate() {
@@ -1001,11 +934,12 @@ impl World {
         let fork = c.fork.take().unwrap();
         let info = self.info(&c.genome);
         let poly = present_poly(c, &info);
-        let how = if c.mode == Mode::Surrogate {
-            let x = Self::features(c, &info, self.env.kt);
-            Copier::Learned { inv_sel: self.inv_selectivity(&x) }
-        } else {
-            Copier::Pairing { gain: DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly), kt: self.env.kt }
+        let model = (c.mode == Mode::Surrogate).then(|| self.learned_copy(&Self::features(c, &info, self.env.kt)));
+        let how = match &model {
+            Some(m) => Copier::Learned(m),
+            None => {
+                Copier::Pairing { gain: DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly), kt: self.env.kt, pair: &self.ctx.ph.pair, stall_on_mismatch: false }
+            }
         };
         let (mut genome, errs) = self.copy_strand(&fork, &mut c.free, how, usize::MAX, &mut PairTally::default(), rng);
         if genome.len() < fork.len() {
