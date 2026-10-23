@@ -104,7 +104,16 @@ func _process(_d: float) -> void:
 	if not s.is_empty():
 		t += "\n[b]Selected[/b] %s (Z=%d)\nbonds %d/%d   excite %.1f kT   weak %s\nmolecule %s (%d atoms)\n" % [
 			s.name, s.z, s.bonds, s.valence, s.excite, "yes" if s.weak else "no", s.molecule, s.molecule_size]
-	t += "\n[color=#789]wheel zoom (zoom far in for atom shells)\nright-drag pan, left-click inspect\nspace pause, 1-5 speed, R reseed[/color]"
+	var h: Dictionary = view.hybrid
+	if not h.is_empty():
+		t += "\n[b]Resolution[/b] %s\n" % ("auto (A)" if view.auto else "manual (A)")
+		if not h.has_rates:
+			t += "[color=#f88]no data/rates0.json: run primordium train[/color]\n"
+		t += "detail atoms %d   lifts %d   restricts %d\n" % [h.active_atoms, h.lifts, h.restricts]
+		t += "[b]Discoveries[/b] %d\n" % h.discoveries
+		for d in view.discoveries:
+			t += "[color=#cbf]" + d + "[/color]\n"
+	t += "\n[color=#789]wheel zoom (zoom far in for atom shells)\nright-drag pan, left-click inspect\nspace pause, 1-5 speed, A auto-resolution, R reseed[/color]"
 	right.text = t
 
 func _draw_orrery() -> void:

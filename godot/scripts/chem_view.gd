@@ -28,6 +28,13 @@ var census := {}
 var selected := Vector2i(-1, -1)
 var census_timer := 0.0
 var dragging := false
+var bands: Array = []
+var hybrid := {}
+var discoveries: Array = []
+var overlay: Node2D
+var auto := true
+## Zoom (px per cell) above which on-screen bands pin to detail: you see real atoms where you look.
+const PIN_ZOOM := 14.0
 
 func _ready() -> void:
 	sim = ChemSim.new()
@@ -74,6 +81,17 @@ func _ready() -> void:
 	var fit: float = min(vs.x / (grid.x * CELL), vs.y / (grid.y * CELL)) * 0.95
 	cam.zoom = Vector2(fit, fit)
 	cam.make_current()
+
+	var layer := CanvasLayer.new()
+	layer.layer = 0
+	add_child(layer)
+	overlay = Node2D.new()
+	overlay.draw.connect(_draw_overlay)
+	layer.add_child(overlay)
+
+	var rates := ProjectSettings.globalize_path("res://../data/rates0.json")
+	if sim.load_rates(rates):
+		sim.set_auto(auto)
 	_refresh()
 
 func px_per_cell() -> float:
@@ -90,6 +108,9 @@ func _process(delta: float) -> void:
 	if census_timer <= 0.0:
 		census = sim.census()
 		census_timer = 0.5
+		_update_pins()
+		hybrid = sim.hybrid_stats()
+		discoveries = sim.discoveries()
 
 func _refresh() -> void:
 	env = sim.env()
@@ -103,6 +124,58 @@ func _refresh() -> void:
 	bm.set_shader_parameter("light", light)
 	bm.set_shader_parameter("uv_glow", clamp(env.flare * 0.4, 0.0, 0.5))
 	bonds.queue_redraw()
+	bands = sim.bands()
+	overlay.queue_redraw()
+
+func world_to_screen(p: Vector2) -> Vector2:
+	return (p * CELL - cam.position) * cam.zoom + get_viewport_rect().size * 0.5
+
+func _update_pins() -> void:
+	var vs := get_viewport_rect().size
+	var left := screen_to_cell(Vector2.ZERO).x
+	var right := screen_to_cell(vs).x
+	for i in bands.size():
+		var b: Dictionary = bands[i]
+		var visible: bool = b.x1 > left and b.x0 <= right
+		sim.pin_band(i, visible and px_per_cell() >= PIN_ZOOM)
+
+func _draw_overlay() -> void:
+	var grid: Vector2i = sim.grid_size()
+	var font := ThemeDB.fallback_font
+	for b in bands:
+		var a := world_to_screen(Vector2(b.x0, 0))
+		var z := world_to_screen(Vector2(b.x1, grid.y))
+		var r := Rect2(a, z - a)
+		if b.surrogate:
+			overlay.draw_rect(r, Color(0.55, 0.35, 0.95, 0.16))
+			overlay.draw_rect(r, Color(0.7, 0.55, 1.0, 0.5), false, 1.5)
+		elif b.pinned:
+			overlay.draw_rect(r, Color(1.0, 0.9, 0.4, 0.35), false, 1.0)
+		var tag := ("SURROGATE" if b.surrogate else ("DETAIL (zoom)" if b.pinned else "DETAIL")) + "\nconf %.2f\n%d bonds" % [b.confidence, b.bonds]
+		var y: float = max(a.y, 0.0) + 300.0
+		overlay.draw_multiline_string(font, Vector2(a.x + 6, y), tag, HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 8, 12, 3, Color(1, 1, 1, 0.75))
+		if b.surrogate and b.has("pairs"):
+			_draw_pair_bars(b.pairs, Rect2(a.x + 6, y + 48, r.size.x - 12, 260))
+
+## Top bond types as bars, two-tone by element colour. The band's whole state, drawn.
+func _draw_pair_bars(pairs: Array, area: Rect2) -> void:
+	var sorted := pairs.duplicate()
+	sorted.sort_custom(func(p, q): return p.n > q.n)
+	var top: int = sorted[0].n if sorted.size() > 0 else 0
+	if top <= 0:
+		return
+	var rows: int = min(10, sorted.size())
+	var h: float = area.size.y / rows
+	var font := ThemeDB.fallback_font
+	for k in rows:
+		var p: Dictionary = sorted[k]
+		if p.n <= 0:
+			break
+		var w: float = (area.size.x - 4) * float(p.n) / float(top)
+		var y := area.position.y + k * h
+		overlay.draw_rect(Rect2(area.position.x, y + 14, w * 0.5, h - 18), PALETTE[p.za])
+		overlay.draw_rect(Rect2(area.position.x + w * 0.5, y + 14, w * 0.5, h - 18), PALETTE[p.zb])
+		overlay.draw_string(font, Vector2(area.position.x, y + 12), "%s %d" % [p.name, p.n], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.7))
 
 func _draw_bonds() -> void:
 	var detail: float = smoothstep(18.0, 48.0, px_per_cell())
@@ -154,6 +227,9 @@ func _unhandled_input(e: InputEvent) -> void:
 				speed_idx = 0 if speed_idx != 0 else 2
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
 				speed_idx = e.keycode - KEY_1
+			KEY_A:
+				auto = not auto
+				sim.set_auto(auto)
 			KEY_R:
 				sim.reset(randi() % 100000, sim.grid_size().x, sim.grid_size().y)
 				mm.instance_count = sim.atom_count()

@@ -12,6 +12,7 @@
 
 use crate::cosmos::{Cosmos, CosmosParams, EnvSample};
 use crate::element::{Energy, KT, N_ELEMENTS, Table};
+use crate::hybrid::{Hybrid, HybridParams, Mode};
 use crate::rng::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -146,13 +147,14 @@ pub struct ChemWorld {
     pub table: Table,
     pub cosmos: Cosmos,
     pub atoms: Vec<Atom>,
-    grid: Vec<u32>,
-    rng: Rng,
+    pub(crate) grid: Vec<u32>,
+    pub(crate) rng: Rng,
     pub t_days: f64,
     pub sweeps: u64,
     pub env: EnvSample,
     pub ledger: Ledger,
     pub counts: Counts,
+    pub hybrid: Hybrid,
 }
 
 impl ChemWorld {
@@ -195,7 +197,9 @@ impl ChemWorld {
             env,
             ledger: Ledger::default(),
             counts: Counts::default(),
+            hybrid: Hybrid::default(),
         };
+        world.hybrid = Hybrid::new(HybridParams::default(), world.atoms.len());
         world.ledger.stored = world.recompute_stored();
         world.ledger.stored_at_start = world.ledger.stored;
         world
@@ -239,8 +243,19 @@ impl ChemWorld {
         self.cell(x, y).map(|c| self.grid[c]).filter(|&a| a != NONE)
     }
 
-    /// Ledger cross-check: stored energy rebuilt from atom state alone.
+    /// Ledger cross-check: stored energy rebuilt from state. Surrogate bands
+    /// count their bond tallies instead of the frozen atoms' bonds.
     pub fn recompute_stored(&self) -> Energy {
+        let mut s = self.recompute_atoms_stored();
+        for b in 0..self.hybrid.hp.bands {
+            if self.hybrid.mode[b] == Mode::Surrogate {
+                s -= self.band_state_from_atoms(b).stored(&self.table);
+            }
+        }
+        s + self.surrogate_stored()
+    }
+
+    fn recompute_atoms_stored(&self) -> Energy {
         let mut s = 0;
         for (i, a) in self.atoms.iter().enumerate() {
             s += a.excite;
@@ -258,7 +273,7 @@ impl ChemWorld {
 
     /// Book a change of stored energy; the bath absorbs the opposite.
     #[inline]
-    fn book(&mut self, d_stored: Energy) {
+    pub(crate) fn book(&mut self, d_stored: Energy) {
         self.ledger.stored += d_stored;
         self.ledger.bath -= d_stored;
     }
@@ -273,7 +288,7 @@ impl ChemWorld {
         d_energy <= 0.0 || self.rng.chance((-d_energy / self.kt()).exp())
     }
 
-    fn link(&mut self, i: u32, j: u32) {
+    pub(crate) fn link(&mut self, i: u32, j: u32) {
         for (a, b) in [(i, j), (j, i)] {
             let at = &mut self.atoms[a as usize];
             at.bonds[at.nb as usize] = b;
@@ -281,7 +296,7 @@ impl ChemWorld {
         }
     }
 
-    fn unlink(&mut self, i: u32, j: u32) {
+    pub(crate) fn unlink(&mut self, i: u32, j: u32) {
         for (a, b) in [(i, j), (j, i)] {
             let at = &mut self.atoms[a as usize];
             let n = at.nb as usize;
@@ -303,7 +318,7 @@ impl ChemWorld {
         self.book(w);
     }
 
-    fn free_valence(&self, i: u32) -> u8 {
+    pub(crate) fn free_valence(&self, i: u32) -> u8 {
         let a = &self.atoms[i as usize];
         self.table.get(a.z).valence - a.nb
     }
@@ -311,11 +326,14 @@ impl ChemWorld {
     /// Advance one Monte-Carlo sweep (one move + one reaction attempt per atom on average).
     pub fn sweep(&mut self) {
         self.env = self.cosmos.sample(self.t_days);
-        let n = self.atoms.len();
+        let n = self.hybrid.active.len();
         for _ in 0..n {
-            let i = self.rng.below(n) as u32;
+            let i = self.hybrid.active[self.rng.below(n)];
             self.try_move(i);
             self.try_react(i);
+        }
+        if self.sweeps % self.hybrid.hp.leap == 0 {
+            self.step_surrogates();
         }
         self.photons();
         self.relax_excitations();
@@ -342,7 +360,7 @@ impl ChemWorld {
         let (ox, oy) = (a.x as i32, a.y as i32);
         let (nx, ny) = (ox + dx, oy + dy);
         let Some(nc) = self.cell(nx, ny) else { return };
-        if self.grid[nc] != NONE {
+        if self.grid[nc] != NONE || self.cell_frozen(nx) {
             return;
         }
         let ny = ny.rem_euclid(self.p.height as i32);
@@ -404,6 +422,9 @@ impl ChemWorld {
         let a = self.atoms[i as usize];
         let (dx, dy) = DIRS[self.rng.below(8)];
         let Some(j) = self.atom_at(a.x as i32 + dx, a.y as i32 + dy) else { return };
+        if self.frozen(j) {
+            return;
+        }
         let b = self.atoms[j as usize];
         let kt = self.kt();
         if self.rng.chance(0.5) {
@@ -425,6 +446,7 @@ impl ChemWorld {
             if self.rng.chance(arrhenius(self.p.barrier_form)) && self.accept(uphill) {
                 self.unlink(i, j);
                 self.book(e);
+                self.tally_break(i, j);
                 if use_x {
                     let k = if a.excite >= b.excite { i } else { j };
                     let xe = self.atoms[k as usize].excite;
@@ -450,6 +472,7 @@ impl ChemWorld {
             if self.rng.chance(arrhenius(self.p.barrier_form)) && self.accept(hydro - e_ab as f64) {
                 self.link(i, j);
                 self.book(-e_ab);
+                self.tally_form(i, j);
                 self.counts.forms += 1;
             }
         } else if fa > 0 && b.nb > 0 {
@@ -461,6 +484,7 @@ impl ChemWorld {
                 self.unlink(j, c);
                 self.link(i, j);
                 self.book(e_bc - e_ab);
+                self.tally_exchange(i, j, c);
                 self.counts.exchanges += 1;
             }
         }
@@ -482,8 +506,12 @@ impl ChemWorld {
         }
     }
 
+    /// Photons land on detail-band atoms only; surrogate bands carry light effects in their learned rates.
     fn photons(&mut self) {
-        let n = self.atoms.len();
+        let n = self.hybrid.active.len();
+        if n == 0 {
+            return;
+        }
         let dt = 1.0 / self.p.sweeps_per_day;
         let env = self.env;
         let p = self.p.clone();
@@ -493,7 +521,7 @@ impl ChemWorld {
         const MAX_ABS: f64 = 1.6;
         let k = self.rng.poisson(p.vis_rate * env.visible * n as f64 * dt * MAX_ABS);
         for _ in 0..k {
-            let i = self.rng.below(n);
+            let i = self.hybrid.active[self.rng.below(n)] as usize;
             let a = self.atoms[i];
             let el = self.table.get(a.z);
             let absorb = el.absorb * (0.3 + a.nb as f64 / 3.0) * (-p.vis_depth * self.depth(a.x as i32).max(0.0)).exp();
@@ -514,7 +542,7 @@ impl ChemWorld {
         // UV: snap one bond. Water shields.
         let k = self.rng.poisson(p.uv_rate * env.uv * n as f64 * dt);
         for _ in 0..k {
-            let i = self.rng.below(n) as u32;
+            let i = self.hybrid.active[self.rng.below(n)];
             let a = self.atoms[i as usize];
             if !self.rng.chance((-p.uv_depth * self.depth(a.x as i32).max(0.0)).exp()) {
                 continue;
@@ -525,7 +553,8 @@ impl ChemWorld {
             if a.nb > 0 {
                 let j = a.bonds[self.rng.below(a.nb as usize)];
                 let eb = self.table.bond[a.z as usize][self.atoms[j as usize].z as usize];
-                if eb <= e {
+                if eb <= e && !self.frozen(j) {
+                    self.tally_break(i, j);
                     self.unlink(i, j);
                     self.book(eb);
                     self.counts.uv_breaks += 1;
@@ -536,18 +565,21 @@ impl ChemWorld {
         // Cosmic: shatter what it can. Water does not shield.
         let k = self.rng.poisson(p.cosmic_rate * env.cosmic * n as f64 * dt);
         for _ in 0..k {
-            let i = self.rng.below(n) as u32;
+            let i = self.hybrid.active[self.rng.below(n)];
             let mut budget = to_e(p.cosmic_energy);
             self.ledger.photon_in += budget;
             self.ledger.bath += budget;
             self.counts.cosmic_hits += 1;
-            while self.atoms[i as usize].nb > 0 {
-                let j = self.atoms[i as usize].bonds[0];
+            let mut k = 0;
+            while k < self.atoms[i as usize].nb as usize {
+                let j = self.atoms[i as usize].bonds[k];
                 let eb = self.table.bond[self.atoms[i as usize].z as usize][self.atoms[j as usize].z as usize];
-                if eb > budget {
-                    break;
+                if eb > budget || self.frozen(j) {
+                    k += 1;
+                    continue;
                 }
                 budget -= eb;
+                self.tally_break(i, j);
                 self.unlink(i, j);
                 self.book(eb);
             }
@@ -557,7 +589,7 @@ impl ChemWorld {
         // Radio: too soft for covalent bonds; can pop a weak pair.
         let k = self.rng.poisson(p.radio_rate * env.radio * n as f64 * dt);
         for _ in 0..k {
-            let i = self.rng.below(n) as u32;
+            let i = self.hybrid.active[self.rng.below(n)];
             let e = to_e(p.radio_energy);
             self.ledger.photon_in += e;
             self.ledger.bath += e;
@@ -588,6 +620,11 @@ impl ChemWorld {
                 }
             }
         }
+    }
+
+    /// Fresh random stream, same state. Shadow mode uses it to measure the stochastic noise floor.
+    pub fn reseed(&mut self, seed: u64) {
+        self.rng = Rng::new(seed);
     }
 
     pub fn take_counts(&mut self) -> Counts {
@@ -647,7 +684,14 @@ impl ChemWorld {
             }
             t
         };
-        Census { molecules: members.len() as u32, bonds: bonds / 2, largest: largest as u32, size_hist, top_species: top.into_iter().take(12).collect(), excited, element_totals }
+        // surrogate bands: frozen internal bonds are stale, their counts are the truth
+        let mut bonds = bonds as i64 / 2;
+        for b in 0..self.hybrid.hp.bands {
+            if self.hybrid.mode[b] == Mode::Surrogate {
+                bonds += self.hybrid.state[b].total_bonds() - self.band_state_from_atoms(b).total_bonds();
+            }
+        }
+        Census { molecules: members.len() as u32, bonds: bonds as u32, largest: largest as u32, size_hist, top_species: top.into_iter().take(12).collect(), excited, element_totals }
     }
 }
 
@@ -723,6 +767,39 @@ mod tests {
                 assert!(!a.bonded_to(a.weak), "weak and covalent never share a pair");
             }
             assert_eq!(w.atom_at(a.x as i32, a.y as i32), Some(i as u32));
+        }
+    }
+
+    #[test]
+    fn hybrid_round_trip_keeps_ledger_and_matter() {
+        let mut w = small();
+        let mut trainer = small();
+        let table = crate::hybrid::train(&mut trainer, 2.0, |_| {});
+        w.hybrid.rates = Some(table);
+        let before = w.census().element_totals;
+        for _ in 0..100 {
+            w.sweep();
+        }
+        for b in [1, 3, 5] {
+            w.restrict(b);
+        }
+        assert_eq!(w.ledger.stored, w.recompute_stored());
+        for _ in 0..300 {
+            w.sweep();
+            assert_eq!(w.ledger.stored, w.recompute_stored(), "ledger during surrogate");
+        }
+        for b in [1, 3, 5] {
+            w.lift(b);
+        }
+        assert_eq!(w.ledger.stored, w.recompute_stored(), "ledger after lift");
+        assert_eq!(w.ledger.drift(), 0);
+        assert_eq!(w.census().element_totals, before);
+        for (i, a) in w.atoms.iter().enumerate() {
+            assert!(a.nb <= w.table.get(a.z).valence);
+            for &j in &a.bonds[..a.nb as usize] {
+                assert!(w.atoms[j as usize].bonded_to(i as u32));
+                assert!(w.adjacent(&w.atoms[j as usize], a.x as i32, a.y as i32));
+            }
         }
     }
 

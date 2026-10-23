@@ -3,6 +3,8 @@ use godot::prelude::*;
 use primordium_core::chem::{ChemParams, ChemWorld, NONE};
 use primordium_core::cosmos::CosmosParams;
 use primordium_core::element::{KT, N_ELEMENTS};
+use primordium_core::hybrid::Mode;
+use primordium_core::surrogate::RateTable;
 
 struct PrimordiumExt;
 
@@ -43,6 +45,88 @@ impl ChemSim {
         }
     }
 
+    /// Load a trained scale-0 rate table (from `primordium train`). Enables surrogate bands.
+    #[func]
+    fn load_rates(&mut self, path: GString) -> bool {
+        let Ok(text) = std::fs::read_to_string(path.to_string()) else { return false };
+        let Ok(t) = serde_json::from_str::<RateTable>(&text) else { return false };
+        self.world.hybrid.rates = Some(t);
+        true
+    }
+
+    #[func]
+    fn set_auto(&mut self, on: bool) {
+        self.world.hybrid.hp.auto = on;
+    }
+
+    /// Pin a band to detail (zoomed in) or release it to the resolution manager.
+    #[func]
+    fn pin_band(&mut self, band: i64, pinned: bool) {
+        let b = band as usize;
+        if b < self.world.hybrid.pinned.len() {
+            self.world.hybrid.pinned[b] = pinned;
+            if pinned {
+                self.world.lift(b);
+            }
+        }
+    }
+
+    #[func]
+    fn bands(&self) -> VarArray {
+        let mut arr = VarArray::new();
+        for b in 0..self.world.hybrid.hp.bands {
+            let (x0, x1) = self.world.band_columns(b);
+            let mut d = VarDictionary::new();
+            let surrogate = self.world.hybrid.mode[b] == Mode::Surrogate;
+            d.set("x0", x0 as i64);
+            d.set("x1", x1 as i64);
+            d.set("surrogate", surrogate);
+            d.set("pinned", self.world.hybrid.pinned[b]);
+            d.set("confidence", self.world.hybrid.confidence[b]);
+            let bonds = if surrogate { self.world.hybrid.state[b].total_bonds() } else { self.world.band_state_from_atoms(b).total_bonds() };
+            d.set("bonds", bonds);
+            if surrogate {
+                // pair histogram: what the surrogate knows about this band
+                let s = &self.world.hybrid.state[b];
+                let mut pairs = VarArray::new();
+                for (p, &n) in s.bonds.iter().enumerate() {
+                    let (pa, pb) = primordium_core::kinetics::pair_members(p);
+                    let name = |k: usize| primordium_core::element::NAMES[primordium_core::kinetics::BONDABLE[k] as usize - 1];
+                    let mut e = VarDictionary::new();
+                    e.set("name", format!("{}-{}", name(pa), name(pb)));
+                    e.set("n", n);
+                    e.set("za", primordium_core::kinetics::BONDABLE[pa] as i64);
+                    e.set("zb", primordium_core::kinetics::BONDABLE[pb] as i64);
+                    pairs.push(&e.to_variant());
+                }
+                d.set("pairs", &pairs);
+            }
+            arr.push(&d.to_variant());
+        }
+        arr
+    }
+
+    #[func]
+    fn discoveries(&self) -> VarArray {
+        let mut arr = VarArray::new();
+        for e in self.world.hybrid.discoveries.entries.iter().rev().take(6) {
+            arr.push(&format!("day {:.1} band {} conf {:.2} T {:.0}K: {}", e.t_days, e.region, e.confidence, e.features[0] * 300.0, e.note).to_variant());
+        }
+        arr
+    }
+
+    #[func]
+    fn hybrid_stats(&self) -> VarDictionary {
+        let h = &self.world.hybrid;
+        let mut d = VarDictionary::new();
+        d.set("lifts", h.lifts as i64);
+        d.set("restricts", h.restricts as i64);
+        d.set("discoveries", h.discoveries.entries.len() as i64);
+        d.set("active_atoms", h.active.len() as i64);
+        d.set("has_rates", h.rates.is_some());
+        d
+    }
+
     #[func]
     fn grid_size(&self) -> Vector2i {
         Vector2i::new(self.world.p.width as i32, self.world.p.height as i32)
@@ -64,7 +148,9 @@ impl ChemSim {
             v.extend_from_slice(&[1.0, 0.0, 0.0, x, 0.0, 1.0, 0.0, y]);
             v.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]);
             let phase = ((i as u32).wrapping_mul(2654435761) >> 8) as f32 / (1u32 << 24) as f32;
-            v.extend_from_slice(&[a.z as f32, a.nb as f32, a.excite as f32 / KT as f32, phase]);
+            // frozen (surrogate band) atoms flagged by +10 on the bond count
+            let nb = a.nb as f32 + if self.world.frozen(i as u32) { 10.0 } else { 0.0 };
+            v.extend_from_slice(&[a.z as f32, nb, a.excite as f32 / KT as f32, phase]);
         }
         PackedFloat32Array::from(v.as_slice())
     }
@@ -77,7 +163,8 @@ impl ChemSim {
         for (i, a) in atoms.iter().enumerate() {
             for &j in &a.bonds[..a.nb as usize] {
                 let b = &atoms[j as usize];
-                if (j as usize) > i && !seam(a.y, b.y) {
+                // frozen bonds are stale: the surrogate's counts are the truth there
+                if (j as usize) > i && !seam(a.y, b.y) && !self.world.frozen(i as u32) && !self.world.frozen(j) {
                     v.push(Vector2::new(a.x as f32 + 0.5, a.y as f32 + 0.5));
                     v.push(Vector2::new(b.x as f32 + 0.5, b.y as f32 + 0.5));
                 }

@@ -18,7 +18,11 @@ func _ready() -> void:
 		if kv.size() != 2:
 			continue
 		match kv[0]:
-			"shot": shot = kv[1]
+			"shot":
+				shot = kv[1]
+				# captures must not steal focus or eat the user's keystrokes
+				DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_NO_FOCUS, true)
+				view.set_process_unhandled_input(false)
 			"frames": frames = int(kv[1])
 			"warm": view.sim.step(int(kv[1]))
 			"zoom": view.cam.zoom = Vector2(float(kv[1]), float(kv[1]))

@@ -27,7 +27,9 @@ void fragment() {
 	vec2 p = (UV - 0.5) * 2.0;
 	float r = length(p);
 	int z = int(custom.x + 0.5);
-	float nb = custom.y;
+	// +10 on the bond count marks a frozen atom in a surrogate band
+	bool frozen = custom.y > 9.5;
+	float nb = frozen ? custom.y - 10.0 : custom.y;
 	float exc = custom.z;
 	float phase = custom.w * 6.2831;
 	vec3 col = palette[z].rgb;
@@ -81,5 +83,9 @@ void fragment() {
 	float halo = exc > 0.0 ? (1.0 - smoothstep(0.55, 1.0, r)) * 0.55 * (0.7 + 0.3 * sin(t * 9.0 + phase)) : 0.0;
 	o.rgb = mix(o.rgb, vec3(1.0, 0.92, 0.35), halo * (1.0 - o.a * 0.5));
 	o.a = max(o.a, halo);
+	if (frozen) {
+		o.rgb = mix(o.rgb, vec3(dot(o.rgb, vec3(0.33))), 0.8) * 0.5;
+		o.a *= 0.25;
+	}
 	COLOR = o;
 }

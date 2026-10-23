@@ -14,6 +14,8 @@ fn main() {
     match mode {
         "chem" => chem(&args),
         "fold" => fold(&args),
+        "train" => train(&args),
+        "shadow" => shadow(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -64,4 +66,84 @@ fn fold(args: &[String]) {
             primordium_core::element::NAMES[BONDABLE[a] as usize - 1], primordium_core::element::NAMES[BONDABLE[b] as usize - 1]
         );
     }
+}
+
+/// Learn scale-0 rates over `days` of a detailed run; writes data/rates0.json.
+fn train(args: &[String]) {
+    use primordium_core::hybrid;
+    let days: f64 = arg(args, "days", 96.0);
+    let seed: u64 = arg(args, "seed", 100);
+    let mut w = ChemWorld::new(ChemParams::default(), CosmosParams { seed, ..Default::default() }, seed);
+    let start = Instant::now();
+    let table = hybrid::train(&mut w, days, |f| eprint!("\rtraining {:.0}%", f * 100.0));
+    eprintln!();
+    println!("trained {days} days in {:.1}s, bin coverage {:.1}%", start.elapsed().as_secs_f64(), table.coverage() * 100.0);
+    std::fs::create_dir_all("data").unwrap();
+    std::fs::write("data/rates0.json", serde_json::to_string(&table).unwrap()).unwrap();
+}
+
+/// Shadow mode: detailed vs all-surrogate copies of one world, compared on band bond counts.
+fn shadow(args: &[String]) {
+    use primordium_core::hybrid::Mode;
+    use primordium_core::surrogate::{RateTable, agreement};
+    let days: f64 = arg(args, "days", 4.0);
+    let start_day: f64 = arg(args, "start", 1.0);
+    let seed: u64 = arg(args, "seed", 1);
+    let table: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let mut a = ChemWorld::new(ChemParams::default(), CosmosParams { seed, ..Default::default() }, seed);
+    while a.t_days < start_day {
+        a.sweep();
+    }
+    let mut b = a.clone();
+    // twin: same state, different dice. Detail-vs-detail agreement is the ceiling any surrogate can reach.
+    let mut twin = a.clone();
+    twin.reseed(seed ^ 0xD1CE);
+    b.hybrid.rates = Some(table);
+    for k in 0..b.hybrid.hp.bands {
+        b.restrict(k);
+    }
+    let bands = a.hybrid.hp.bands;
+    let snapshot = |w: &ChemWorld| -> Vec<f64> {
+        (0..bands)
+            .flat_map(|k| {
+                let s = if w.hybrid.mode[k] == Mode::Surrogate { w.hybrid.state[k].clone() } else { w.band_state_from_atoms(k) };
+                s.bonds.into_iter().map(|v| v as f64).collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let initial = snapshot(&a);
+    let per = (0.5 * a.p.sweeps_per_day) as u64;
+    let total = (days * a.p.sweeps_per_day) as u64;
+    let (mut ta, mut tb) = (0.0, 0.0);
+    let (mut sum_acc, mut sum_null, mut sum_twin, mut n) = (0.0, 0.0, 0.0, 0.0);
+    for s in 1..=total {
+        let t0 = Instant::now();
+        a.sweep();
+        ta += t0.elapsed().as_secs_f64();
+        let t0 = Instant::now();
+        b.sweep();
+        tb += t0.elapsed().as_secs_f64();
+        twin.sweep();
+        if s % per == 0 {
+            let (sa, sb) = (snapshot(&a), snapshot(&b));
+            let acc = agreement(&sa, &sb);
+            let null = agreement(&sa, &initial);
+            let floor = agreement(&sa, &snapshot(&twin));
+            sum_twin += floor;
+            sum_acc += acc;
+            sum_null += null;
+            n += 1.0;
+            let conf: Vec<String> = b.hybrid.confidence.iter().map(|c| format!("{c:.2}")).collect();
+            let detail = b.hybrid.mode.iter().filter(|m| **m == Mode::Detail).count();
+            println!(
+                "t={:6.2} T={:5.1}K tide={:.2} | bonds detail={} surrogate={} | agreement {:.1}% (twin {:.1}%, frozen-null {:.1}%) | conf [{}] detail-bands={} discoveries={}",
+                a.t_days, a.env.temperature_k, a.env.tide_level, sa.iter().sum::<f64>(), sb.iter().sum::<f64>(), acc * 100.0, floor * 100.0, null * 100.0,
+                conf.join(" "), detail, b.hybrid.discoveries.entries.len()
+            );
+        }
+    }
+    println!(
+        "mean agreement {:.1}% | detail twin {:.1}% | frozen-null {:.1}% | relative to twin ceiling {:.1}% | speed detail {:.0} sweeps/s, hybrid {:.0} sweeps/s | ledger drift a={} b={} | lift shortfall {}",
+        100.0 * sum_acc / n, 100.0 * sum_twin / n, 100.0 * sum_null / n, 100.0 * sum_acc / sum_twin, total as f64 / ta, total as f64 / tb, a.ledger.drift(), b.ledger.drift(), b.hybrid.lift_shortfall
+    );
 }
