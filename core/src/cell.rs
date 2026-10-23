@@ -341,6 +341,9 @@ pub struct World {
     refreshing: bool,
     /// Pooled copy model per channel, refreshed each step: the prior for thin bins.
     sel_prior: Vec<f64>,
+    /// Today's noon light (season and latitude, plus that noon's cloud): growth integrates light
+    /// over a cycle, while instantaneous light swings with day and night.
+    pub daylight: f64,
     /// When set, detailed steps log each cell's lineage features and fate (scale-4 training).
     pub lineage_log: Option<Vec<crate::lineage::LineageSample>>,
 }
@@ -463,6 +466,7 @@ impl World {
             refreshing: false,
             sel_prior: vec![0.0; COPY_CHANNELS],
             lineage_log: None,
+            daylight: 0.0,
         };
         w.seed_founders(founders);
         w
@@ -603,6 +607,7 @@ impl World {
 
     pub fn step(&mut self, dt: f64) {
         self.env = self.cosmos.sample(self.t_days);
+        self.daylight = self.cosmos.sample(self.t_days.floor() + 0.5).visible;
         self.sel_prior = LearnedCopy::priors(&self.model, 0);
         let mut rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
         self.tides(dt, &mut rng);

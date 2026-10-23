@@ -29,6 +29,8 @@ pub struct CoastParams {
     pub restrict_above: f64,
     /// Lineage-table memory, days: evolution moves the rates, old evidence fades.
     pub memory_days: f64,
+    /// Minimum days a site stays in a mode after switching (unless it leaves the trained range).
+    pub dwell_days: f64,
 }
 
 impl Default for CoastParams {
@@ -45,6 +47,7 @@ impl Default for CoastParams {
             lift_below: 0.5,
             restrict_above: 0.85,
             memory_days: 30.0,
+            dwell_days: 5.0,
         }
     }
 }
@@ -57,6 +60,8 @@ pub struct Site {
     /// Detail: cells run their chemistry. Surrogate: cells are lineages (`lineage.rs`).
     pub mode: Mode,
     pub conf: f64,
+    /// Day of the last mode switch.
+    pub since: f64,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -101,7 +106,7 @@ impl Coast {
                     seed.wrapping_mul(1000).wrapping_add(k as u64),
                     cp.founders_per_site,
                 );
-                Site { latitude, tide_scale, world, mode: Mode::Detail, conf: 0.0 }
+                Site { latitude, tide_scale, world, mode: Mode::Detail, conf: 0.0, since: f64::NEG_INFINITY }
             })
             .collect();
         Self {
@@ -152,6 +157,7 @@ impl Coast {
     pub fn set_mode(&mut self, mode: Mode) {
         for s in self.sites.iter_mut() {
             s.mode = mode;
+            s.since = self.t_days;
         }
     }
 
@@ -162,11 +168,16 @@ impl Coast {
         if (self.steps - 1) % per_day != 0 {
             return;
         }
+        let (t, dwell) = (self.t_days, self.cp.dwell_days);
         for (k, s) in self.sites.iter_mut().enumerate() {
             s.conf = s.world.lineage_confidence(&self.model);
+            // a switch holds for `dwell` days: seasonal dips into thin bins otherwise flip sites
+            // back and forth daily. Leaving the trained range altogether still lifts at once.
+            let settled = t - s.since >= dwell;
             match s.mode {
-                Mode::Surrogate if s.conf < self.cp.lift_below => {
+                Mode::Surrogate if s.conf < self.cp.lift_below && (settled || s.conf < 0.05) => {
                     s.mode = Mode::Detail;
+                    s.since = t;
                     self.stats.lifts += 1;
                     self.discoveries.log(
                         4_000_000 + k,
@@ -184,8 +195,9 @@ impl Coast {
                         },
                     );
                 }
-                Mode::Detail if self.cp.auto && s.conf >= self.cp.restrict_above => {
+                Mode::Detail if self.cp.auto && settled && s.conf >= self.cp.restrict_above => {
                     s.mode = Mode::Surrogate;
+                    s.since = t;
                     self.stats.restricts += 1;
                 }
                 _ => {}

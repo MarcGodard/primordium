@@ -885,7 +885,7 @@ fn coast_shadow(args: &[String]) {
     while a.t_days < warm {
         a.step(0.02);
     }
-    println!("warm-up {warm} days in {:.1}s, lineage table coverage {:.1}%", t0.elapsed().as_secs_f64(), a.model.fate.coverage() * 100.0);
+    println!("warm-up {warm} days in {:.1}s, lineage table coverage {:.1}%", t0.elapsed().as_secs_f64(), a.model.base.coverage() * 100.0);
     let lift: f64 = arg(args, "lift", 0.5);
     let learn: bool = arg(args, "learn", true);
     a.learn = false;
@@ -927,10 +927,11 @@ fn coast_shadow(args: &[String]) {
             bl,
             comp
         );
-        for (k, name) in [(3, "poly"), (4, "synth"), (5, "amph"), (6, "age")] {
-            let f = |v: Vec<f64>| v.iter().map(|x| format!("{x:.3}")).collect::<Vec<_>>().join(" ");
-            println!("   {name:5} div/day [{}]  burst/day [{}]", f(b.model.fate.marginal(k, 0)), f(b.model.fate.marginal(k, 1)));
+        let f = |v: Vec<f64>| v.iter().map(|x| format!("{x:.3}")).collect::<Vec<_>>().join(" ");
+        for (k, name) in [(0, "poly"), (1, "synth"), (2, "amph")] {
+            println!("   {name:5} relative division rate [{}]", f(b.model.fitness.marginal(k, 0)));
         }
+        println!("   age   divisions/day [{}]", f(b.model.base.marginal(3, 0)));
     }
     let m0 = b.matter();
     let summary = |c: &mut Coast| -> Vec<f64> {
@@ -945,7 +946,23 @@ fn coast_shadow(args: &[String]) {
     let (mut ta, mut tb) = (0.0, 0.0);
     let end = a.t_days + days;
     let mut next = a.t_days + 5.0;
+    let mut predicted = vec![0.0; sites];
+    let diag = std::env::var("DIAG").is_ok();
     while a.t_days < end {
+        if diag {
+            // what the lineage model would predict for detail's own cells
+            let prior = b.model.priors();
+            for (k, s) in a.sites.iter_mut().enumerate() {
+                let w = &mut s.world;
+                let cells = w.cells.clone();
+                for c in &cells {
+                    let info = w.info(&c.genome);
+                    let site = w.patch_site(c.patch, 0.0);
+                    let x = w.lineage_features(c, &info, &site);
+                    predicted[k] += b.model.rates(&x, &prior).0 * 0.02;
+                }
+            }
+        }
         let t = Instant::now();
         a.step(0.02);
         ta += t.elapsed().as_secs_f64();
@@ -971,6 +988,12 @@ fn coast_shadow(args: &[String]) {
                 println!("   {}", row.join("  "));
                 let ready = b.sites.iter().map(|s| s.world.cells.iter().filter(|c| c.ready).count()).sum::<usize>();
                 println!("   lineage cells waiting to pay for a daughter: {ready}/{}", b.cells());
+                println!(
+                    "   divisions per site: detail {:?}\n                       lineage {:?}\n      model on detail cells {:?}",
+                    col(&sa, 1),
+                    col(&sb, 1),
+                    predicted.iter().map(|p| p.round()).collect::<Vec<_>>()
+                );
                 let mean = |v: &[f64], j: usize| col(v, j).iter().sum::<f64>() / sites as f64;
                 println!(
                     "   coast means detail/lineage/twin: poly {:.1}/{:.1}/{:.1} amph {:.1}/{:.1}/{:.1} len {:.0}/{:.0}/{:.0}",

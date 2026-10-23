@@ -17,14 +17,16 @@ pub const L_CHANNELS: usize = 2;
 
 const AGE_MAX: f64 = 20.0;
 const RAW_MAX: f64 = 0.8;
+/// kT span of the coast: polar winters reach ~0.80 (cells at 0.85 left the table every year).
+const KT_LO: f64 = 0.78;
+const KT_HI: f64 = 1.15;
 const TRAIT_MAX: f64 = 0.75;
-/// Fate-table axes that are heritable traits: rates interpolate along them (see `rate_smooth`).
-const TRAIT_AXES: [usize; 3] = [3, 4, 5];
+const DAYLIGHT_MAX: f64 = 1.3;
 
 /// One detailed cell-step: the cell's features at its start and what happened to it.
 #[derive(Clone, Debug, Default)]
 pub struct LineageSample {
-    pub x: [f64; 7],
+    pub x: [f64; 8],
     pub divided: bool,
     pub burst: bool,
     /// Heritable errors and bits copied at this step's division, by source letter.
@@ -32,46 +34,66 @@ pub struct LineageSample {
     pub bits: [u64; N_LETTERS],
 }
 
-/// What a lineage-mode cell needs: its fate over the full feature set, and copy fidelity over
-/// (kT, polymerase) only. Fidelity is learned at divisions, which are rare per bin; on the full
-/// grid most bins fell back to a pooled rate skewed by the error-prone early days (1.5x too many
-/// errors). Fidelity is per source letter: radiation leaves non-canonical letters that pair
-/// weakly and are miscopied ~10x as often, which partly undoes the damage.
+/// What a lineage-mode cell needs, factored so every table stays densely trained: a base
+/// fate rate from conditions (kT, flooding, food, cycle age), times a relative fitness from
+/// heritable traits (polymerase, metabolism, membrane), plus copy fidelity over (kT,
+/// polymerase). One 7-axis table had ~18k bins; cells kept landing in empty ones and sites
+/// flipped back to detail daily. The price: trait effects cannot depend on climate.
+/// Fidelity is learned at divisions and per source letter: radiation leaves non-canonical
+/// letters that pair weakly and are miscopied ~10x as often, which partly undoes the damage.
 #[derive(Clone, Debug)]
 pub struct LineageModel {
-    pub fate: RateTable,
+    pub base: RateTable,
+    /// Events over base-expected events, per trait bin: relative fitness.
+    pub fitness: RateTable,
     pub fidelity: RateTable,
 }
 
 impl Default for LineageModel {
     fn default() -> Self {
-        let mut fate = RateTable::new(
+        let mut base = RateTable::new(
             vec![
-                Axis::new("kT", 0.85, 1.15, 4),
+                Axis::new("kT", KT_LO, KT_HI, 8),
                 Axis::new("wet", 0.0, 1.0, 2),
-                Axis::new("raw_conc", 0.0, RAW_MAX, 3),
-                // traits sit mostly in 0.1..0.6: resolve them there, or selection blurs away
-                Axis::new("poly", 0.0, TRAIT_MAX, 6),
-                Axis::new("synth", 0.0, TRAIT_MAX, 4),
-                Axis::new("amph", 0.0, TRAIT_MAX, 5),
-                Axis::new("age", 0.0, AGE_MAX, 5),
+                Axis::new("raw_conc", 0.0, RAW_MAX, 4),
+                Axis::new("age", 0.0, AGE_MAX, 8),
+                Axis::new("daylight", 0.0, DAYLIGHT_MAX, 4),
             ],
             L_CHANNELS,
         );
         // divisions are a few per cell-week: a bin needs many cell-steps to hold a rate
-        fate.samples_for_confidence = 300.0;
-        let fidelity = RateTable::new(vec![Axis::new("kT", 0.85, 1.15, 8), Axis::new("poly", 0.0, TRAIT_MAX, 10)], N_LETTERS);
-        Self { fate, fidelity }
+        base.samples_for_confidence = 300.0;
+        // traits sit mostly in 0.1..0.6: resolve them there, or selection blurs away
+        let mut fitness =
+            RateTable::new(vec![Axis::new("poly", 0.0, TRAIT_MAX, 8), Axis::new("synth", 0.0, TRAIT_MAX, 5), Axis::new("amph", 0.0, TRAIT_MAX, 6)], L_CHANNELS);
+        fitness.samples_for_confidence = 300.0;
+        let fidelity = RateTable::new(vec![Axis::new("kT", KT_LO, KT_HI, 10), Axis::new("poly", 0.0, TRAIT_MAX, 10)], N_LETTERS);
+        Self { base, fitness, fidelity }
     }
+}
+
+fn base_x(x: &[f64]) -> [f64; 5] {
+    [x[0], x[1], x[2], x[6], x[7]]
+}
+
+fn trait_x(x: &[f64]) -> [f64; 3] {
+    [x[3], x[4], x[5]]
 }
 
 impl LineageModel {
     /// Record a batch of detailed cell-steps of length `dt` days.
     pub fn record(&mut self, samples: &[LineageSample], dt: f64) {
+        let prior = self.priors();
         for s in samples {
-            self.fate.record_sample(&s.x);
-            self.fate.record(&s.x, L_DIV, s.divided as u8 as f64, dt);
-            self.fate.record(&s.x, L_BURST, s.burst as u8 as f64, dt);
+            let (b, t) = (base_x(&s.x), trait_x(&s.x));
+            self.base.record_sample(&b);
+            self.fitness.record_sample(&t);
+            for (ch, ev) in [(L_DIV, s.divided), (L_BURST, s.burst)] {
+                self.base.record(&b, ch, ev as u8 as f64, dt);
+                // relative fitness: events against what conditions alone predict
+                let expected = self.base.rate(&b, ch, prior[ch], 1.0) * dt;
+                self.fitness.record(&t, ch, ev as u8 as f64, expected);
+            }
             if s.bits.iter().any(|&b| b > 0) {
                 let f = fidelity_x(&s.x);
                 self.fidelity.record_sample(&f);
@@ -88,30 +110,39 @@ impl LineageModel {
     /// fades with time constant `tau` days, so the table tracks the present.
     pub fn forget(&mut self, dt: f64, tau: f64) {
         let k = (-dt / tau).exp();
-        self.fate.decay(k);
+        self.base.decay(k);
+        self.fitness.decay(k);
         self.fidelity.decay(k);
     }
 
-    /// Pooled rates: fate channels, then fidelity.
+    /// Pooled rates: base fate channels, fidelity per letter, then pooled relative fitness.
     pub fn priors(&self) -> Vec<f64> {
-        let mut p: Vec<f64> = (0..L_CHANNELS).map(|ch| self.fate.global_rate(ch)).collect();
+        let mut p: Vec<f64> = (0..L_CHANNELS).map(|ch| self.base.global_rate(ch)).collect();
         p.extend((0..N_LETTERS).map(|l| self.fidelity.global_rate(l)));
+        p.extend((0..L_CHANNELS).map(|ch| self.fitness.global_rate(ch)));
         p
     }
 
     pub fn confidence(&self, x: &[f64]) -> f64 {
-        self.fate.confidence(x)
+        self.base.confidence(&base_x(x)).min(self.fitness.confidence(&trait_x(x)))
     }
 
     /// (divisions/day, bursts/day, bit error per copied letter by source letter) at `x`.
-    fn rates(&self, x: &[f64], prior: &[f64]) -> (f64, f64, [f64; N_LETTERS]) {
+    pub fn rates(&self, x: &[f64], prior: &[f64]) -> (f64, f64, [f64; N_LETTERS]) {
         let f = fidelity_x(x);
         let chs: [(usize, f64); N_LETTERS] = std::array::from_fn(|l| (l, prior[L_CHANNELS + l]));
         let mut p_bit = [0.0; N_LETTERS];
         self.fidelity.rates_smooth(&f, &chs, 1.0, &[1], &mut p_bit);
-        let mut fate = [0.0; 2];
-        self.fate.rates_smooth(x, &[(L_DIV, prior[L_DIV]), (L_BURST, prior[L_BURST])], 1.0, &TRAIT_AXES, &mut fate);
-        (fate[0].max(0.0), fate[1].max(0.0), p_bit.map(|p| p.clamp(0.0, 0.5)))
+        let mut base = [0.0; 2];
+        self.base.rates_smooth(&base_x(x), &[(L_DIV, prior[L_DIV]), (L_BURST, prior[L_BURST])], 1.0, &[], &mut base);
+        // relative fitness shrinks toward 1 (no effect) where a trait bin is thin, and is taken
+        // relative to its pooled value: early base rates run low, which would otherwise make
+        // every trait look fitter than average
+        let mut fit = [0.0; 2];
+        let norm = [prior[L_CHANNELS + N_LETTERS], prior[L_CHANNELS + N_LETTERS + 1]];
+        self.fitness.rates_smooth(&trait_x(x), &[(L_DIV, norm[0]), (L_BURST, norm[1])], 1.0, &[0, 1, 2], &mut fit);
+        let rel = |ch: usize| if norm[ch] > 0.0 { fit[ch] / norm[ch] } else { 1.0 };
+        ((base[0] * rel(0)).max(0.0), (base[1] * rel(1)).max(0.0), p_bit.map(|p| p.clamp(0.0, 0.5)))
     }
 }
 
@@ -122,7 +153,7 @@ fn fidelity_x(x: &[f64]) -> [f64; 2] {
 impl World {
     /// Food and age saturate at the table edge (more of either changes little); temperature
     /// does not: an unseen climate is a discovery.
-    pub fn lineage_features(&self, c: &Cell, info: &crate::cell::GenomeInfo, site: &Site) -> [f64; 7] {
+    pub fn lineage_features(&self, c: &Cell, info: &crate::cell::GenomeInfo, site: &Site) -> [f64; 8] {
         let raw = self.patches[c.patch].raw_ka as f64 / self.cp.patch_cells;
         [
             site.env.kt,
@@ -132,11 +163,14 @@ impl World {
             info.synth_cut.min(TRAIT_MAX),
             info.amph.min(TRAIT_MAX),
             (self.t_days - c.born).clamp(0.0, AGE_MAX),
+            self.daylight.clamp(0.0, DAYLIGHT_MAX),
         ]
     }
 
     /// Mean confidence of the lineage table over this world's cells.
     pub fn lineage_confidence(&mut self, t: &LineageModel) -> f64 {
+        // runs before this step's sample: refresh so the check sees today's light
+        self.daylight = self.cosmos.sample(self.t_days.floor() + 0.5).visible;
         let cells = std::mem::take(&mut self.cells);
         let mut sum = 0.0;
         for c in &cells {
@@ -152,6 +186,7 @@ impl World {
     /// One step with every cell as a lineage. `prior` holds the table's pooled rates.
     pub fn step_lineage(&mut self, dt: f64, t: &LineageModel, prior: &[f64]) {
         self.env = self.cosmos.sample(self.t_days);
+        self.daylight = self.cosmos.sample(self.t_days.floor() + 0.5).visible;
         let mut rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
         self.tides(dt, &mut rng);
         let mut cells = std::mem::take(&mut self.cells);
