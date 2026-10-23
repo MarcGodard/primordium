@@ -18,6 +18,7 @@ fn main() {
         "shadow" => shadow(&args),
         "pool" => pool(&args),
         "fold-shadow" => fold_shadow(&args),
+        "fold-kernel" => fold_kernel(&args),
         "pond" => pond(&args),
         "pond-probe" => pond_probe(&args),
         "selection" => selection(&args),
@@ -285,6 +286,68 @@ fn fold_shadow(args: &[String]) {
             row += &format!("  {d}-mut {acc:5.1}%");
         }
         println!("{row}");
+    }
+}
+
+/// Scale-1 surrogate shadow: fold relatives of a sequence into a FunctionModel, hide the
+/// sequence itself, compare the model's prediction to its fold; ceiling = a reseeded fold.
+fn fold_kernel(args: &[String]) {
+    use primordium_core::element::Table;
+    use primordium_core::polymer::{LetterPhysics, N_LETTERS, express};
+    use primordium_core::pool::{FunctionModel, PoolParams, kt_bin};
+    use primordium_core::rng::Rng;
+    use primordium_core::surrogate::agreement;
+    let n: usize = arg(args, "n", 60);
+    let rel: usize = arg(args, "rel", 8);
+    let kt: f64 = arg(args, "kt", 1.0);
+    let ph = LetterPhysics::new(&Table::new());
+    let mut rng = Rng::new(9);
+    let kt = (kt / 0.05).round() * 0.05; // the model folds at its kT bin
+    for len in [8usize, 16, 24, 32] {
+        let (mut ceil, mut blend, mut near, mut used, mut folded) = (0.0, 0.0, 0.0, 0, 0);
+        for _ in 0..n {
+            let s: Vec<u8> = (0..len).map(|_| rng.below(N_LETTERS) as u8).collect();
+            // relatives as an evolving population leaves them: 1- and 2-mutants
+            let mut model = FunctionModel::default();
+            let mut nearest: Option<(usize, Vec<f64>)> = None;
+            for r in 0..rel {
+                let mut m = s.clone();
+                for _ in 0..1 + r % 2 {
+                    let k = rng.below(len);
+                    m[k] = ((m[k] as usize + 1 + rng.below(N_LETTERS - 1)) % N_LETTERS) as u8;
+                }
+                let d = m.iter().zip(&s).filter(|(a, b)| a != b).count();
+                // the sim never refolds a cached sequence: a repeat would count twice in the blend
+                if d == 0 || model.cached(&m, kt_bin(kt)).is_some() {
+                    continue;
+                }
+                let f = model.fold(&m, kt, &ph).as_vec();
+                if nearest.as_ref().is_none_or(|(nd, _)| d < *nd) {
+                    nearest = Some((d, f));
+                }
+            }
+            // the sim folds instead of predicting below its confidence gate
+            let Some((p, conf)) = model.predict(&s, kt) else { continue };
+            if conf < PoolParams::default().fold_below {
+                folded += 1;
+                continue;
+            }
+            let f = express(&s, &ph, kt, 1).1.as_vec();
+            ceil += agreement(&f, &express(&s, &ph, kt, 77).1.as_vec());
+            blend += agreement(&f, &p.as_vec());
+            near += agreement(&f, &nearest.unwrap().1);
+            used += 1;
+        }
+        if used == 0 {
+            println!("len {len:2}: always folded ({folded} below the confidence gate)");
+            continue;
+        }
+        println!(
+            "len {len:2}: ceiling {:5.1}% | blend {:5.1}% vs nearest {:5.1}% of ceiling | {used} predicted, {folded} folded instead",
+            100.0 * ceil / used as f64,
+            100.0 * blend / ceil,
+            100.0 * near / ceil
+        );
     }
 }
 

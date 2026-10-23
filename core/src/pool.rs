@@ -81,8 +81,8 @@ pub struct Chain {
     pub pending: Option<i32>,
 }
 
-/// Scale-1 surrogate: sequence -> function. Exact cache hit, else the nearest
-/// cached sequence of equal length by Hamming distance. Confidence = shared fraction.
+/// Scale-1 surrogate: sequence -> function. Exact cache hit, else a distance-weighted blend
+/// of cached relatives of equal length. Confidence = fraction shared with the nearest.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FunctionModel {
     cache: HashMap<(Seq, i32), Function>,
@@ -154,16 +154,26 @@ impl FunctionModel {
             return Some((f.clone(), 1.0));
         }
         let cands = self.by_len.get(&(seq.len(), kb))?;
-        let mut best: Option<(&Seq, usize)> = None;
-        for c in cands {
-            let d = c.iter().zip(seq).filter(|(a, b)| a != b).count();
-            if best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((c, d));
+        let dists: Vec<usize> = cands.iter().map(|c| c.iter().zip(seq).filter(|(a, b)| a != b).count()).collect();
+        let dmin = *dists.iter().min()?;
+        // one fold is noisy; averaging close relatives cancels much of the noise (each extra
+        // mutation costs a factor e in weight). `fold-kernel` measures blend vs nearest
+        let mut acc: Option<Function> = None;
+        let mut wsum = 0.0;
+        for (c, &d) in cands.iter().zip(&dists) {
+            if d > dmin + 2 {
+                continue;
+            }
+            let w = (-(d as f64)).exp();
+            let f = self.cache.get(&(c.clone(), kb))?;
+            wsum += w;
+            match acc.as_mut() {
+                None => acc = Some(f.scaled(w)),
+                Some(a) => a.add_scaled(f, w),
             }
         }
-        let (c, d) = best?;
-        let f = self.cache.get(&(c.clone(), kb))?.clone();
-        Some((f, 1.0 - d as f64 / seq.len().max(1) as f64))
+        let f = acc?.scaled(1.0 / wsum);
+        Some((f, 1.0 - dmin as f64 / seq.len().max(1) as f64))
     }
 
     /// Returns function, confidence, and whether the real fold ran.

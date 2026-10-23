@@ -240,6 +240,26 @@ impl Function {
         self.catalysis.iter().cloned().enumerate().fold((0, 0.0), |a, (i, v)| if v > a.1 { (i, v) } else { a })
     }
 
+    pub fn scaled(&self, w: f64) -> Function {
+        let mut f = self.clone();
+        f.catalysis.iter_mut().for_each(|x| *x *= w);
+        f.stability *= w;
+        f.amphiphile *= w;
+        f.pigment *= w;
+        f.fold_energy *= w;
+        f
+    }
+
+    pub fn add_scaled(&mut self, o: &Function, w: f64) {
+        for (x, y) in self.catalysis.iter_mut().zip(&o.catalysis) {
+            *x += w * y;
+        }
+        self.stability += w * o.stability;
+        self.amphiphile += w * o.amphiphile;
+        self.pigment += w * o.pigment;
+        self.fold_energy += w * o.fold_energy;
+    }
+
     /// Flat vector for distance/accuracy comparisons.
     pub fn as_vec(&self) -> Vec<f64> {
         let mut v = self.catalysis.clone();

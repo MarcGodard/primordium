@@ -12,9 +12,11 @@
 
 - **Heredity below the error threshold.** Heritable bit error is ~6-7% per division (130-bit genomes need < ~0.8%): lineages are a quasi-species, not faithful copies. Levers: proofreading/repair genes, selection for Li/Fl-rich monomer supply, shorter genomes.
 - **Niches by elevation:** patches differ in wet/dry and UV but phenotypes do not yet sort by them.
-- **Scale 1 cost:** folding dominates every scale above; a generalising sequence-to-function model would make the scale-2/3 surrogates actually faster than detail.
+- **Scale 1 cost:** folding dominates every scale above; the blend predicts well near cached relatives but cannot reach novel sequences, so scales 2/3 are no faster in surrogate mode. A lineage-level surrogate (a cell genome -> division time and mutation spectrum) is what would buy speed for the scales above the cell.
 
 ## Log
+
+- 2026-10-23 Scale 1 surrogate predicts from a distance-weighted blend (e^-d) of cached relatives instead of the single nearest fold: averaging relatives cancels fold noise. `primordium fold-kernel` (held-out sequence, 8 cached 1-2 mutant relatives, behind the sim's 0.9 confidence gate): **98-104% of ceiling vs 86-94% for nearest-only** at lengths 16-32; with 3 relatives 95-100% (nearest 90-93%). Length 8 never passes the gate, so short chains always fold exactly. Scale 0 re-measured over 10 days and 6 seeds: **98.8-99.5%, mean 99.2%** (4-day runs are noisy).
 
 - 2026-10-23 Vesicle surrogate rebuilt the same way: **98.8-100.4% of ceiling** (`pond-shadow`, 20 and 40 days), up from 95.3%. The lumped surrogate re-derived synthesis, ligation and breakage from pooled rates and lost per-letter supply, duplex state and end-vs-inner breakage. Now vesicles run the real interior in both modes and learn only copying (`copying.rs`, shared with cells): inverse selectivity per (template, partner) plus stall-after-mismatch per (template, partner), over (kT, backbone catalysis). Cells use the same module.
 
