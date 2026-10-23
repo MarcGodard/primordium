@@ -4,7 +4,7 @@
 //! matter out of its patch, so matter stays exact and a starved patch cannot breed; the
 //! daughter genome takes heritable bit errors at the learned per-division rate. Tides,
 //! radiation, drift between patches and crowding still run for real.
-use crate::cell::{Cell, World, remap_products};
+use crate::cell::{Cell, World, regulated_traits, regulation_signals, remap_products};
 use crate::polymer::N_LETTERS;
 use crate::pool::Site;
 use crate::rng::Rng;
@@ -162,13 +162,15 @@ impl World {
         // strand (shadow agreement 94.9% -> 98.2% of ceiling with this one change)
         let p = &self.patches[c.patch];
         let raw = (p.raw[LI] + p.free[LI]) as f64 / self.cp.patch_cells * LI_SCALE;
+        // traits as currently switched on, so promoters count in lineage fitness too
+        let (poly, synth, amph) = regulated_traits(info, regulation_signals(c, site.x[2], site.env.kt));
         [
             site.env.kt,
             if site.wet { 1.0 } else { 0.0 },
             raw.min(RAW_MAX),
-            info.poly_cut.min(TRAIT_MAX),
-            info.synth_cut.min(TRAIT_MAX),
-            info.amph.min(TRAIT_MAX),
+            poly.min(TRAIT_MAX),
+            synth.min(TRAIT_MAX),
+            amph.min(TRAIT_MAX),
             (self.t_days - c.born).clamp(0.0, AGE_MAX),
             self.daylight.clamp(0.0, DAYLIGHT_MAX),
         ]
@@ -192,6 +194,7 @@ impl World {
 
     /// One step with every cell as a lineage. `prior` holds the table's pooled rates.
     pub fn step_lineage(&mut self, dt: f64, t: &LineageModel, prior: &[f64]) {
+        self.lineage_mode = true;
         self.env = self.cosmos.sample(self.t_days);
         self.daylight = self.cosmos.sample(self.t_days.floor() + 0.5).visible;
         let mut rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));

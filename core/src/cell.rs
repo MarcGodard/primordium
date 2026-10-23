@@ -257,6 +257,30 @@ impl Promoter {
     }
 }
 
+/// Signal strengths 0..1 a cell's promoters read: light reaching it, cold, its own Li running
+/// short (Li's share of its loose monomers).
+pub fn regulation_signals(c: &Cell, light: f64, kt: f64) -> [f64; 3] {
+    let free_total: i64 = c.free.iter().sum();
+    let li_share = if free_total > 0 { c.free[1] as f64 / free_total as f64 } else { 0.0 };
+    [light.clamp(0.0, 1.0), ((1.05 - kt) / 0.2).clamp(0.0, 1.0), (1.0 - li_share / 0.3).clamp(0.0, 1.0)]
+}
+
+/// Traits as the genes are switched under `signals`: (polymerase, metabolism, membrane), each
+/// the best gene's strength times its expression level. Genotype potential alone hides what
+/// regulation does to fitness.
+pub fn regulated_traits(info: &GenomeInfo, signals: [f64; 3]) -> (f64, f64, f64) {
+    let ka = bidx(KA).unwrap();
+    let (mut poly, mut synth, mut amph) = (0.0f64, 0.0f64, 0.0f64);
+    for g in &info.genes {
+        let on = g.promoter.level(signals);
+        poly = poly.max(g.func.catalysis[pair(ka, ka)] * on);
+        let s = LETTERS.iter().map(|&z| g.func.catalysis[pair(ka, bidx(z).unwrap())]).sum::<f64>() / N_LETTERS as f64;
+        synth = synth.max(s * on);
+        amph = amph.max(g.func.amphiphile * on);
+    }
+    (poly, synth, amph)
+}
+
 /// Translate a gene span codon by codon.
 pub fn translate(gene: &[u8], bits: &[u8; N_LETTERS]) -> Seq {
     (0..gene.len() / 3).filter_map(|k| CODE[codon(gene, 3 * k, bits)]).collect()
@@ -423,6 +447,9 @@ pub struct World {
     /// Today's noon light (season and latitude, plus that noon's cloud): growth integrates light
     /// over a cycle, while instantaneous light swings with day and night.
     pub daylight: f64,
+    /// Set while the world steps as lineages (`step_lineage`): expression then follows the
+    /// genes, not frozen product stocks.
+    pub lineage_mode: bool,
     /// When set, detailed steps log each cell's lineage features and fate (scale-4 training).
     pub lineage_log: Option<Vec<crate::lineage::LineageSample>>,
 }
@@ -545,6 +572,7 @@ impl World {
             refreshing: false,
             sel_prior: vec![0.0; COPY_CHANNELS],
             lineage_log: None,
+            lineage_mode: false,
             daylight: 0.0,
         };
         w.seed_founders(founders);
@@ -687,6 +715,7 @@ impl World {
     }
 
     pub fn step(&mut self, dt: f64) {
+        self.lineage_mode = false;
         self.env = self.cosmos.sample(self.t_days);
         self.daylight = self.cosmos.sample(self.t_days.floor() + 0.5).visible;
         self.sel_prior = LearnedCopy::priors(&self.model, 0);
@@ -962,9 +991,7 @@ impl World {
             None => Copier::Pairing { gain, kt, pair: &self.ctx.ph.pair, fray: clip_odds(poly, kt) },
         };
 
-        let free_total: i64 = c.free.iter().sum();
-        let li_share = if free_total > 0 { c.free[1] as f64 / free_total as f64 } else { 0.0 };
-        let signals = [light.clamp(0.0, 1.0), ((1.05 - kt) / 0.2).clamp(0.0, 1.0), (1.0 - li_share / 0.3).clamp(0.0, 1.0)];
+        let signals = regulation_signals(c, light, kt);
 
         // transcription: each gene makes product copies; any copy error makes junk
         for (k, g) in info.genes.iter().enumerate() {
@@ -1203,8 +1230,31 @@ impl World {
         })
     }
 
-    /// Pigment shade a cell makes for itself (only expressed pigment shades).
+    /// How much of each gene a cell has on hand, 0..1 per gene. Detail: its product copies
+    /// (full at 3). Lineage mode never re-makes products, so frozen stocks only erode with
+    /// each mutation; there each gene's steady expression under current signals stands in.
+    fn expression(&self, c: &Cell, info: &GenomeInfo) -> Vec<f64> {
+        if self.lineage_mode {
+            let signals = regulation_signals(c, self.patch_site(c.patch, 0.0).x[2], self.env.kt);
+            info.genes.iter().map(|g| g.promoter.level(signals)).collect()
+        } else {
+            (0..info.genes.len()).map(|k| (c.products.get(k).copied().unwrap_or(0) as f64 / 3.0).min(1.0)).collect()
+        }
+    }
+
+    /// Pigment shade a cell makes for itself: the best pigment times pigment genes' share of
+    /// what the cell expresses.
     pub(crate) fn own_shade(&self, c: &Cell, info: &GenomeInfo) -> f64 {
+        if self.lineage_mode {
+            // same form as detail's product-copy share, with expression levels for copies
+            let e = self.expression(c, info);
+            let total: f64 = e.iter().sum();
+            if total <= 0.0 {
+                return 0.0;
+            }
+            let pig: f64 = info.genes.iter().zip(&e).filter(|(g, _)| g.func.pigment > 0.0).map(|(_, l)| l).sum();
+            return self.cp.max_shade * info.pigment * pig / total;
+        }
         self.cp.max_shade * info.pigment * self.expressed_fraction(c, info, |g| g.func.pigment > 0.0)
     }
 
@@ -1235,7 +1285,8 @@ impl World {
     /// Whether a daughter stays stuck to its parent: odds rise with the adhesion the parent
     /// actually expresses. Returns the shared colony id (the parent joins it too).
     pub(crate) fn stick(&mut self, c: &mut Cell, info: &GenomeInfo, rng: &mut Rng) -> Option<u64> {
-        let adh = info.genes.iter().zip(&c.products).map(|(g, &n)| g.func.adhesion * (n as f64 / 3.0).min(1.0)).fold(0.0, f64::max);
+        let e = self.expression(c, info);
+        let adh = info.genes.iter().zip(&e).map(|(g, l)| g.func.adhesion * l).fold(0.0, f64::max);
         let p = ((adh - self.cp.stick_floor) / self.cp.stick_span).clamp(0.0, 1.0);
         if !rng.chance(p) {
             return None;
