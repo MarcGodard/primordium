@@ -285,6 +285,7 @@ impl CellSim {
         d.set("surrogate", w.cells.iter().filter(|c| c.mode == Mode::Surrogate).count() as i64);
         d.set("divisions", s.divisions as i64);
         d.set("deaths", s.deaths as i64);
+        d.set("eaten", s.predations as i64);
         d.set("max_generation", w.cells.iter().map(|c| c.generation).max().unwrap_or(0) as i64);
         d.set("radiation_mutations", s.radiation_mutations as i64);
         d.set("copy_error", s.copy_mutations as f64 / s.copied_letters.max(1) as f64);

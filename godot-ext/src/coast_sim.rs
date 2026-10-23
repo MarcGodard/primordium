@@ -97,6 +97,7 @@ impl CoastSim {
             d.set("pigment", ph[3]);
             d.set("genome_len", ph[4]);
             d.set("divisions", w.stats.divisions as i64);
+            d.set("eaten", w.stats.predations as i64);
             d.set("bit_error", w.stats.bit_errors as f64 / w.stats.bits_inherited.max(1) as f64);
             d.set("lineage", s.mode == Mode::Surrogate);
             let (colonial, size, adh) = w.colony_stats();

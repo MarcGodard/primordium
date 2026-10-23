@@ -225,12 +225,22 @@ func _draw_colonies(list: Array, pos_of: Callable) -> void:
 		var g: Array = groups[k]
 		if g.size() < 2:
 			continue
+		# positions wrap along the shore: take each member the short way round from the first
+		var first: Vector2 = pos_of.call(g[0])
+		var pts := []
+		for c in g:
+			var q: Vector2 = pos_of.call(c)
+			if q.y - first.y > TILE_H * 0.5:
+				q.y -= TILE_H
+			elif first.y - q.y > TILE_H * 0.5:
+				q.y += TILE_H
+			pts.append(q)
 		var centre := Vector2.ZERO
-		for c in g:
-			centre += pos_of.call(c)
+		for q in pts:
+			centre += q
 		centre /= g.size()
-		for c in g:
-			art.draw_line(pos_of.call(c), centre, Color(0.95, 0.8, 0.5, 0.55), 0.12)
+		for q in pts:
+			art.draw_line(q, centre, Color(0.95, 0.8, 0.5, 0.55), 0.12)
 		art.draw_circle(centre, 0.25, Color(0.95, 0.8, 0.5, 0.8))
 
 func hud_text() -> String:
@@ -244,8 +254,8 @@ func hud_text() -> String:
 	t += "[color=#9ab]thin bar under traits: what genes listen to: grey always on, [color=#ffe65a]light[/color], [color=#73bfff]cold[/color], [color=#d973e6]Li short[/color][/color]\n"
 	if selected >= 0 and selected < sites.size():
 		var s: Dictionary = sites[selected]
-		t += "\n[b]Site %+.0f°[/b]  %.1f K  tide x%.1f\ncells %d   generation %d   divisions %d\nbit error %.2f%%   genome %.0f letters\nin colonies %.0f%% (mean size %.1f)   adhesion %.2f\npolymerase %.2f  metabolism %.2f\nmembrane %.2f  pigment %.2f\n" % [
-			rad_to_deg(s.latitude), s.temperature_k, s.tide_scale, s.cells, s.max_generation, s.divisions, s.bit_error * 100.0, s.genome_len, s.colonial * 100.0, s.colony_size, s.adhesion, s.poly, s.synth, s.amph, s.pigment]
+		t += "\n[b]Site %+.0f°[/b]  %.1f K  tide x%.1f\ncells %d   generation %d   divisions %d\nbit error %.2f%%   genome %.0f letters\nin colonies %.0f%% (mean size %.1f)   adhesion %.2f\nengulfed %d\npolymerase %.2f  metabolism %.2f\nmembrane %.2f  pigment %.2f\n" % [
+			rad_to_deg(s.latitude), s.temperature_k, s.tide_scale, s.cells, s.max_generation, s.divisions, s.bit_error * 100.0, s.genome_len, s.colonial * 100.0, s.colony_size, s.adhesion, s.eaten, s.poly, s.synth, s.amph, s.pigment]
 		t += "[color=#9ab]sky and tide shown for this site[/color]\n"
 	t += "[b]Discoveries[/b]\n"
 	for d in stats.discoveries:

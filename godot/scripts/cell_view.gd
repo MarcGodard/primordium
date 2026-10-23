@@ -197,12 +197,21 @@ func _draw_colonies(list: Array, pos_of: Callable, scale_r: float) -> void:
 		var g: Array = groups[k]
 		if g.size() < 2:
 			continue
+		# positions wrap along the shore: take each member the short way round from the first
+		var first: Vector2 = pos_of.call(g[0])
+		var pts := []
+		for c in g:
+			var q: Vector2 = pos_of.call(c)
+			if q.y - first.y > HEIGHT * 0.5:
+				q.y -= HEIGHT
+			elif first.y - q.y > HEIGHT * 0.5:
+				q.y += HEIGHT
+			pts.append(q)
 		var centre := Vector2.ZERO
-		for c in g:
-			centre += pos_of.call(c)
+		for q in pts:
+			centre += q
 		centre /= g.size()
-		for c in g:
-			var p: Vector2 = pos_of.call(c)
+		for p in pts:
 			art.draw_line(p, centre, Color(1.0, 0.85, 0.45, 0.9), 0.5 * scale_r)
 			art.draw_circle(p, 0.45 * scale_r, Color(1.0, 0.85, 0.45, 0.9))
 		art.draw_circle(centre, 0.8 * scale_r, Color(1.0, 0.85, 0.45, 0.95))
@@ -217,8 +226,8 @@ func hud_text() -> String:
 	for c in cells:
 		if c.colony >= 0:
 			colonial += 1
-	var t := "[b]Beach[/b] sea left, dune right\ncells %d (surrogate %d)   generation %d   in colonies %d\ndivisions %d   deaths %d   genomes seen %d\nreplication error %.1f%%   radiation mutations %d\n" % [
-		s.cells, s.surrogate, s.max_generation, colonial, s.divisions, s.deaths, s.genomes, s.copy_error * 100.0, s.radiation_mutations]
+	var t := "[b]Beach[/b] sea left, dune right\ncells %d (surrogate %d)   generation %d   in colonies %d\ndivisions %d   deaths %d (engulfed %d)   genomes seen %d\nreplication error %.1f%%   radiation mutations %d\n" % [
+		s.cells, s.surrogate, s.max_generation, colonial, s.divisions, s.deaths, s.eaten, s.genomes, s.copy_error * 100.0, s.radiation_mutations]
 	t += "[b]Resolution[/b] %s   lifts %d\n" % ["auto (A)" if s.auto else "detail (A)", s.lifts]
 	t += "[b]Discoveries[/b]\n"
 	for d in s.discoveries:
