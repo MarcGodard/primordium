@@ -10,6 +10,7 @@ mod cell_sim;
 mod coast_sim;
 mod pond_sim;
 mod pool_sim;
+mod reef_sim;
 
 struct PrimordiumExt;
 

@@ -10,5 +10,6 @@ pub mod lineage;
 pub mod polymer;
 pub mod pool;
 pub mod protocell;
+pub mod reef;
 pub mod rng;
 pub mod surrogate;

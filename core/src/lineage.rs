@@ -11,6 +11,7 @@ use crate::polymer::N_LETTERS;
 use crate::pool::Site;
 use crate::rng::Rng;
 use crate::surrogate::{Axis, RateTable};
+use serde::{Deserialize, Serialize};
 
 /// Fate table: divisions per cell-day, bursts per cell-day.
 pub const L_DIV: usize = 0;
@@ -47,7 +48,7 @@ pub struct LineageSample {
 /// flipped back to detail daily. The price: trait effects cannot depend on climate.
 /// Fidelity is learned at divisions and per source letter: radiation leaves non-canonical
 /// letters that pair weakly and are miscopied ~10x as often, which partly undoes the damage.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LineageModel {
     pub base: RateTable,
     /// Events over base-expected events, per trait bin: relative fitness.
@@ -137,10 +138,20 @@ impl LineageModel {
 
     /// (divisions/day, bursts/day, bit error per copied letter by source letter) at `x`.
     pub fn rates(&self, x: &[f64], prior: &[f64]) -> (f64, f64, [f64; N_LETTERS]) {
-        let f = fidelity_x(x);
+        let (div, burst) = self.fates(x, prior);
+        (div, burst, self.bit_error(x, prior))
+    }
+
+    /// Bit error per copied letter, by source letter.
+    pub fn bit_error(&self, x: &[f64], prior: &[f64]) -> [f64; N_LETTERS] {
         let chs: [(usize, f64); N_LETTERS] = std::array::from_fn(|l| (l, prior[L_CHANNELS + l]));
         let mut p_bit = [0.0; N_LETTERS];
-        self.fidelity.rates_smooth(&f, &chs, 1.0, &[1], &mut p_bit);
+        self.fidelity.rates_smooth(&fidelity_x(x), &chs, 1.0, &[1], &mut p_bit);
+        p_bit.map(|p| p.clamp(0.0, 0.5))
+    }
+
+    /// (divisions/day, bursts/day) at `x`.
+    pub fn fates(&self, x: &[f64], prior: &[f64]) -> (f64, f64) {
         let mut base = [0.0; 2];
         self.base.rates_smooth(&base_x(x), &[(L_DIV, prior[L_DIV]), (L_BURST, prior[L_BURST])], 1.0, &[], &mut base);
         // relative fitness shrinks toward 1 (no effect) where a trait bin is thin, and is taken
@@ -150,8 +161,23 @@ impl LineageModel {
         let norm = [prior[L_CHANNELS + N_LETTERS], prior[L_CHANNELS + N_LETTERS + 1]];
         self.fitness.rates_smooth(&trait_x(x), &[(L_DIV, norm[0]), (L_BURST, norm[1])], 1.0, &[0, 1, 2], &mut fit);
         let rel = |ch: usize| if norm[ch] > 0.0 { fit[ch] / norm[ch] } else { 1.0 };
-        ((base[0] * rel(0)).max(0.0), (base[1] * rel(1)).max(0.0), p_bit.map(|p| p.clamp(0.0, 0.5)))
+        ((base[0] * rel(0)).max(0.0), (base[1] * rel(1)).max(0.0))
     }
+}
+
+/// Lineage features from raw inputs: `li` is the Li (raw + loose) per cell volume around the
+/// cell, `traits` the regulated (polymerase, metabolism, membrane), `age` days into the cycle.
+pub fn lineage_x(kt: f64, wet: bool, li: f64, traits: (f64, f64, f64), age: f64, daylight: f64) -> [f64; 8] {
+    [
+        kt,
+        if wet { 1.0 } else { 0.0 },
+        (li * LI_SCALE).min(RAW_MAX),
+        traits.0.min(TRAIT_MAX),
+        traits.1.min(TRAIT_MAX),
+        traits.2.min(TRAIT_MAX),
+        age.clamp(0.0, AGE_MAX),
+        daylight.clamp(0.0, DAYLIGHT_MAX),
+    ]
 }
 
 fn fidelity_x(x: &[f64]) -> [f64; 2] {
@@ -167,19 +193,10 @@ impl World {
         // food is the scarce genome partner, not raw Ka: division waits on Li for the second
         // strand (shadow agreement 94.9% -> 98.2% of ceiling with this one change)
         let p = &self.patches[c.patch];
-        let raw = (p.raw[LI] + p.free[LI]) as f64 / self.cp.patch_cells * LI_SCALE;
+        let li = (p.raw[LI] + p.free[LI]) as f64 / self.cp.patch_cells;
         // traits as currently switched on, so promoters count in lineage fitness too
-        let (poly, synth, amph) = regulated_traits(info, regulation_signals(c, light, site.env.kt, self.cp.colony_max));
-        [
-            site.env.kt,
-            if site.wet { 1.0 } else { 0.0 },
-            raw.min(RAW_MAX),
-            poly.min(TRAIT_MAX),
-            synth.min(TRAIT_MAX),
-            amph.min(TRAIT_MAX),
-            (self.t_days - c.born).clamp(0.0, AGE_MAX),
-            self.daylight.clamp(0.0, DAYLIGHT_MAX),
-        ]
+        let traits = regulated_traits(info, regulation_signals(c, light, site.env.kt, self.cp.colony_max));
+        lineage_x(site.env.kt, site.wet, li, traits, self.t_days - c.born, self.daylight)
     }
 
     /// Mean confidence of the lineage table over this world's cells.

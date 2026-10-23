@@ -230,6 +230,10 @@ pub enum Signal {
     LiScarce,
     /// How many colony mates the cell has (0 alone, 1 at the colony size cap).
     Mates,
+    /// Height in a body (scale 5; 0 at the holdfast, 1 at `BODY_HEIGHT` cells up). A free cell sits at 0.
+    Height,
+    /// Faces open to water (scale 5; 1 on the skin, 0 deep inside). A free cell is all skin.
+    Exposure,
 }
 
 /// Gene regulation: a signal, a sign (on when the signal is high, or low) and a gain.
@@ -239,6 +243,12 @@ pub struct Promoter {
     pub on_high: bool,
     pub gain: f64,
 }
+
+/// Body height at which the height signal saturates, in cells.
+pub const BODY_HEIGHT: f64 = 8.0;
+
+/// Signal strengths a promoter reads: light, cold, Li scarcity, mates, height, exposure.
+pub type Signals = [f64; 6];
 
 /// Bits before a gene's preceding stop codon: [signal x3, sign, gain]. Genes too close to the
 /// genome start have no room for a promoter and stay constitutive. Promoter bits may overlap
@@ -250,26 +260,30 @@ pub fn promoter(genome: &[u8], start: usize, bits: &[u8; N_LETTERS]) -> Promoter
         return Promoter::default();
     }
     let b = |k: usize| bits[genome[start - 3 - PROMOTER_BITS + k] as usize];
-    // codes 5..7 are unassigned and read as constitutive
+    // code 7 is unassigned and reads as constitutive
     let signal = match (b(0), b(1), b(2)) {
         (0, 0, 1) => Signal::Light,
         (0, 1, 0) => Signal::Cold,
         (0, 1, 1) => Signal::LiScarce,
         (1, 0, 0) => Signal::Mates,
+        (1, 0, 1) => Signal::Height,
+        (1, 1, 0) => Signal::Exposure,
         _ => Signal::None,
     };
     Promoter { signal, on_high: b(3) == 1, gain: if b(4) == 1 { 10.0 } else { 4.0 } }
 }
 
 impl Promoter {
-    /// Expression level 0..1 at signal strengths (light, cold, li_scarce, mates), each 0..1.
-    pub fn level(&self, sig: [f64; 4]) -> f64 {
+    /// Expression level 0..1 at signal strengths (`Signals`), each 0..1.
+    pub fn level(&self, sig: Signals) -> f64 {
         let s = match self.signal {
             Signal::None => return 1.0,
             Signal::Light => sig[0],
             Signal::Cold => sig[1],
             Signal::LiScarce => sig[2],
             Signal::Mates => sig[3],
+            Signal::Height => sig[4],
+            Signal::Exposure => sig[5],
         };
         let x = if self.on_high { s - 0.5 } else { 0.5 - s };
         1.0 / (1.0 + (-self.gain * x).exp())
@@ -278,22 +292,29 @@ impl Promoter {
 
 /// Signal strengths 0..1 a cell's promoters read: light reaching it, cold, its own Li running
 /// short (Li's share of its loose monomers), and its colony mates (`Cell::mates` over the
-/// cap's `colony_max - 1`).
-pub fn regulation_signals(c: &Cell, light: f64, kt: f64, colony_max: usize) -> [f64; 4] {
-    let free_total: i64 = c.free.iter().sum();
-    let li_share = if free_total > 0 { c.free[1] as f64 / free_total as f64 } else { 0.0 };
+/// cap's `colony_max - 1`). A beach cell has no body: height 0, all skin.
+pub fn regulation_signals(c: &Cell, light: f64, kt: f64, colony_max: usize) -> Signals {
+    signals(light, kt, &c.free, c.mates as f64 / colony_max.saturating_sub(1).max(1) as f64, 0.0, 1.0)
+}
+
+/// Signals from their raw inputs (`free`: the loose monomers whose Li share is sensed).
+pub fn signals(light: f64, kt: f64, free: &[i64; N_LETTERS], mates: f64, height: f64, exposure: f64) -> Signals {
+    let free_total: i64 = free.iter().sum();
+    let li_share = if free_total > 0 { free[1] as f64 / free_total as f64 } else { 0.0 };
     [
         light.clamp(0.0, 1.0),
         ((1.05 - kt) / 0.2).clamp(0.0, 1.0),
         (1.0 - li_share / 0.3).clamp(0.0, 1.0),
-        (c.mates as f64 / colony_max.saturating_sub(1).max(1) as f64).min(1.0),
+        mates.clamp(0.0, 1.0),
+        height.clamp(0.0, 1.0),
+        exposure.clamp(0.0, 1.0),
     ]
 }
 
 /// Traits as the genes are switched under `signals`: (polymerase, metabolism, membrane), each
 /// the best gene's strength times its expression level. Genotype potential alone hides what
 /// regulation does to fitness.
-pub fn regulated_traits(info: &GenomeInfo, signals: [f64; 4]) -> (f64, f64, f64) {
+pub fn regulated_traits(info: &GenomeInfo, signals: Signals) -> (f64, f64, f64) {
     let ka = bidx(KA).unwrap();
     let (mut poly, mut synth, mut amph) = (0.0f64, 0.0f64, 0.0f64);
     for g in &info.genes {
@@ -484,6 +505,41 @@ pub struct World {
     pub meals: std::collections::VecDeque<(f64, usize, f64, f64, u64)>,
     /// When set, detailed steps log each cell's lineage features and fate (scale-4 training).
     pub lineage_log: Option<Vec<crate::lineage::LineageSample>>,
+}
+
+/// Tidal mixing of a flooded patch with the ocean: raw atoms relax toward the ocean's
+/// concentration (`raw`, `ka`: the patch's share at ocean strength), loose monomers wash out.
+pub(crate) struct Tide {
+    pub flush: f64,
+    pub washout: f64,
+    pub raw: f64,
+    pub ka: f64,
+}
+
+impl Tide {
+    pub(crate) fn mix(&self, p: &mut Patch, ocean: &mut [i64; N_LETTERS], ocean_ka: &mut i64, dt: f64, rng: &mut Rng) {
+        let k = (self.flush * dt).min(1.0);
+        let w = (self.washout * dt).min(1.0);
+        for l in 0..N_LETTERS {
+            let n = round_flux((self.raw - p.raw[l] as f64) * k, rng).clamp(-p.raw[l], ocean[l]);
+            p.raw[l] += n;
+            ocean[l] -= n;
+            let out = round_flux(p.free[l] as f64 * w, rng).clamp(0, p.free[l]);
+            p.free[l] -= out;
+            ocean[l] += out;
+            *ocean_ka += out;
+        }
+        let n = round_flux((self.ka - p.raw_ka as f64) * k, rng).clamp(-p.raw_ka, *ocean_ka);
+        p.raw_ka += n;
+        *ocean_ka -= n;
+        // loose monomers on the floor fall apart into raw atoms over time (wet)
+        for l in 0..N_LETTERS {
+            let n = round_flux(p.free[l] as f64 * 0.2 * dt, rng).clamp(0, p.free[l]);
+            p.free[l] -= n;
+            p.raw[l] += n;
+            p.raw_ka += n;
+        }
+    }
 }
 
 pub(crate) fn round_flux(expected: f64, rng: &mut Rng) -> i64 {
@@ -1504,31 +1560,10 @@ impl World {
 
     /// High water mixes each flooded patch with the ocean; monomers wash out and fall apart.
     pub(crate) fn tides(&mut self, dt: f64, rng: &mut Rng) {
-        let k = (self.cp.flush_rate * dt).min(1.0);
-        let w = (self.cp.washout_rate * dt).min(1.0);
-        let cells = self.cp.patch_cells;
+        let tide = Tide { flush: self.cp.flush_rate, washout: self.cp.washout_rate, raw: self.cp.ocean_raw * self.cp.patch_cells, ka: self.cp.ocean_ka * self.cp.patch_cells };
         for p in self.patches.iter_mut() {
-            if self.env.tide_level <= p.elevation {
-                continue;
-            }
-            for l in 0..N_LETTERS {
-                let n = round_flux((self.cp.ocean_raw * cells - p.raw[l] as f64) * k, rng).clamp(-p.raw[l], self.ocean[l]);
-                p.raw[l] += n;
-                self.ocean[l] -= n;
-                let out = round_flux(p.free[l] as f64 * w, rng).clamp(0, p.free[l]);
-                p.free[l] -= out;
-                self.ocean[l] += out;
-                self.ocean_ka += out;
-            }
-            let n = round_flux((self.cp.ocean_ka * cells - p.raw_ka as f64) * k, rng).clamp(-p.raw_ka, self.ocean_ka);
-            p.raw_ka += n;
-            self.ocean_ka -= n;
-            // loose monomers on the floor fall apart into raw atoms over time (wet)
-            for l in 0..N_LETTERS {
-                let n = round_flux(p.free[l] as f64 * 0.2 * dt, rng).clamp(0, p.free[l]);
-                p.free[l] -= n;
-                p.raw[l] += n;
-                p.raw_ka += n;
+            if self.env.tide_level > p.elevation {
+                tide.mix(p, &mut self.ocean, &mut self.ocean_ka, dt, rng);
             }
         }
     }
@@ -1554,11 +1589,11 @@ impl World {
         (colonial as f64 / n, if groups > 0 { colonial as f64 / groups as f64 } else { 0.0 }, adh / n)
     }
 
-    /// Share of genes (over all cells) on each signal: none, light, cold, Li scarcity, mates;
-    /// then the share of pigment-making genes switched on by light.
-    pub fn regulation_stats(&mut self) -> [f64; 6] {
+    /// Share of genes (over all cells) on each signal, in `Signal` order (none, light, cold,
+    /// Li scarcity, mates, height, exposure); then the share of pigment-making genes switched on by light.
+    pub fn regulation_stats(&mut self) -> [f64; 8] {
         let genomes: Vec<Seq> = self.cells.iter().map(|c| c.genome.clone()).collect();
-        let mut by = [0.0; 5];
+        let mut by = [0.0; 7];
         let (mut pig, mut pig_light) = (0.0f64, 0.0f64);
         for g in &genomes {
             let info = self.info(g);
@@ -1573,7 +1608,12 @@ impl World {
             }
         }
         let total: f64 = by.iter().sum::<f64>().max(1.0);
-        [by[0] / total, by[1] / total, by[2] / total, by[3] / total, by[4] / total, pig_light / pig.max(1.0)]
+        let mut out = [0.0; 8];
+        for (o, b) in out.iter_mut().zip(by) {
+            *o = b / total;
+        }
+        out[7] = pig_light / pig.max(1.0);
+        out
     }
 
     /// Division-of-labour index for pigment: mean variance of members' pigment expression

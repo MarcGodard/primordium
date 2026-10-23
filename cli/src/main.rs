@@ -28,6 +28,8 @@ fn main() {
         "cell-shadow" => cell_shadow(&args),
         "coast" => coast(&args),
         "coast-shadow" => coast_shadow(&args),
+        "reef-seed" => reef_seed(&args),
+        "reef" => reef(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -868,7 +870,7 @@ fn coast(args: &[String]) {
                     reg[2],
                     reg[3],
                     reg[4],
-                    reg[5],
+                    reg[7],
                     st.predations
                 );
             }
@@ -1073,4 +1075,95 @@ fn coast_shadow(args: &[String]) {
         b.stats.lifts,
         drift
     );
+}
+
+/// Evolve a coast, then hand its lineage model and a sample of its cells (colonial first) to the reef.
+fn reef_seed(args: &[String]) {
+    use primordium_core::coast::{Coast, CoastParams};
+    use primordium_core::reef::{Founder, ReefSeed};
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 200.0);
+    let seed: u64 = arg(args, "seed", 1);
+    let n: usize = arg(args, "founders", 96);
+    let out: String = arg(args, "out", "data/reef_seed.json".to_string());
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let mut c = Coast::new(CoastParams::default(), CosmosParams { seed, ..Default::default() }, rates, seed);
+    let start = Instant::now();
+    while c.t_days < days {
+        c.step(0.02);
+        if (c.t_days / 20.0).fract() < 0.02 / 20.0 {
+            println!("day {:.0}: {} cells, {:.0}s", c.t_days, c.cells(), start.elapsed().as_secs_f64());
+        }
+    }
+    let mut pool: Vec<Founder> = Vec::new();
+    for s in c.sites.iter_mut() {
+        let lat = s.latitude;
+        let cells = s.world.cells.clone();
+        for cell in &cells {
+            // the body a cell is built of (membrane, products, junk), not its pantry of loose and raw atoms
+            let info = s.world.info(&cell.genome);
+            let mut mass = cell.membrane;
+            for l in 0..mass.len() {
+                mass[l] += cell.junk[l];
+            }
+            for (g, &k) in info.genes.iter().zip(&cell.products) {
+                for &l in &g.product {
+                    mass[l as usize] += k;
+                }
+            }
+            pool.push(Founder { genome: cell.genome.clone(), latitude: lat, colonial: cell.colony.is_some(), mass });
+        }
+    }
+    // spread over the coast: every k-th cell, colonial ones first
+    pool.sort_by_key(|f| !f.colonial);
+    let step = (pool.len() / n.max(1)).max(1);
+    let founders: Vec<Founder> = pool.into_iter().step_by(step).take(n).collect();
+    let colonial = founders.iter().filter(|f| f.colonial).count();
+    let seed = ReefSeed { days: c.t_days, model: c.model.clone(), founders };
+    std::fs::write(&out, serde_json::to_string(&seed).unwrap()).unwrap();
+    println!("wrote {out}: {} founders ({colonial} colonial) after {:.0} days, {:.0}s", seed.founders.len(), c.t_days, start.elapsed().as_secs_f64());
+}
+
+fn reef(args: &[String]) {
+    use primordium_core::reef::{Reef, ReefParams, ReefSeed};
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 60.0);
+    let every: f64 = arg(args, "every", 5.0);
+    let seed: u64 = arg(args, "seed", 1);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let start = Instant::now();
+    let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
+    println!("built in {:.1}s: {} founders", start.elapsed().as_secs_f64(), r.organisms.len());
+    let m0 = r.matter();
+    let mut next = every;
+    while r.t_days < days {
+        r.step(0.02);
+        if r.t_days >= next {
+            next += every;
+            let settled: Vec<_> = r.organisms.iter().filter(|o| o.settled()).collect();
+            let mut sizes: Vec<usize> = settled.iter().map(|o| o.cells.len()).collect();
+            sizes.sort_unstable();
+            let multi = sizes.iter().filter(|&&n| n > 1).count();
+            let big = sizes.last().copied().unwrap_or(0);
+            let med = sizes.get(sizes.len() / 2).copied().unwrap_or(0);
+            let tall = settled.iter().map(|o| o.height()).max().unwrap_or(0);
+            let mean = |k: usize| {
+                let (s, n) = settled.iter().flat_map(|o| o.cells.iter()).fold((0.0, 0), |a, c| (a.0 + c.expr[k] as f64, a.1 + 1));
+                s / n.max(1) as f64
+            };
+            let st = &r.stats;
+            println!(
+                "t={:5.1} cells {:5} bodies {:4} (multi {:3}, median {:2}, biggest {:3}, tallest {:2}) adrift {:3} | expr poly {:.2} synth {:.2} amph {:.2} shade {:.2} adh {:.2} | div {} spores {} settled {} lost {} tears {} frags {} bites {} | bit err {:.3} unsure {} | ledger {} | {:.1}s",
+                r.t_days, r.cells(), settled.len(), multi, med, big, tall, r.organisms.len() - settled.len(),
+                mean(0), mean(1), mean(2), mean(3), mean(4),
+                st.divisions, st.spores, st.settled, st.lost_adrift, st.tears, st.fragments, st.bites,
+                st.bit_errors as f64 / st.bits_inherited.max(1) as f64, st.unsure_cells,
+                if r.matter() == m0 { "exact" } else { "DRIFT" }, start.elapsed().as_secs_f64()
+            );
+        }
+    }
+    for d in r.discoveries.entries.iter().take(5) {
+        println!("  discovery day {:.1}: {}", d.t_days, d.note);
+    }
 }

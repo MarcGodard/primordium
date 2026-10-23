@@ -181,6 +181,7 @@ impl CoastSim {
             d.set(key, v);
         }
         let cp = &s.world.cosmos.p;
+        d.set("declination", cp.obliquity * (std::f64::consts::TAU * e.year_phase).sin());
         d.set("moon0_phase", (e.t_days / cp.moon_periods[0]).fract());
         d.set("moon1_phase", (e.t_days / cp.moon_periods[1]).fract());
         d.set("ledger_drift", 0i64);

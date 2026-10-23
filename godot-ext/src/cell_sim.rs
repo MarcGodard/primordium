@@ -21,7 +21,7 @@ pub struct CellSim {
 }
 
 /// Dominant role of a gene product: 0 polymerase, 1 metabolism, 2 membrane, 3 pigment, 4 none.
-fn role(f: &polymer::Function) -> (i64, f64) {
+pub(crate) fn role(f: &polymer::Function) -> (i64, f64) {
     let ka = bidx(KA).unwrap();
     let poly = f.catalysis[pair(ka, ka)];
     let synth = LETTERS.iter().map(|&z| f.catalysis[pair(ka, bidx(z).unwrap())]).sum::<f64>() / LETTERS.len() as f64;
@@ -188,6 +188,8 @@ impl CellSim {
                 Signal::Cold => "cold".into(),
                 Signal::LiScarce => "Li short".into(),
                 Signal::Mates => "mates".into(),
+                Signal::Height => "height".into(),
+                Signal::Exposure => "skin".into(),
             };
             // "light+" = on in light; "cold-" = off when cold
             gd.set("promoter", if name.is_empty() { name } else { format!("{name}{}", if pr.on_high { "+" } else { "-" }) });

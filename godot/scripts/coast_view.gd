@@ -28,6 +28,7 @@ var site_cells: Array = []
 var selected := -1
 var history := PackedFloat32Array()
 var chart: Control
+var globe: SubViewportContainer
 var dragging := false
 var timer := 0.0
 var ok := false
@@ -80,6 +81,11 @@ func _ready() -> void:
 	chart.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	chart.draw.connect(_draw_chart)
 	layer.add_child(chart)
+	globe = load("res://scripts/globe.gd").new()
+	globe.position = Vector2(12, 600)
+	globe.size = Vector2(330, 330)
+	globe.site_clicked.connect(func(k: int) -> void: selected = k)
+	layer.add_child(globe)
 	if ok:
 		sim.step(1, DT)
 
@@ -92,6 +98,7 @@ func activate(on: bool) -> void:
 	set_process(on)
 	set_process_unhandled_input(on)
 	chart.visible = on
+	globe.visible = on
 	if on:
 		cam.make_current()
 
@@ -131,6 +138,20 @@ func _process(delta: float) -> void:
 	if selected >= 0 and px_per_unit() > 2.0:
 		site_cells = sim.site_cells(selected)
 	art.queue_redraw()
+	# beads take the evolution chart's colours: the trait each site leads in vs the coast
+	var tints := []
+	var mean := [0.0, 0.0, 0.0, 0.0]
+	for s in sites:
+		var v := [s.poly, s.synth, s.amph, s.pigment]
+		for r in 4:
+			mean[r] += v[r] / max(sites.size(), 1)
+	for s in sites:
+		var v := [s.poly, s.synth, s.amph, s.pigment]
+		var rel := []
+		for r in 4:
+			rel.append(max(0.0, 1.0 + 6.0 * (v[r] - mean[r]) / max(mean[r], 0.01)) * [0.5, 0.5, 0.4, 0.8][r])
+		tints.append(tint(rel[0], rel[1], rel[2], rel[3]))
+	globe.refresh(sim.env(n_sites / 2), sites, tints, selected)
 
 func tint(poly: float, synth: float, amph: float, pigment: float) -> Color:
 	var w := [poly / 0.5, synth / 0.5, amph / 0.4, pigment / 0.8]
@@ -171,12 +192,12 @@ func _draw_coast() -> void:
 		for r in 4:
 			var bw: float = 40.0 * clamp(vals[r], 0.0, 1.5) / 1.5
 			art.draw_rect(Rect2(o + Vector2(TILE_W + 6, 4 + r * 9), Vector2(bw, 6)), ROLE_COLORS[r])
-		# what this site's genes listen to: always on, light, cold, Li short (stacked)
+		# what this site's genes listen to: always on, light, cold, Li short, mates, height, skin (stacked)
 		var reg: PackedFloat32Array = s.get("reg", PackedFloat32Array())
-		if reg.size() >= 5:
+		if reg.size() >= 7:
 			var x0 := TILE_W + 6.0
-			var cols := [Color(0.55, 0.55, 0.6), Color(1.0, 0.9, 0.35), Color(0.45, 0.75, 1.0), Color(0.85, 0.45, 0.9), Color(1.0, 0.6, 0.35)]
-			for r in 5:
+			var cols := [Color(0.55, 0.55, 0.6), Color(1.0, 0.9, 0.35), Color(0.45, 0.75, 1.0), Color(0.85, 0.45, 0.9), Color(1.0, 0.6, 0.35), Color(0.4, 0.9, 0.55), Color(0.95, 0.5, 0.6)]
+			for r in 7:
 				var w: float = 40.0 * reg[r]
 				art.draw_rect(Rect2(o + Vector2(x0, 39), Vector2(w, 4)), cols[r])
 				x0 += w

@@ -9,7 +9,7 @@ var shot := ""
 var frames := 20
 
 func _ready() -> void:
-	for path in ["res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd", "res://scripts/cell_view.gd", "res://scripts/coast_view.gd"]:
+	for path in ["res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd", "res://scripts/cell_view.gd", "res://scripts/coast_view.gd", "res://scripts/reef_view.gd"]:
 		var v: Node = load(path).new()
 		add_child(v)
 		views.append(v)
@@ -33,10 +33,17 @@ func _ready() -> void:
 			"scale": switch_to(int(kv[1]))
 			"pick": view.pick_longest()
 			"warm": view.warm(int(kv[1]))
-			"zoom": view.cam.zoom = Vector2(float(kv[1]), float(kv[1]))
+			"zoom":
+				if view.cam is Camera2D:
+					view.cam.zoom = Vector2(float(kv[1]), float(kv[1]))
+				else:
+					view.dist = float(kv[1])
 			"focus":
 				var xy := kv[1].split(",")
-				view.cam.position = Vector2(float(xy[0]), float(xy[1])) * view.CELL
+				if view.cam is Camera2D:
+					view.cam.position = Vector2(float(xy[0]), float(xy[1])) * view.CELL
+				else:
+					view.target = Vector3(float(xy[0]), view.target.y, -float(xy[1]))
 
 func switch_to(k: int) -> void:
 	view = views[k % views.size()]
