@@ -518,10 +518,8 @@ impl World {
         }
         let ka = bidx(KA).unwrap();
         let poly_cut = genes.iter().map(|g| g.func.catalysis[pair(ka, ka)]).fold(0.0, f64::max);
-        let synth_cut = genes
-            .iter()
-            .map(|g| LETTERS.iter().map(|&z| g.func.catalysis[pair(ka, bidx(z).unwrap())]).sum::<f64>() / N_LETTERS as f64)
-            .fold(0.0, f64::max);
+        let synth_cut =
+            genes.iter().map(|g| LETTERS.iter().map(|&z| g.func.catalysis[pair(ka, bidx(z).unwrap())]).sum::<f64>() / N_LETTERS as f64).fold(0.0, f64::max);
         let amph = genes.iter().map(|g| g.func.amphiphile).fold(0.0, f64::max);
         let pigment = genes.iter().map(|g| g.func.pigment).fold(0.0, f64::max);
         let info = Arc::new(GenomeInfo { genes, poly_cut, synth_cut, amph, pigment, pending });
@@ -957,7 +955,11 @@ impl World {
                 if c.free[self.comp[t as usize] as usize] == 0 {
                     break;
                 }
-                let want = if rng.chance(p_err) { (self.comp[t as usize] as usize + 1 + rng.below(N_LETTERS - 1)) % N_LETTERS } else { self.comp[t as usize] as usize };
+                let want = if rng.chance(p_err) {
+                    (self.comp[t as usize] as usize + 1 + rng.below(N_LETTERS - 1)) % N_LETTERS
+                } else {
+                    self.comp[t as usize] as usize
+                };
                 if c.free[want] == 0 {
                     break;
                 }

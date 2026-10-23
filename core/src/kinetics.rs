@@ -54,12 +54,7 @@ pub fn features(kt: f64, wet: f64, visible: f64, uv: f64) -> [f64; 4] {
 
 pub fn new_table() -> RateTable {
     RateTable::new(
-        vec![
-            Axis::new("kT", 0.85, 1.15, 6),
-            Axis::new("wet", 0.0, 1.0, 3),
-            Axis::new("visible", 0.0, 1.2, 4),
-            Axis::new("uv", 0.0, 1.6, 3),
-        ],
+        vec![Axis::new("kT", 0.85, 1.15, 6), Axis::new("wet", 0.0, 1.0, 3), Axis::new("visible", 0.0, 1.2, 4), Axis::new("uv", 0.0, 1.6, 3)],
         N_CHANNELS,
     )
 }

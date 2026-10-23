@@ -46,8 +46,21 @@ fn chem(args: &[String]) {
             let k = w.take_counts();
             println!(
                 "t={:6.2}d T={:5.1}K vis={:.2} uv={:.2} tide={:.2} | mol={} bonds={} big={} exc={} hist={:?} | form={} brk={} exch={} uvb={} | drift={}",
-                w.t_days, e.temperature_k, e.visible, e.uv, e.tide_level, c.molecules, c.bonds, c.largest, c.excited, c.size_hist,
-                k.forms, k.breaks, k.exchanges, k.uv_breaks, w.ledger.drift()
+                w.t_days,
+                e.temperature_k,
+                e.visible,
+                e.uv,
+                e.tide_level,
+                c.molecules,
+                c.bonds,
+                c.largest,
+                c.excited,
+                c.size_hist,
+                k.forms,
+                k.breaks,
+                k.exchanges,
+                k.uv_breaks,
+                w.ledger.drift()
             );
             println!("    top: {:?}", &c.top_species[..c.top_species.len().min(8)]);
         }
@@ -74,8 +87,13 @@ fn fold(args: &[String]) {
         println!("    Ka-Ka cut {:.3}  Li-Ka cut {:.3}", func.catalysis[kk], func.catalysis[kl]);
         println!(
             "{s}: E={:.2} stab={:.3} amph={:.2} pig={:.2} best cut {:.2} kT on {}-{}",
-            f.energy, func.stability, func.amphiphile, func.pigment, cut,
-            primordium_core::element::NAMES[BONDABLE[a] as usize - 1], primordium_core::element::NAMES[BONDABLE[b] as usize - 1]
+            f.energy,
+            func.stability,
+            func.amphiphile,
+            func.pigment,
+            cut,
+            primordium_core::element::NAMES[BONDABLE[a] as usize - 1],
+            primordium_core::element::NAMES[BONDABLE[b] as usize - 1]
         );
     }
 }
@@ -149,14 +167,31 @@ fn shadow(args: &[String]) {
             let detail = b.hybrid.mode.iter().filter(|m| **m == Mode::Detail).count();
             println!(
                 "t={:6.2} T={:5.1}K tide={:.2} | bonds detail={} surrogate={} | agreement {:.1}% (twin {:.1}%, frozen-null {:.1}%) | conf [{}] detail-bands={} discoveries={}",
-                a.t_days, a.env.temperature_k, a.env.tide_level, sa.iter().sum::<f64>(), sb.iter().sum::<f64>(), acc * 100.0, floor * 100.0, null * 100.0,
-                conf.join(" "), detail, b.hybrid.discoveries.entries.len()
+                a.t_days,
+                a.env.temperature_k,
+                a.env.tide_level,
+                sa.iter().sum::<f64>(),
+                sb.iter().sum::<f64>(),
+                acc * 100.0,
+                floor * 100.0,
+                null * 100.0,
+                conf.join(" "),
+                detail,
+                b.hybrid.discoveries.entries.len()
             );
         }
     }
     println!(
         "mean agreement {:.1}% | detail twin {:.1}% | frozen-null {:.1}% | relative to twin ceiling {:.1}% | speed detail {:.0} sweeps/s, hybrid {:.0} sweeps/s | ledger drift a={} b={} | lift shortfall {}",
-        100.0 * sum_acc / n, 100.0 * sum_twin / n, 100.0 * sum_null / n, 100.0 * sum_acc / sum_twin, total as f64 / ta, total as f64 / tb, a.ledger.drift(), b.ledger.drift(), b.hybrid.lift_shortfall
+        100.0 * sum_acc / n,
+        100.0 * sum_twin / n,
+        100.0 * sum_null / n,
+        100.0 * sum_acc / sum_twin,
+        total as f64 / ta,
+        total as f64 / tb,
+        a.ledger.drift(),
+        b.ledger.drift(),
+        b.hybrid.lift_shortfall
     );
 }
 
@@ -184,8 +219,22 @@ fn pool(args: &[String]) {
             let st = &p.c.stats;
             println!(
                 "t={:6.1} T={:5.1}K {} | chains={} len mean {:.1} max {} gen {} | copies={} err={:.2} breaks={} lig={} | cut {:.2} best {:.2} | folds={} exact={} nn={}",
-                p.t_days, p.env.temperature_k, if p.wet() { "wet" } else { "dry" }, n, mean_len, max_len, max_gen, st.copies,
-                st.mutations as f64 / st.copied_letters.max(1) as f64, st.breaks, st.ligations, p.c.backbone_cut(), p.ctx.best_cut, p.ctx.model.folds, p.ctx.model.exact, p.ctx.model.nearest
+                p.t_days,
+                p.env.temperature_k,
+                if p.wet() { "wet" } else { "dry" },
+                n,
+                mean_len,
+                max_len,
+                max_gen,
+                st.copies,
+                st.mutations as f64 / st.copied_letters.max(1) as f64,
+                st.breaks,
+                st.ligations,
+                p.c.backbone_cut(),
+                p.ctx.best_cut,
+                p.ctx.model.folds,
+                p.ctx.model.exact,
+                p.ctx.model.nearest
             );
             println!("    top: {:?}", p.c.top_sequences(5));
         }
@@ -215,7 +264,10 @@ fn fold_shadow(args: &[String]) {
         let funcs: Vec<Vec<f64>> = seqs.iter().map(|s| express(s, &ph, kt, 1).1.as_vec()).collect();
         let dim = funcs[0].len();
         let mean: Vec<f64> = (0..dim).map(|k| funcs.iter().map(|f| f[k]).sum::<f64>() / n as f64).collect();
-        let avg = |v: &mut dyn Iterator<Item = f64>| { let (s, c) = v.fold((0.0, 0.0), |a, x| (a.0 + x, a.1 + 1.0)); 100.0 * s / c };
+        let avg = |v: &mut dyn Iterator<Item = f64>| {
+            let (s, c) = v.fold((0.0, 0.0), |a, x| (a.0 + x, a.1 + 1.0));
+            100.0 * s / c
+        };
         let ceiling = avg(&mut seqs.iter().zip(&funcs).map(|(s, f)| agreement(f, &express(s, &ph, kt, 77).1.as_vec())));
         let null = avg(&mut funcs.iter().map(|f| agreement(f, &mean)));
         let mut row = format!("len {len:2}: ceiling {ceiling:5.1}%  null {null:5.1}%  |");
@@ -247,7 +299,8 @@ fn pond(args: &[String]) {
     let every: f64 = arg(args, "every", 5.0);
     let auto: bool = arg(args, "auto", false);
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
-    let mut p = Pond::new(PoolParams::default(), PondParams { auto, ..Default::default() }, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
+    let mut p =
+        Pond::new(PoolParams::default(), PondParams { auto, ..Default::default() }, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
     let start = Instant::now();
     let steps = (days / dt) as u64;
     let per = (every / dt) as u64;
@@ -261,12 +314,30 @@ fn pond(args: &[String]) {
             let gens: u32 = p.vesicles.iter().map(|v| v.generation).max().unwrap_or(0);
             println!(
                 "t={:6.1} T={:5.1}K {} | vesicles={} (sur {}) area {:.0} gen {} | nuc={} div={} burst={} ins={} ads={} | cut in {:.2} out {:.2} | err in {:.2} out {:.2} | outside chains {} | inside chains {} folds {} exact {} nn {} | {:.1}s",
-                p.t_days, p.env.temperature_k, if p.wet() { "wet" } else { "dry" }, n, sur, mean_area, gens, st.nucleations, st.divisions, st.bursts,
-                st.insertions, st.adsorptions, p.mean_vesicle_cut(), p.outside.backbone_cut(),
-                { let s = p.total_interior_stats(); s.mutations as f64 / s.copied_letters.max(1) as f64 },
+                p.t_days,
+                p.env.temperature_k,
+                if p.wet() { "wet" } else { "dry" },
+                n,
+                sur,
+                mean_area,
+                gens,
+                st.nucleations,
+                st.divisions,
+                st.bursts,
+                st.insertions,
+                st.adsorptions,
+                p.mean_vesicle_cut(),
+                p.outside.backbone_cut(),
+                {
+                    let s = p.total_interior_stats();
+                    s.mutations as f64 / s.copied_letters.max(1) as f64
+                },
                 p.outside.stats.mutations as f64 / p.outside.stats.copied_letters.max(1) as f64,
                 p.outside.chains.len(),
-                p.vesicles.iter().map(|v| v.interior.chains.len()).sum::<usize>(), p.ctx.model.folds, p.ctx.model.exact, p.ctx.model.nearest,
+                p.vesicles.iter().map(|v| v.interior.chains.len()).sum::<usize>(),
+                p.ctx.model.folds,
+                p.ctx.model.exact,
+                p.ctx.model.nearest,
                 start.elapsed().as_secs_f64()
             );
         }
@@ -288,20 +359,46 @@ fn pond_probe(args: &[String]) {
         p.step(0.01);
     }
     let o = &p.outside;
-    println!("outside: cells {:.0} chains {} free {:?} raw {:?} raw_ka {} cut {:.2} synth {:.2}", o.cells, o.chains.len(), o.free, o.raw, o.raw_ka, o.backbone_cut(), o.synthesis_cut());
+    println!(
+        "outside: cells {:.0} chains {} free {:?} raw {:?} raw_ka {} cut {:.2} synth {:.2}",
+        o.cells,
+        o.chains.len(),
+        o.free,
+        o.raw,
+        o.raw_ka,
+        o.backbone_cut(),
+        o.synthesis_cut()
+    );
     let mut vs: Vec<_> = p.vesicles.iter().collect();
     vs.sort_by_key(|v| -v.area());
     for v in vs.iter().take(8) {
         let i = &v.interior;
         println!(
             "v{} gen {} area {} birth {} cells {:.0} chains {} amph {:.2} free {} raw {} ka {} cut {:.2} synth {:.2} copies {} synthesized {}",
-            v.id, v.generation, v.area(), v.birth_area, i.cells, i.chains.len(), v.amph_frac(0.3), i.free.iter().sum::<i64>(), i.raw.iter().sum::<i64>(), i.raw_ka,
-            i.backbone_cut(), i.synthesis_cut(), i.stats.copies, i.stats.synthesized
+            v.id,
+            v.generation,
+            v.area(),
+            v.birth_area,
+            i.cells,
+            i.chains.len(),
+            v.amph_frac(0.3),
+            i.free.iter().sum::<i64>(),
+            i.raw.iter().sum::<i64>(),
+            i.raw_ka,
+            i.backbone_cut(),
+            i.synthesis_cut(),
+            i.stats.copies,
+            i.stats.synthesized
         );
     }
     let amph = o.chains.iter().filter(|c| c.func.amphiphile >= 0.3).count();
-    println!("outside amphiphiles {amph} of {}; amphiphile score dist: {:?}", o.chains.len(),
-        { let mut h = [0; 5]; for c in &o.chains { h[((c.func.amphiphile * 5.0) as usize).min(4)] += 1; } h });
+    println!("outside amphiphiles {amph} of {}; amphiphile score dist: {:?}", o.chains.len(), {
+        let mut h = [0; 5];
+        for c in &o.chains {
+            h[((c.func.amphiphile * 5.0) as usize).min(4)] += 1;
+        }
+        h
+    });
 }
 
 /// Selection gradient at scale 2: does interior catalysis predict vesicle growth?
@@ -319,7 +416,8 @@ fn selection(args: &[String]) {
     while p.t_days < warm {
         p.step(0.01);
     }
-    let traits: HashMap<u64, (f64, f64, f64, i64)> = p.vesicles.iter().map(|v| (v.id, (v.interior.backbone_cut(), v.interior.chains.len() as f64, v.osmotic(), v.area()))).collect();
+    let traits: HashMap<u64, (f64, f64, f64, i64)> =
+        p.vesicles.iter().map(|v| (v.id, (v.interior.backbone_cut(), v.interior.chains.len() as f64, v.osmotic(), v.area()))).collect();
     // root of each vesicle = ancestor present at snapshot
     let mut root: HashMap<u64, u64> = traits.keys().map(|&k| (k, k)).collect();
     let end = p.t_days + window;
@@ -406,10 +504,25 @@ fn pond_shadow(args: &[String]) {
             ceil += y;
             n += 1.0;
             let sur = b.vesicles.iter().filter(|v| v.mode == Mode::Surrogate).count();
-            println!("t={:6.1} agreement surrogate {:.1}% twin {:.1}% | surrogate vesicles {sur}/{} | detail {:?} surrogate {:?}", a.t_days, x * 100.0, y * 100.0, b.vesicles.len(), sa.iter().map(|v| v.round()).collect::<Vec<_>>(), sb.iter().map(|v| v.round()).collect::<Vec<_>>());
+            println!(
+                "t={:6.1} agreement surrogate {:.1}% twin {:.1}% | surrogate vesicles {sur}/{} | detail {:?} surrogate {:?}",
+                a.t_days,
+                x * 100.0,
+                y * 100.0,
+                b.vesicles.len(),
+                sa.iter().map(|v| v.round()).collect::<Vec<_>>(),
+                sb.iter().map(|v| v.round()).collect::<Vec<_>>()
+            );
         }
     }
-    println!("mean agreement {:.1}% vs twin ceiling {:.1}% = {:.1}% of ceiling | time detail {:.1}s surrogate {:.1}s", 100.0 * acc / n, 100.0 * ceil / n, 100.0 * acc / ceil, ta, tb);
+    println!(
+        "mean agreement {:.1}% vs twin ceiling {:.1}% = {:.1}% of ceiling | time detail {:.1}s surrogate {:.1}s",
+        100.0 * acc / n,
+        100.0 * ceil / n,
+        100.0 * acc / ceil,
+        ta,
+        tb
+    );
 }
 
 /// Scale-3 world of cells on the beach.
@@ -426,7 +539,14 @@ fn cells(args: &[String]) {
     let auto: bool = arg(args, "auto", true);
     let founders: usize = arg(args, "founders", 200);
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
-    let mut w = World::new(PoolParams::default(), CellParams { auto, ..Default::default() }, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed, founders);
+    let mut w = World::new(
+        PoolParams::default(),
+        CellParams { auto, ..Default::default() },
+        Cosmos::new(CosmosParams { seed, ..Default::default() }),
+        rates,
+        seed,
+        founders,
+    );
     let start = Instant::now();
     let per = (every / dt).round() as u64;
     for s in 1..=(days / dt) as u64 {
@@ -444,15 +564,39 @@ fn cells(args: &[String]) {
             let st = &w.stats;
             println!(
                 "t={:6.1} T={:5.1}K | cells {} (sur {}) gen {} div {} death {} | area {:.0} prods {:.1} free {:.0} rawka {:.0} forks {} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:.0} genes {:.1} | letter err {:.3} bit err {:.4} radmut {} | {:.1}s",
-                w.t_days, w.env.temperature_k, w.cells.len(), sur, maxgen, st.divisions, st.deaths, area, prods, free, raw, forks, ph[0], ph[1], ph[2], ph[3], ph[4], ph[5],
-                st.copy_mutations as f64 / st.copied_letters.max(1) as f64, st.bit_errors as f64 / st.bits_inherited.max(1) as f64, st.radiation_mutations, start.elapsed().as_secs_f64()
+                w.t_days,
+                w.env.temperature_k,
+                w.cells.len(),
+                sur,
+                maxgen,
+                st.divisions,
+                st.deaths,
+                area,
+                prods,
+                free,
+                raw,
+                forks,
+                ph[0],
+                ph[1],
+                ph[2],
+                ph[3],
+                ph[4],
+                ph[5],
+                st.copy_mutations as f64 / st.copied_letters.max(1) as f64,
+                st.bit_errors as f64 / st.bits_inherited.max(1) as f64,
+                st.radiation_mutations,
+                start.elapsed().as_secs_f64()
             );
         }
     }
     for d in w.ctx.discoveries.entries.iter().rev().take(5) {
         println!("discovery day {:.1} scale {}: {}", d.t_days, d.scale, d.note);
-    }    let st = &w.stats;
-    println!("transcripts ok {} junk {} short {} ({} messenger letters) | products decayed {} inserted {}", st.tx_ok, st.tx_junk, st.tx_short, st.tx_letters, st.products_decayed, st.products_inserted);
+    }
+    let st = &w.stats;
+    println!(
+        "transcripts ok {} junk {} short {} ({} messenger letters) | products decayed {} inserted {}",
+        st.tx_ok, st.tx_junk, st.tx_short, st.tx_letters, st.products_decayed, st.products_inserted
+    );
 }
 
 /// Selection gradient at scale 3: does genome phenotype predict lineage growth (descendant count)?
@@ -469,8 +613,18 @@ fn cell_selection(args: &[String]) {
     while w.t_days < warm {
         w.step(0.02);
     }
-    let snap: Vec<(u64, [f64; 5])> = w.cells.iter().map(|c| c.genome.clone()).zip(w.cells.iter().map(|c| c.id)).collect::<Vec<_>>().into_iter()
-        .map(|(g, id)| { let i = w.info(&g); (id, [i.poly_cut, i.synth_cut, i.amph, i.pigment, i.genes.len() as f64]) }).collect();
+    let snap: Vec<(u64, [f64; 5])> = w
+        .cells
+        .iter()
+        .map(|c| c.genome.clone())
+        .zip(w.cells.iter().map(|c| c.id))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|(g, id)| {
+            let i = w.info(&g);
+            (id, [i.poly_cut, i.synth_cut, i.amph, i.pigment, i.genes.len() as f64])
+        })
+        .collect();
     let mut root: HashMap<u64, u64> = snap.iter().map(|(id, _)| (*id, *id)).collect();
     let end = w.t_days + window;
     while w.t_days < end {
@@ -555,9 +709,23 @@ fn cell_shadow(args: &[String]) {
             ceil += y;
             k += 1.0;
             let sur = b.cells.iter().filter(|c| c.mode == Mode::Surrogate).count();
-            println!("t={:6.1} surrogate {:.1}% twin {:.1}% | surrogate cells {sur}/{} | detail {:?} surrogate {:?}", a.t_days, x * 100.0, y * 100.0, b.cells.len(),
-                sa.iter().map(|v| v.round()).collect::<Vec<_>>(), sb.iter().map(|v| v.round()).collect::<Vec<_>>());
+            println!(
+                "t={:6.1} surrogate {:.1}% twin {:.1}% | surrogate cells {sur}/{} | detail {:?} surrogate {:?}",
+                a.t_days,
+                x * 100.0,
+                y * 100.0,
+                b.cells.len(),
+                sa.iter().map(|v| v.round()).collect::<Vec<_>>(),
+                sb.iter().map(|v| v.round()).collect::<Vec<_>>()
+            );
         }
     }
-    println!("mean agreement {:.1}% vs twin ceiling {:.1}% = {:.1}% of ceiling | time detail {:.1}s surrogate {:.1}s", 100.0 * acc / k, 100.0 * ceil / k, 100.0 * acc / ceil, ta, tb);
+    println!(
+        "mean agreement {:.1}% vs twin ceiling {:.1}% = {:.1}% of ceiling | time detail {:.1}s surrogate {:.1}s",
+        100.0 * acc / k,
+        100.0 * ceil / k,
+        100.0 * acc / ceil,
+        ta,
+        tb
+    );
 }

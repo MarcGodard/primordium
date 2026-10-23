@@ -156,11 +156,9 @@ impl Cosmos {
         let day_phase = t.fract();
         let declination = p.obliquity * (TAU * year_phase).sin();
         let hour_angle = TAU * (day_phase - 0.5);
-        let sun_height = p.latitude.sin() * declination.sin()
-            + p.latitude.cos() * declination.cos() * hour_angle.cos();
+        let sun_height = p.latitude.sin() * declination.sin() + p.latitude.cos() * declination.cos() * hour_angle.cos();
 
-        let star_activity =
-            0.5 + 0.5 * (TAU * year / p.star_cycle_years).sin() + 0.15 * (self.noise(t, 30.0, 7) - 0.5);
+        let star_activity = 0.5 + 0.5 * (TAU * year / p.star_cycle_years).sin() + 0.15 * (self.noise(t, 30.0, 7) - 0.5);
         let flare_prob = (p.flare_rate_max * star_activity.clamp(0.05, 1.2)).min(1.0);
         let flare = self.events(t, 1.0, flare_prob, 0.04, 1, 0xF1A2);
 

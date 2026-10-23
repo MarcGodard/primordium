@@ -253,10 +253,13 @@ impl Ctx {
         }
         let jobs: Vec<(Seq, i32)> = self.pending.drain().collect();
         let ph = &self.ph;
-        let done: Vec<(Seq, i32, Function)> = jobs.into_par_iter().map(|(s, kb)| {
-            let (_, f) = express(&s, ph, kb as f64 * 0.05, 1);
-            (s, kb, f)
-        }).collect();
+        let done: Vec<(Seq, i32, Function)> = jobs
+            .into_par_iter()
+            .map(|(s, kb)| {
+                let (_, f) = express(&s, ph, kb as f64 * 0.05, 1);
+                (s, kb, f)
+            })
+            .collect();
         let ka = bidx(KA).unwrap();
         for (s, kb, f) in done {
             let cut = f.catalysis.get(pair(ka, ka)).copied().unwrap_or(0.0);
@@ -265,7 +268,14 @@ impl Ctx {
                 let n = self.discoveries.entries.len();
                 self.discoveries.log(
                     n,
-                    Discovery { t_days, scale: 1, region: 0, confidence: 0.0, features: vec![cut, s.len() as f64], note: format!("new best backbone catalyst {} cuts {:.2} kT", seq_string(&s), cut) },
+                    Discovery {
+                        t_days,
+                        scale: 1,
+                        region: 0,
+                        confidence: 0.0,
+                        features: vec![cut, s.len() as f64],
+                        note: format!("new best backbone catalyst {} cuts {:.2} kT", seq_string(&s), cut),
+                    },
                 );
             }
             self.model.insert(&s, kb, f);
@@ -275,7 +285,18 @@ impl Ctx {
     pub fn new(p: PoolParams, rates: RateTable, seed: u64) -> Self {
         let table = Table::new();
         let ph = LetterPhysics::new(&table);
-        Self { p, rates, ph, table, model: FunctionModel::default(), discoveries: DiscoveryLog::default(), best_cut: 0.0, rng: Rng::new(seed), next_id: 1, pending: Default::default() }
+        Self {
+            p,
+            rates,
+            ph,
+            table,
+            model: FunctionModel::default(),
+            discoveries: DiscoveryLog::default(),
+            best_cut: 0.0,
+            rng: Rng::new(seed),
+            next_id: 1,
+            pending: Default::default(),
+        }
     }
 
     /// Fresh dice, same state: shadow mode's detail twin.
@@ -309,7 +330,12 @@ impl Site {
     pub fn at(env: EnvSample, elevation: f64, shade: f64) -> Self {
         let depth = (env.tide_level - elevation).max(0.0);
         let wet = env.tide_level > elevation;
-        let x = crate::kinetics::features(env.kt, if wet { 1.0 } else { 0.0 }, env.visible * (-1.5 * depth).exp() * (1.0 - shade), env.uv * (-8.0 * depth).exp() * (1.0 - shade));
+        let x = crate::kinetics::features(
+            env.kt,
+            if wet { 1.0 } else { 0.0 },
+            env.visible * (-1.5 * depth).exp() * (1.0 - shade),
+            env.uv * (-8.0 * depth).exp() * (1.0 - shade),
+        );
         Self { env, wet, x, t_days: env.t_days }
     }
 }

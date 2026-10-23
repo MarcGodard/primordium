@@ -3,7 +3,7 @@ use godot::prelude::*;
 use primordium_core::cosmos::{Cosmos, CosmosParams};
 use primordium_core::element::NAMES;
 use primordium_core::kinetics::{BONDABLE, N_PAIRS, pair_members};
-use primordium_core::polymer::{self, LETTERS, LETTER_NAMES, seq_string};
+use primordium_core::polymer::{self, LETTER_NAMES, LETTERS, seq_string};
 use primordium_core::pool::{Pool, PoolParams};
 use primordium_core::rng::Rng;
 use primordium_core::surrogate::RateTable;
@@ -158,7 +158,12 @@ impl PoolSim {
         let mut d = VarDictionary::new();
         let Some(pool) = self.pool.as_ref() else { return d };
         // chains get new ids when they grow, break or join: follow the lineage to a descendant
-        let found = pool.c.chains.iter().find(|c| c.id as i64 == id).or_else(|| pool.c.chains.iter().filter(|c| c.parent == Some(id as u64)).max_by_key(|c| c.seq.len()));
+        let found = pool
+            .c
+            .chains
+            .iter()
+            .find(|c| c.id as i64 == id)
+            .or_else(|| pool.c.chains.iter().filter(|c| c.parent == Some(id as u64)).max_by_key(|c| c.seq.len()));
         let Some(c) = found.cloned() else { return d };
         let id = c.id as i64;
         let fold = self.fold_of(&c.seq);

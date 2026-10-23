@@ -309,7 +309,14 @@ impl ChemWorld {
                         let (bin, _) = rates.bin(&x);
                         self.hybrid.discoveries.log(
                             bin,
-                            Discovery { t_days: self.t_days, scale: 0, region: b, confidence: conf, features: x.to_vec(), note: "chemistry outside trained conditions".into() },
+                            Discovery {
+                                t_days: self.t_days,
+                                scale: 0,
+                                region: b,
+                                confidence: conf,
+                                features: x.to_vec(),
+                                note: "chemistry outside trained conditions".into(),
+                            },
                         );
                     }
                     self.hybrid.rng = Some(rng);

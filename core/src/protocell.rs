@@ -220,7 +220,20 @@ impl Pond {
         // ocean holds far more than the pond ever will: a buffer, not infinite
         let ocean = [(pp.ocean_raw * outside.cells * 200.0) as i64; N_LETTERS];
         let ocean_ka = (pp.ocean_ka * outside.cells * 200.0) as i64;
-        Self { ctx: Ctx::new(p, rates, seed), pp, outside, vesicles: Vec::new(), cosmos, env, t_days: 0.25, stats: PondStats::default(), model: vesicle_table(), learn: true, ocean, ocean_ka }
+        Self {
+            ctx: Ctx::new(p, rates, seed),
+            pp,
+            outside,
+            vesicles: Vec::new(),
+            cosmos,
+            env,
+            t_days: 0.25,
+            stats: PondStats::default(),
+            model: vesicle_table(),
+            learn: true,
+            ocean,
+            ocean_ka,
+        }
     }
 
     pub fn site(&self) -> Site {
@@ -283,7 +296,11 @@ impl Pond {
                     let before = v.interior.stats.clone();
                     surrogate_step(&mut v.interior, &self.model, &x, &mut self.ctx, dt, &mut rng);
                     let a = &v.interior.stats;
-                    self.stats.surrogate_events += (a.synthesized - before.synthesized) + (a.decayed - before.decayed) + (a.ligations - before.ligations) + (a.breaks - before.breaks) + (a.copies - before.copies);
+                    self.stats.surrogate_events += (a.synthesized - before.synthesized)
+                        + (a.decayed - before.decayed)
+                        + (a.ligations - before.ligations)
+                        + (a.breaks - before.breaks)
+                        + (a.copies - before.copies);
                 }
             }
             self.membrane_and_permeation(v, &vsite, dt, &mut rng);

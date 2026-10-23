@@ -111,7 +111,20 @@ impl CellSim {
         let rows: Vec<(u64, usize, f64, i64, Vec<u8>, Mode, f64, u32, i64, f64)> = w
             .cells
             .iter()
-            .map(|c| (c.id, c.patch, c.y, c.area(), c.genome.clone(), c.mode, c.conf, c.generation, c.products.iter().sum::<i64>(), c.fork.as_ref().map_or(0.0, |f| f.len() as f64 / c.genome.len().max(1) as f64)))
+            .map(|c| {
+                (
+                    c.id,
+                    c.patch,
+                    c.y,
+                    c.area(),
+                    c.genome.clone(),
+                    c.mode,
+                    c.conf,
+                    c.generation,
+                    c.products.iter().sum::<i64>(),
+                    c.fork.as_ref().map_or(0.0, |f| f.len() as f64 / c.genome.len().max(1) as f64),
+                )
+            })
             .collect();
         for (id, patch, y, area, genome, mode, conf, generation, prods, fork) in rows {
             let info = self.info(&genome);

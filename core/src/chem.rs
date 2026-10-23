@@ -698,7 +698,15 @@ impl ChemWorld {
                 bonds += self.hybrid.state[b].total_bonds() - self.band_state_from_atoms(b).total_bonds();
             }
         }
-        Census { molecules: members.len() as u32, bonds: bonds as u32, largest: largest as u32, size_hist, top_species: top.into_iter().take(12).collect(), excited, element_totals }
+        Census {
+            molecules: members.len() as u32,
+            bonds: bonds as u32,
+            largest: largest as u32,
+            size_hist,
+            top_species: top.into_iter().take(12).collect(),
+            excited,
+            element_totals,
+        }
     }
 }
 
