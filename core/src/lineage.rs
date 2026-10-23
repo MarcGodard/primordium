@@ -27,14 +27,16 @@ pub struct LineageSample {
     pub x: [f64; 7],
     pub divided: bool,
     pub burst: bool,
-    pub bit_errors: u64,
-    pub bits: u64,
+    /// Heritable errors and bits copied at this step's division, by source letter.
+    pub bit_errors: [u64; N_LETTERS],
+    pub bits: [u64; N_LETTERS],
 }
 
 /// What a lineage-mode cell needs: its fate over the full feature set, and copy fidelity over
 /// (kT, polymerase) only. Fidelity is learned at divisions, which are rare per bin; on the full
 /// grid most bins fell back to a pooled rate skewed by the error-prone early days (1.5x too many
-/// errors).
+/// errors). Fidelity is per source letter: radiation leaves non-canonical letters that pair
+/// weakly and are miscopied ~10x as often, which partly undoes the damage.
 #[derive(Clone, Debug)]
 pub struct LineageModel {
     pub fate: RateTable,
@@ -58,7 +60,7 @@ impl Default for LineageModel {
         );
         // divisions are a few per cell-week: a bin needs many cell-steps to hold a rate
         fate.samples_for_confidence = 300.0;
-        let fidelity = RateTable::new(vec![Axis::new("kT", 0.85, 1.15, 8), Axis::new("poly", 0.0, TRAIT_MAX, 10)], 1);
+        let fidelity = RateTable::new(vec![Axis::new("kT", 0.85, 1.15, 8), Axis::new("poly", 0.0, TRAIT_MAX, 10)], N_LETTERS);
         Self { fate, fidelity }
     }
 }
@@ -70,10 +72,14 @@ impl LineageModel {
             self.fate.record_sample(&s.x);
             self.fate.record(&s.x, L_DIV, s.divided as u8 as f64, dt);
             self.fate.record(&s.x, L_BURST, s.burst as u8 as f64, dt);
-            if s.bits > 0 {
+            if s.bits.iter().any(|&b| b > 0) {
                 let f = fidelity_x(&s.x);
                 self.fidelity.record_sample(&f);
-                self.fidelity.record(&f, 0, s.bit_errors as f64, s.bits as f64);
+                for l in 0..N_LETTERS {
+                    if s.bits[l] > 0 {
+                        self.fidelity.record(&f, l, s.bit_errors[l] as f64, s.bits[l] as f64);
+                    }
+                }
             }
         }
     }
@@ -89,7 +95,7 @@ impl LineageModel {
     /// Pooled rates: fate channels, then fidelity.
     pub fn priors(&self) -> Vec<f64> {
         let mut p: Vec<f64> = (0..L_CHANNELS).map(|ch| self.fate.global_rate(ch)).collect();
-        p.push(self.fidelity.global_rate(0));
+        p.extend((0..N_LETTERS).map(|l| self.fidelity.global_rate(l)));
         p
     }
 
@@ -97,13 +103,14 @@ impl LineageModel {
         self.fate.confidence(x)
     }
 
-    /// (divisions/day, bursts/day, bit error per division) at `x`.
-    fn rates(&self, x: &[f64], prior: &[f64]) -> (f64, f64, f64) {
+    /// (divisions/day, bursts/day, bit error per copied letter by source letter) at `x`.
+    fn rates(&self, x: &[f64], prior: &[f64]) -> (f64, f64, [f64; N_LETTERS]) {
         let f = fidelity_x(x);
+        let p_bit = std::array::from_fn(|l| self.fidelity.rate_smooth(&f, l, prior[L_CHANNELS + l], 1.0, &[1]).clamp(0.0, 0.5));
         (
             self.fate.rate_smooth(x, L_DIV, prior[L_DIV], 1.0, &TRAIT_AXES).max(0.0),
             self.fate.rate_smooth(x, L_BURST, prior[L_BURST], 1.0, &TRAIT_AXES).max(0.0),
-            self.fidelity.rate_smooth(&f, 0, prior[L_CHANNELS], 1.0, &[1]).clamp(0.0, 0.5),
+            p_bit,
         )
     }
 }
@@ -206,19 +213,29 @@ impl World {
         self.t_days += dt;
     }
 
-    /// A daughter with the parent's contents, its genome copied with bit errors at `p_bit`.
+    /// A daughter with the parent's contents, its genome copied with bit errors at `p_bit` (by
+    /// source letter) and written in canonical letters, as two rounds of templated copying do.
     /// Its matter comes from the parent's patch: residues from loose monomers first, then raw
     /// atoms; if the patch cannot pay for a whole cell, there is no division.
-    fn clone_cell(&mut self, c: &mut Cell, p_bit: f64, rng: &mut Rng) -> Option<Cell> {
+    fn clone_cell(&mut self, c: &mut Cell, p_bit: [f64; N_LETTERS], rng: &mut Rng) -> Option<Cell> {
         let info = self.info(&c.genome);
         let mut genome = c.template.clone().unwrap_or_else(|| c.genome.clone());
         let mut errors = 0;
+        // canonical letter per bit: the fixed points of copying twice (Li 0, Fl 1)
+        let canon: [u8; 2] =
+            std::array::from_fn(|b| (0..N_LETTERS).find(|&l| self.comp[self.comp[l] as usize] as usize == l && self.bits[l] as usize == b).unwrap() as u8);
+        // tallied locally: a division the patch cannot pay for is retried, not counted
+        let mut by_letter = [(0u64, 0u64); N_LETTERS];
         for g in genome.iter_mut() {
-            if rng.chance(p_bit) {
-                let other: Vec<usize> = (0..N_LETTERS).filter(|&l| self.bits[l] != self.bits[*g as usize]).collect();
-                *g = other[rng.below(other.len())] as u8;
+            let src = *g as usize;
+            let mut bit = self.bits[src] as usize;
+            if rng.chance(p_bit[src]) {
+                bit ^= 1;
                 errors += 1;
+                by_letter[src].0 += 1;
             }
+            by_letter[src].1 += 1;
+            *g = canon[bit];
         }
         let dinfo = self.info(&genome);
         let mut free = c.free;
@@ -282,6 +299,10 @@ impl World {
         self.stats.births += 1;
         self.stats.bits_inherited += d.genome.len() as u64;
         self.stats.bit_errors += errors;
+        for (l, (e, n)) in by_letter.into_iter().enumerate() {
+            self.stats.errors_by_letter[l] += e;
+            self.stats.bits_by_letter[l] += n;
+        }
         Some(Cell { id, ..d })
     }
 }

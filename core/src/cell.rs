@@ -293,6 +293,12 @@ pub struct CellStats {
     pub bit_errors_on1: u64,
     #[serde(default)]
     pub ones_inherited: u64,
+    /// Heritable errors and bits inherited by the source letter copied (radiation leaves
+    /// non-canonical letters; they pair weakly and are copied worse).
+    #[serde(default)]
+    pub errors_by_letter: [u64; N_LETTERS],
+    #[serde(default)]
+    pub bits_by_letter: [u64; N_LETTERS],
     pub tx_ok: u64,
     pub tx_junk: u64,
     pub tx_short: u64,
@@ -648,14 +654,14 @@ impl World {
         // divide (indices stable: we only append)
         let mut daughters = Vec::new();
         for &ci in &born {
-            let (e0, b0) = (self.stats.bit_errors, self.stats.bits_inherited);
+            let (e0, b0) = (self.stats.errors_by_letter, self.stats.bits_by_letter);
             if let Some(d) = self.divide(&mut cells[ci], &mut rng) {
                 daughters.push(d);
                 if logging {
                     let s = &mut samples[ci];
                     s.divided = true;
-                    s.bit_errors = self.stats.bit_errors - e0;
-                    s.bits = self.stats.bits_inherited - b0;
+                    s.bit_errors = std::array::from_fn(|l| self.stats.errors_by_letter[l] - e0[l]);
+                    s.bits = std::array::from_fn(|l| self.stats.bits_by_letter[l] - b0[l]);
                 }
             }
         }
@@ -1026,6 +1032,11 @@ impl World {
         let same = genome.len().min(source.len());
         self.stats.bits_inherited += same as u64;
         self.stats.bit_errors += (0..same).filter(|&i| self.bits[genome[i] as usize] != self.bits[source[i] as usize]).count() as u64;
+        for i in 0..same {
+            let l = source[i] as usize;
+            self.stats.bits_by_letter[l] += 1;
+            self.stats.errors_by_letter[l] += (self.bits[genome[i] as usize] != self.bits[l]) as u64;
+        }
         let ones: Vec<usize> = (0..same).filter(|&i| self.bits[source[i] as usize] == 1).collect();
         self.stats.ones_inherited += ones.len() as u64;
         self.stats.bit_errors_on1 += ones.iter().filter(|&&i| self.bits[genome[i] as usize] == 0).count() as u64;

@@ -28,7 +28,6 @@ fn main() {
         "cell-shadow" => cell_shadow(&args),
         "coast" => coast(&args),
         "coast-shadow" => coast_shadow(&args),
-        "coast-price" => coast_price(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -881,10 +880,26 @@ fn coast_shadow(args: &[String]) {
     let (ea0, eb0) = (errs(&a), errs(&b));
     if std::env::var("DIAG").is_ok() {
         let e = errs(&a);
-        println!("fidelity table pooled {:.4}; detail lifetime bit error {:.4}", b.model.fidelity.global_rate(0), e.0 as f64 / e.1.max(1) as f64);
+        println!("detail lifetime bit error {:.4}", e.0 as f64 / e.1.max(1) as f64);
         let (e1, n1) = a.sites.iter().fold((0, 0), |acc, s| (acc.0 + s.world.stats.bit_errors_on1, acc.1 + s.world.stats.ones_inherited));
         let (et, nt) = (e.0, e.1);
         println!("   detail spectrum: error on 1-bits {:.4}, on 0-bits {:.4}", e1 as f64 / n1.max(1) as f64, (et - e1) as f64 / (nt - n1).max(1) as f64);
+        let mut el = [0u64; 5];
+        let mut bl = [0u64; 5];
+        for s in &a.sites {
+            for l in 0..5 {
+                el[l] += s.world.stats.errors_by_letter[l];
+                bl[l] += s.world.stats.bits_by_letter[l];
+            }
+        }
+        let letters: Vec<u8> = a.sites[6].world.cells.iter().flat_map(|c| c.genome.clone()).collect();
+        let comp: Vec<usize> = (0..5).map(|l| letters.iter().filter(|&&g| g as usize == l).count()).collect();
+        println!(
+            "   by source letter (Hy Li Bo Ox Fl): error {:?} share {:?} | genome letters now {:?}",
+            (0..5).map(|l| format!("{:.3}", el[l] as f64 / bl[l].max(1) as f64)).collect::<Vec<_>>(),
+            bl,
+            comp
+        );
         for (k, name) in [(3, "poly"), (4, "synth"), (5, "amph"), (6, "age")] {
             let f = |v: Vec<f64>| v.iter().map(|x| format!("{x:.3}")).collect::<Vec<_>>().join(" ");
             println!("   {name:5} div/day [{}]  burst/day [{}]", f(b.model.fate.marginal(k, 0)), f(b.model.fate.marginal(k, 1)));
@@ -978,71 +993,4 @@ fn coast_shadow(args: &[String]) {
         b.stats.lifts,
         drift
     );
-}
-
-/// Price decomposition on the coast's membrane and polymerase traits: selection (dividing
-/// parents vs population) and transmission (daughter vs parent), detail vs lineage mode.
-fn coast_price(args: &[String]) {
-    use primordium_core::coast::{Coast, CoastParams};
-    use primordium_core::hybrid::Mode;
-    use primordium_core::surrogate::RateTable;
-    use std::collections::HashMap;
-    let warm: f64 = arg(args, "warm", 120.0);
-    let days: f64 = arg(args, "days", 10.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
-    let mut a = Coast::new(CoastParams::default(), CosmosParams::default(), rates, 1);
-    while a.t_days < warm {
-        a.step(0.02);
-    }
-    a.learn = false;
-    let mut b = a.clone();
-    b.set_mode(Mode::Surrogate);
-    b.cp.lift_below = 0.0;
-    b.reseed(0x5EED);
-    for (name, c) in [("detail", &mut a), ("lineage", &mut b)] {
-        // trait sums: (pop mean accum, parents, parent->daughter delta), for amph and poly
-        let (mut pop, mut npop) = ([0.0; 2], 0.0);
-        let (mut par, mut dlt, mut n) = ([0.0; 2], [0.0; 2], 0.0);
-        let end = c.t_days + days;
-        while c.t_days < end {
-            let mut before: HashMap<u64, [f64; 2]> = HashMap::new();
-            for s in c.sites.iter_mut() {
-                let w = &mut s.world;
-                let ids: Vec<(u64, Vec<u8>)> = w.cells.iter().map(|c| (c.id, c.genome.clone())).collect();
-                for (id, g) in ids {
-                    let i = w.info(&g);
-                    before.insert(id, [i.amph, i.poly_cut]);
-                    pop[0] += i.amph;
-                    pop[1] += i.poly_cut;
-                    npop += 1.0;
-                }
-            }
-            c.step(0.02);
-            for s in c.sites.iter_mut() {
-                let w = &mut s.world;
-                let kids: Vec<(u64, Vec<u8>)> =
-                    w.cells.iter().filter(|c| !before.contains_key(&c.id)).filter_map(|c| c.parent.map(|p| (p, c.genome.clone()))).collect();
-                for (p, g) in kids {
-                    let Some(pz) = before.get(&p) else { continue };
-                    let i = w.info(&g);
-                    par[0] += pz[0];
-                    par[1] += pz[1];
-                    dlt[0] += i.amph - pz[0];
-                    dlt[1] += i.poly_cut - pz[1];
-                    n += 1.0;
-                }
-            }
-        }
-        println!(
-            "{name:8} births {n:.0} | amph: population {:.4} parents {:.4} (selection {:+.4}) daughter-parent {:+.4} | poly: population {:.4} parents {:.4} (selection {:+.4}) daughter-parent {:+.4}",
-            pop[0] / npop,
-            par[0] / n,
-            par[0] / n - pop[0] / npop,
-            dlt[0] / n,
-            pop[1] / npop,
-            par[1] / n,
-            par[1] / n - pop[1] / npop,
-            dlt[1] / n
-        );
-    }
 }
