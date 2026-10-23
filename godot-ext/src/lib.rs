@@ -7,6 +7,7 @@ use primordium_core::hybrid::Mode;
 use primordium_core::surrogate::RateTable;
 
 mod cell_sim;
+mod coast_sim;
 mod pond_sim;
 mod pool_sim;
 

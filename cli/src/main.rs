@@ -26,6 +26,7 @@ fn main() {
         "cells" => cells(&args),
         "cell-selection" => cell_selection(&args),
         "cell-shadow" => cell_shadow(&args),
+        "coast" => coast(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -797,4 +798,46 @@ fn cell_shadow(args: &[String]) {
         ta,
         tb
     );
+}
+
+/// Scale-4 coastline: per-site populations and phenotypes along a latitude gradient.
+fn coast(args: &[String]) {
+    use primordium_core::coast::{Coast, CoastParams};
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 200.0);
+    let every: f64 = arg(args, "every", 50.0);
+    let sites: usize = arg(args, "sites", 12);
+    let seed: u64 = arg(args, "seed", 1);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let mut c = Coast::new(CoastParams { sites, ..Default::default() }, CosmosParams { seed, ..Default::default() }, rates, seed);
+    let start = Instant::now();
+    let m0 = c.matter();
+    let mut next = every;
+    while c.t_days < days {
+        c.step(0.02);
+        if c.t_days >= next {
+            next += every;
+            println!("t={:6.1} cells {} migrations {} | {:.1}s", c.t_days, c.cells(), c.stats.migrations, start.elapsed().as_secs_f64());
+            for s in c.sites.iter_mut() {
+                let w = &mut s.world;
+                let ph = w.phenotype_means();
+                let st = &w.stats;
+                println!(
+                    "   lat {:+5.2} tide x{:.2} T {:5.1}K | cells {:3} gen {:3} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:3.0} | bit err {:.3}",
+                    s.latitude,
+                    s.tide_scale,
+                    w.env.temperature_k,
+                    w.cells.len(),
+                    w.cells.iter().map(|c| c.generation).max().unwrap_or(0),
+                    ph[0],
+                    ph[1],
+                    ph[2],
+                    ph[3],
+                    ph[4],
+                    st.bit_errors as f64 / st.bits_inherited.max(1) as f64
+                );
+            }
+        }
+    }
+    println!("matter drift: {}", if c.matter() == m0 { "0" } else { "NONZERO" });
 }

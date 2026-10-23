@@ -45,6 +45,9 @@ pub struct PoolParams {
     /// Side-group atoms and Ka atoms not yet joined into monomers.
     pub raw: [i64; N_LETTERS],
     pub raw_ka: i64,
+    /// First id handed out: worlds that exchange cells use disjoint id ranges.
+    #[serde(default)]
+    pub id_base: u64,
 }
 
 impl Default for PoolParams {
@@ -61,6 +64,7 @@ impl Default for PoolParams {
             fold_below: 0.9,
             raw: [600, 600, 400, 400, 600],
             raw_ka: 2600,
+            id_base: 0,
         }
     }
 }
@@ -294,6 +298,7 @@ impl Ctx {
     }
 
     pub fn new(p: PoolParams, rates: RateTable, seed: u64) -> Self {
+        let id0 = p.id_base.max(1);
         let table = Table::new();
         let ph = LetterPhysics::new(&table);
         Self {
@@ -305,7 +310,7 @@ impl Ctx {
             discoveries: DiscoveryLog::default(),
             best_cut: 0.0,
             rng: Rng::new(seed),
-            next_id: 1,
+            next_id: id0,
             pending: Default::default(),
         }
     }

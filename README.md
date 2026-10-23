@@ -17,7 +17,8 @@ The chemistry is invented, not ours: elements come from a shell rule with capaci
 | 0 Chemistry | Lattice Monte-Carlo: bonds, exchange, weak pairing, photons, hydration | done |
 | 1 Polymers | Sequence-defined chains, lattice folding, pocket catalysis, templated copying | done |
 | 2 Protocells | Amphiphile vesicles with interior metabolism, growth, division | done |
-| 3 Cells | Binary genome, genetic code, expression, gated division, radiation mutation | done |
+| 3 Cells | Binary genome, genetic code, expression, gated division, proofreading, radiation mutation | done |
+| 4 Coast | Beaches along a latitude gradient, linked by along-shore currents | detail done, lineage surrogate next |
 
 Each scale's surrogate is measured against a "twin": the same detailed model with different dice. Agreement as a share of that ceiling (latest runs): scale 0 ~99% (10-day mean over 6 seeds), scale 1 95-104% (blend of cached relatives), scale 2 ~99-100%, scale 3 ~100%. A mean-field surrogate can sit at or above the ceiling because it carries less noise than a second detailed run.
 
@@ -27,6 +28,8 @@ Each scale's surrogate is measured against a "twin": the same detailed model wit
 - Eigen's error threshold appears unprompted: catalysts cannot be inherited until a polymerase pocket raises copy fidelity.
 - Compartments alone do not select catalysts; division gated on genome copying does.
 - The pairing chemistry forces a binary heritable alphabet, so cells need a genetic code to reach the 5-letter working alphabet.
+- Proofreading that needs the polymerase pocket (clipping is the pocket's reverse reaction) makes polymerase quality the strongest target of selection.
+- Copy errors come mostly from a scarce monomer: less crowded beaches copy 2-4x more faithfully, and cold polar beaches most of all.
 
 ## Environment: change drives evolution
 
@@ -41,6 +44,6 @@ cargo build --release -p primordium-godot
 godot --path godot          # Godot 4.7
 ```
 
-Viewer: Tab cycles scales (chemistry, polymers, protocells, cells). Mouse wheel zooms, right-drag pans, left-click inspects and drills down (cell -> gene -> fold -> residue atoms), space pauses, 1-5 sets speed, A toggles automatic resolution.
+Viewer: Tab cycles scales (chemistry, polymers, protocells, cells, coast). Mouse wheel zooms, right-drag pans, left-click inspects and drills down (cell -> gene -> fold -> residue atoms), space pauses, 1-5 sets speed, A toggles automatic resolution.
 
 Headless experiments: `train`, `shadow`, `pool`, `fold-shadow`, `pond`, `pond-shadow`, `selection`, `cells`, `cell-shadow`, `cell-selection` (see `cli/src/main.rs`).
