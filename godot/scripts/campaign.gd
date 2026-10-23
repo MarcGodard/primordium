@@ -182,19 +182,24 @@ func field_note(title: String, text: String) -> void:
 
 ## Latin-sounding names from numbers: a genus per founding lineage (relatives share it, as in
 ## real taxonomy), an epithet per genome (any mutation can make a new species name).
-const SYL_A := ["ve", "lo", "ta", "ri", "co", "mu", "sa", "ne", "tho", "ka", "pe", "lu", "di", "o", "zy", "fa"]
+const SYL_A := ["ve", "lo", "ta", "ri", "co", "mu", "sa", "ne", "tho", "ka", "pe", "lu", "di", "no", "zy", "fa"]
 const SYL_B := ["ra", "li", "na", "do", "ve", "si", "mo", "the", "ca", "lo", "ru", "pi", "xe", "ga", "tu", "ne"]
-const GENUS_END := ["ia", "us", "ella", "ops", "ora", "ium", "ax", "ina"]
-const EPITHET_END := ["is", "ensis", "ata", "oides", "ulus", "ea", "ans", "ifer"]
+const GENUS_END := ["ria", "nus", "lla", "ps", "ra", "rium", "x", "na"]
+const EPITHET_END := ["ris", "nsis", "ta", "noides", "lus", "rea", "ns", "fer"]
 
+## One genus per lineage, never shared by two (16 x 16 x 8 = 2048 names, more than any reef's
+## founders): the lineage number goes through a bijection on 0..2047, then mixed-radix digits.
 static func genus_of(lineage: int) -> String:
-	var h := hash(lineage * 7919 + 17)
-	var g: String = SYL_A[h & 15] + SYL_B[(h >> 4) & 15] + GENUS_END[(h >> 8) & 7]
-	return g.capitalize()
+	var n := (posmod(lineage, 2048) * 1237 + 89) % 2048
+	return (SYL_A[n % 16] + SYL_B[(n / 16) % 16] + GENUS_END[n / 256]).capitalize()
 
+## Epithet from the genome: FNV-1a (stable across Godot versions, unlike hash()), three
+## syllables and an ending, 32768 names.
 static func epithet_of(genome: PackedByteArray) -> String:
-	var h := hash(genome)
-	return SYL_B[h & 15] + SYL_A[(h >> 4) & 15] + EPITHET_END[(h >> 8) & 7]
+	var h := 2166136261
+	for b in genome:
+		h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+	return SYL_B[h & 15] + SYL_A[(h >> 4) & 15] + SYL_B[(h >> 8) & 15] + EPITHET_END[(h >> 12) & 7]
 
 ## Shape for the save: positions as whole lattice steps, traits to 2 decimals.
 static func _compact(a) -> Array:

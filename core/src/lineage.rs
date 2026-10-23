@@ -20,9 +20,7 @@ pub const L_CHANNELS: usize = 2;
 
 const AGE_MAX: f64 = 20.0;
 const RAW_MAX: f64 = 0.8;
-/// Li's index among the letters (Hy, Li, Bo, Ox, Fl), and a scale putting its patch
-/// concentration on the food axis.
-const LI: usize = 1;
+/// Scale putting the food letter's patch concentration on the food axis.
 const LI_SCALE: f64 = 4.0;
 /// kT span of the coast: polar winters reach ~0.80 (cells at 0.85 left the table every year).
 const KT_LO: f64 = 0.78;
@@ -193,7 +191,8 @@ impl World {
         // food is the scarce genome partner, not raw Ka: division waits on Li for the second
         // strand (shadow agreement 94.9% -> 98.2% of ceiling with this one change)
         let p = &self.patches[c.patch];
-        let li = (p.raw[LI] + p.free[LI]) as f64 / self.cp.patch_cells;
+        let food = crate::cell::genetic_code().food as usize;
+        let li = (p.raw[food] + p.free[food]) as f64 / self.cp.patch_cells;
         // traits as currently switched on, so promoters count in lineage fitness too
         let traits = regulated_traits(info, regulation_signals(c, light, site.env.kt, self.cp.colony_max));
         lineage_x(site.env.kt, site.wet, li, traits, self.t_days - c.born, self.daylight)

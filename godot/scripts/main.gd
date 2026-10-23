@@ -121,6 +121,9 @@ func _ready() -> void:
 			"skins":
 				if "skin_all" in view:
 					view.skin_all = kv[1] == "1"
+			"expedition":
+				if view.has_method("start_expedition"):
+					view.start_expedition()
 			"keep":
 				if view.has_method("keep_selected"):
 					view.keep_selected()

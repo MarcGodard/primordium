@@ -35,9 +35,6 @@ pub const CELL_RISE: f64 = 0.012;
 const DIRS: [[i32; 3]; 6] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 /// Founder body size cap, letters.
 const FOUNDER_MASS: f64 = 120.0;
-/// Li's index among the letters (Hy, Li, Bo, Ox, Fl).
-const LI: usize = 1;
-
 /// What the coast hands the reef: its learned lineage model (how a cell with given traits
 /// fares in given conditions) and founder cells drawn from its evolved population.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1234,7 +1231,8 @@ fn live(o: &mut Organism, sh: &Shared, dt: f64, rng: &mut Rng) -> (Vec<usize>, u
         ty as usize * width as usize + tx as usize
     };
     let home = &sh.tiles[tile_of(o.cells[0].pos)];
-    let li = (home.raw[LI] + home.free[LI]) as f64 / sh.rp.tile_cells;
+    let food = crate::cell::genetic_code().food as usize;
+    let li = (home.raw[food] + home.free[food]) as f64 / sh.rp.tile_cells;
     let mates = (n - 1) as f64 / sh.rp.mates_full.max(1.0);
     let mut dead = Vec::new();
     let mut unsure = 0;

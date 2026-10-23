@@ -602,7 +602,7 @@ impl ReefSim {
                 Signal::None => "",
                 Signal::Light => "light",
                 Signal::Cold => "cold",
-                Signal::LiScarce => "Li short",
+                Signal::LiScarce => "food short",
                 Signal::Mates => "size",
                 Signal::Height => "height",
                 Signal::Exposure => "skin",

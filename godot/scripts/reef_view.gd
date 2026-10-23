@@ -91,6 +91,11 @@ var campaign: Node
 var names := {}
 ## Garden lineages that are the player's creatures (kept, not wild offshoots): always saved.
 var mine := {}
+## Garden lineage number -> genus: kept from the creature it began with, so a body kept again
+## from that lineage is named in the same genus.
+var genera := {}
+## Today's expedition (YYYYMMDD) while this reef is one, else 0.
+var expedition := 0
 ## Saved lineages that could not be released this session: carried over to the next save.
 var unplaced := []
 var save_timer := 0.0
@@ -375,6 +380,8 @@ func _populate() -> void:
 			var c: int = sim.release(PackedByteArray(g.genome), PackedInt64Array(g.mass), n)
 			if c >= 0:
 				names[c] = g.name
+				if g.has("genus"):
+					genera[c] = g.genus
 				if not str(g.name).begins_with("Wild-"):
 					mine[c] = true
 			elif not str(g.name).begins_with("Wild-"):
@@ -408,6 +415,8 @@ func _release_kept() -> void:
 		if c >= 0:
 			k.released = true
 			names[c] = k.name
+			if k.has("species"):
+				genera[c] = str(k.species).get_slice(" ", 0)
 			mine[c] = true
 			arrived.append(k.name)
 		else:
@@ -522,7 +531,10 @@ func save_garden() -> void:
 			if not names.has(int(l.lineage)):
 				campaign.state.wild = int(campaign.state.get("wild", 0)) + 1
 				names[int(l.lineage)] = "Wild-%d" % campaign.state.wild
-		out.append({"name": names[int(l.lineage)], "genome": Array(l.genome), "mass": Array(l.mass), "cells": l.cells})
+		var rec := {"name": names[int(l.lineage)], "genome": Array(l.genome), "mass": Array(l.mass), "cells": l.cells}
+		if genera.has(int(l.lineage)):
+			rec["genus"] = genera[int(l.lineage)]
+		out.append(rec)
 	out.append_array(unplaced)
 	campaign.state.garden = out
 	campaign.state.saved_at = Time.get_unix_time_from_system()
@@ -532,26 +544,58 @@ func save_garden() -> void:
 func keep_selected() -> void:
 	if campaign == null or organism.is_empty() or sim.busy():
 		return
-	var name: String = campaign.keep(organism, "your world" if garden else "reef run %d" % campaign.state.run)
+	var org := organism.duplicate()
+	if garden and genera.has(int(organism.lineage)):
+		org["genus"] = genera[int(organism.lineage)]
+	var name: String = campaign.keep(org, "your world" if garden else where())
 	if name == "":
 		return
 	var what := "a creature" if organism.creature else "%d cells, %d jobs" % [organism.cells, organism.jobs]
 	campaign.toast.emit("Kept " + name + " (" + what + ")", "It will be released in your world (8 in the hub). Keep several and see who survives.", Color(0.75, 1.0, 0.55))
+
+## Where a body on this reef comes from, for kept creatures and the HUD.
+func where() -> String:
+	if garden:
+		return "your world"
+	if expedition > 0:
+		return "the expedition of %s" % _date_text(expedition)
+	return "reef run %d" % (campaign.state.run if campaign else 1)
+
+static func _date_text(d: int) -> String:
+	return "%04d-%02d-%02d" % [d / 10000, (d / 100) % 100, d % 100]
+
+## Today's expedition: a reef seeded by the date, the same for everyone who plays today.
+func start_expedition() -> void:
+	if campaign == null or garden or sim.busy():
+		return
+	# UTC: one day's reef for every player, wherever they are
+	var t := Time.get_date_dict_from_system(true)
+	var day: int = t.year * 10000 + t.month * 100 + t.day
+	_restart(day)
+	expedition = day
+	var first: bool = int(campaign.state.get("expedition_day", 0)) != day
+	campaign.state["expedition_day"] = day
+	campaign.save()
+	campaign.toast.emit("Expedition of %s" % _date_text(day), ("A new reef appears every day, the same for every player. " if first else "Back on today's reef, from its start. ") + "Find its creatures and keep them.", Color(0.5, 0.85, 1.0))
+
+func _restart(run_seed: int) -> void:
+	for id in skins:
+		skins[id].queue_free()
+	skins.clear()
+	ok = sim.start(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), run_seed)
+	selected = -1
+	organism = {}
+	history = PackedFloat32Array()
+	if ok:
+		sim.step(1, DT)
 
 ## A fresh reef from the same founders with new dice: another try at a creature.
 func new_run() -> void:
 	if campaign == null or garden or sim.busy():
 		return
 	var run: int = campaign.new_run()
-	for id in skins:
-		skins[id].queue_free()
-	skins.clear()
-	ok = sim.start(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), run)
-	selected = -1
-	organism = {}
-	history = PackedFloat32Array()
-	if ok:
-		sim.step(1, DT)
+	expedition = 0
+	_restart(run)
 	campaign.toast.emit("Run %d" % run, "A new reef from the same founders. Different dice, different history.", Color(1.0, 0.5, 0.65))
 
 func _notification(what: int) -> void:
@@ -821,7 +865,10 @@ func _unhandled_input(e: InputEvent) -> void:
 					keep_selected()
 			KEY_N:
 				if not e.echo:
-					new_run()
+					if e.shift_pressed:
+						start_expedition()
+					else:
+						new_run()
 			KEY_G:
 				if not e.echo:
 					next_creature()
@@ -867,7 +914,7 @@ func hud_text() -> String:
 	if stats.is_empty():
 		return ""
 	var t := "[b]%s[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\ncrawling: %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
-		"Your world" if garden else "Reef, run %d" % (campaign.state.run if campaign else 1), env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
+		"Your world" if garden else ("Expedition " + _date_text(expedition) if expedition > 0 else "Reef, run %d" % (campaign.state.run if campaign else 1)), env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
 		stats.adrift, stats.spores, stats.tears, stats.bites, stats.bit_error * 100.0]
 	if not by_lineage:
 		t += "[color=#9ab]tint (C for lineage): [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nshimmering with a green rim: a crawling body\nred flash: a bite[/color]\n"
@@ -888,7 +935,7 @@ func hud_text() -> String:
 		t += "[color=#cbf]" + d + "[/color]\n"
 	if garden and stats.cells == 0:
 		t += "[color=#f9c]Nothing alive here. Keep creatures at the reef (K) to release them.[/color]\n"
-	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ["" if garden else ", N new run", "\nL environment levers" if garden else ""]
+	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ["" if garden else ", N new run\nShift+N today's expedition (the same reef for everyone today)", "\nL environment levers" if garden else ""]
 	return t
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.

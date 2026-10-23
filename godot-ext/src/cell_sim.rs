@@ -214,7 +214,7 @@ impl CellSim {
                 Signal::None => String::new(),
                 Signal::Light => "light".into(),
                 Signal::Cold => "cold".into(),
-                Signal::LiScarce => "Li short".into(),
+                Signal::LiScarce => format!("{} short", polymer::LETTER_NAMES[primordium_core::cell::genetic_code().food as usize]),
                 Signal::Mates => "mates".into(),
                 Signal::Height => "height".into(),
                 Signal::Exposure => "skin".into(),

@@ -27,7 +27,7 @@ use crate::copying::{COPY_CHANNELS, Copier, LearnedCopy, PairTally};
 use crate::cosmos::{Cosmos, EnvSample};
 use crate::hybrid::Mode;
 use crate::kinetics::{CH_BREAK, bidx, pair};
-use crate::polymer::{Function, LETTERS, N_LETTERS, Seq, seq_string};
+use crate::polymer::{self, Function, LETTERS, N_LETTERS, Seq, seq_string};
 use crate::pool::{Ctx, DRY_PAIR_GAIN, FIDELITY_PER_CUT, KA, PoolParams, Site};
 use crate::rng::Rng;
 use crate::surrogate::{Axis, Discovery, RateTable};
@@ -35,9 +35,69 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Codon (3 bits, first letter most significant) -> product letter; None = stop.
-/// Letters: 0 h, 1 l, 2 b, 3 o, 4 f.
-pub const CODE: [Option<u8>; 8] = [Some(0), Some(1), Some(2), Some(3), Some(4), Some(1), None, None];
+/// Letters per codon: the fewest binary digits that name every working letter plus a stop.
+pub const CODON: usize = codon_len(N_LETTERS);
+/// Codons in the table: `1 << CODON`.
+pub const CODONS: usize = 1 << CODON;
+
+const fn codon_len(n: usize) -> usize {
+    let mut w = 1;
+    while (1usize << w) < n + 1 {
+        w += 1;
+    }
+    w
+}
+
+/// The genetic code this table's chemistry implies, derived once from the elements.
+#[derive(Clone, Debug)]
+pub struct GeneticCode {
+    /// The heritable letters by bit: what any letter becomes after enough double copies.
+    pub canon: [u8; 2],
+    /// Bit-0 letter: the synonym codons code for it, so products need it most and it runs short
+    /// first (Li in the [2, 6] world).
+    pub food: u8,
+    /// Codon (CODON bits, first letter most significant) -> product letter; None = stop.
+    pub table: [Option<u8>; CODONS],
+}
+
+impl GeneticCode {
+    /// Codons 0..N name the letters in order, the last quarter (at least one) are stops, any
+    /// left between are synonyms, from the food letter on. For [2, 6]: [h, l, b, o, f, l, -, -].
+    pub fn derive(comp: &[u8; N_LETTERS]) -> Self {
+        let canon = canonical(comp);
+        let food = canon[0];
+        // every letter keeps a codon: stops give way when the table is nearly full
+        let stops = (CODONS / 4).max(1).min(CODONS - N_LETTERS);
+        let mut table = [None; CODONS];
+        for (k, slot) in table.iter_mut().enumerate().take(CODONS - stops) {
+            *slot = Some(if k < N_LETTERS { k as u8 } else { ((food as usize + k - N_LETTERS) % N_LETTERS) as u8 });
+        }
+        Self { canon, food, table }
+    }
+}
+
+/// Heritable letters: iterate double copying to its fixed set. Copying pairs each letter with
+/// its strongest partner; scales 1+ need exactly two survivors (a binary genome).
+fn canonical(comp: &[u8; N_LETTERS]) -> [u8; 2] {
+    let mut alive: Vec<u8> = (0..N_LETTERS as u8).collect();
+    loop {
+        let mut next: Vec<u8> = alive.iter().map(|&x| comp[comp[x as usize] as usize]).collect();
+        next.sort_unstable();
+        next.dedup();
+        if next == alive {
+            break;
+        }
+        alive = next;
+    }
+    assert!(alive.len() == 2, "heritable alphabet of {} letters: scales 1+ read binary genomes", alive.len());
+    [alive[0], alive[1]]
+}
+
+/// This world's genetic code (its table of elements decides it).
+pub fn genetic_code() -> &'static GeneticCode {
+    static CODE: std::sync::OnceLock<GeneticCode> = std::sync::OnceLock::new();
+    CODE.get_or_init(|| GeneticCode::derive(&complement_of(&polymer::LetterPhysics::new(&crate::element::Table::new()))))
+}
 pub const MIN_GENE_CODONS: usize = 4;
 pub const MAX_GENE_CODONS: usize = 40;
 /// Product copies each founder inherits from its protocell ancestry.
@@ -175,40 +235,46 @@ pub struct GenomeInfo {
 
 /// Exact complement under scale-1 pairing: each letter's strongest partner.
 pub fn complement_table(ctx: &Ctx) -> [u8; N_LETTERS] {
+    complement_of(&ctx.ph)
+}
+
+fn complement_of(ph: &polymer::LetterPhysics) -> [u8; N_LETTERS] {
     let mut c = [0u8; N_LETTERS];
     for (t, slot) in c.iter_mut().enumerate() {
-        *slot = (0..N_LETTERS).max_by(|&a, &b| ctx.ph.pair[t][a].total_cmp(&ctx.ph.pair[t][b])).unwrap() as u8;
+        *slot = (0..N_LETTERS).max_by(|&a, &b| ph.pair[t][a].total_cmp(&ph.pair[t][b])).unwrap() as u8;
     }
     c
 }
 
-/// Heritable bit of each letter: what it becomes after two rounds of copying (Li 0, Fl 1).
+/// Heritable bit of each letter: what it becomes after two rounds of copying (in [2, 6]: Li 0,
+/// Fl 1).
 pub fn bit_table(comp: &[u8; N_LETTERS]) -> [u8; N_LETTERS] {
-    let (l, f) = (1u8, 4u8);
+    let canon = canonical(comp);
     let mut b = [0u8; N_LETTERS];
     for x in 0..N_LETTERS {
         let twice = comp[comp[x] as usize];
-        debug_assert!(twice == l || twice == f, "double copy lands in the binary alphabet");
-        b[x] = (twice == f) as u8;
+        debug_assert!(canon.contains(&twice), "double copy lands in the binary alphabet");
+        b[x] = (twice == canon[1]) as u8;
     }
     b
 }
 
 fn codon(genome: &[u8], at: usize, bits: &[u8; N_LETTERS]) -> usize {
-    (bits[genome[at] as usize] as usize) << 2 | (bits[genome[at + 1] as usize] as usize) << 1 | bits[genome[at + 2] as usize] as usize
+    (0..CODON).fold(0, |c, i| c << 1 | bits[genome[at + i] as usize] as usize)
 }
 
 /// Genes: reading-frame runs of non-stop codons, MIN..=MAX codons long. Spans in letters.
 pub fn gene_spans(genome: &[u8], bits: &[u8; N_LETTERS]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
-    let codons = genome.len() / 3;
+    let code = &genetic_code().table;
+    let codons = genome.len() / CODON;
     let mut start = 0;
     for k in 0..=codons {
-        let stop = k == codons || CODE[codon(genome, 3 * k, bits)].is_none();
+        let stop = k == codons || code[codon(genome, CODON * k, bits)].is_none();
         if stop {
             let n = k - start;
             if (MIN_GENE_CODONS..=MAX_GENE_CODONS).contains(&n) {
-                out.push((3 * start, 3 * k));
+                out.push((CODON * start, CODON * k));
             }
             start = k + 1;
         }
@@ -256,10 +322,10 @@ pub type Signals = [f64; 6];
 pub const PROMOTER_BITS: usize = 5;
 
 pub fn promoter(genome: &[u8], start: usize, bits: &[u8; N_LETTERS]) -> Promoter {
-    if start < 3 + PROMOTER_BITS {
+    if start < CODON + PROMOTER_BITS {
         return Promoter::default();
     }
-    let b = |k: usize| bits[genome[start - 3 - PROMOTER_BITS + k] as usize];
+    let b = |k: usize| bits[genome[start - CODON - PROMOTER_BITS + k] as usize];
     // code 7 is unassigned and reads as constitutive
     let signal = match (b(0), b(1), b(2)) {
         (0, 0, 1) => Signal::Light,
@@ -300,7 +366,7 @@ pub fn regulation_signals(c: &Cell, light: f64, kt: f64, colony_max: usize) -> S
 /// Signals from their raw inputs (`free`: the loose monomers whose Li share is sensed).
 pub fn signals(light: f64, kt: f64, free: &[i64; N_LETTERS], mates: f64, height: f64, exposure: f64) -> Signals {
     let free_total: i64 = free.iter().sum();
-    let li_share = if free_total > 0 { free[1] as f64 / free_total as f64 } else { 0.0 };
+    let li_share = if free_total > 0 { free[genetic_code().food as usize] as f64 / free_total as f64 } else { 0.0 };
     [
         light.clamp(0.0, 1.0),
         ((1.05 - kt) / 0.2).clamp(0.0, 1.0),
@@ -329,7 +395,8 @@ pub fn regulated_traits(info: &GenomeInfo, signals: Signals) -> (f64, f64, f64) 
 
 /// Translate a gene span codon by codon.
 pub fn translate(gene: &[u8], bits: &[u8; N_LETTERS]) -> Seq {
-    (0..gene.len() / 3).filter_map(|k| CODE[codon(gene, 3 * k, bits)]).collect()
+    let code = &genetic_code().table;
+    (0..gene.len() / CODON).filter_map(|k| code[codon(gene, CODON * k, bits)]).collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -672,18 +739,22 @@ impl World {
     fn seed_founders(&mut self, n: usize) {
         let mut rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
         for _ in 0..n {
-            // binary genome: Li = 0, Fl = 1. Genes of random sense codons, each closed by a stop.
-            let letter_of = |b: usize| if b == 1 { 4u8 } else { 1u8 };
+            // binary genome in the heritable letters. Genes of random sense codons, each closed by
+            // the first stop codon.
+            let gc = genetic_code();
+            let letter_of = |b: usize| gc.canon[b];
+            let spell = |cd: usize| (0..CODON).rev().map(move |i| letter_of(cd >> i & 1));
+            let stop = gc.table.iter().position(|c| c.is_none()).unwrap();
             let mut genome = Vec::new();
             for _ in 0..(3 + rng.below(3)) {
                 for _ in 0..(6 + rng.below(10)) {
-                    let mut cd = rng.below(8);
-                    while CODE[cd].is_none() {
-                        cd = rng.below(8);
+                    let mut cd = rng.below(CODONS);
+                    while gc.table[cd].is_none() {
+                        cd = rng.below(CODONS);
                     }
-                    genome.extend([letter_of(cd >> 2 & 1), letter_of(cd >> 1 & 1), letter_of(cd & 1)]);
+                    genome.extend(spell(cd));
                 }
-                genome.extend([letter_of(1), letter_of(1), letter_of(0)]); // 110: stop
+                genome.extend(spell(stop));
             }
             let membrane = [6i64; N_LETTERS];
             let free = [20i64; N_LETTERS];
@@ -1668,6 +1739,17 @@ impl World {
 
 #[cfg(test)]
 mod tests {
+    /// The derived code is the one the [2, 6] world was written with: codons 0-4 the letters in
+    /// order, 5 a synonym for Li (the food letter), 6-7 stops; Li and Fl the heritable pair.
+    #[test]
+    fn derived_code_matches_the_original() {
+        let gc = genetic_code();
+        assert_eq!(CODON, 3);
+        assert_eq!(gc.table, [Some(0), Some(1), Some(2), Some(3), Some(4), Some(1), None, None]);
+        assert_eq!(gc.canon, [1, 4]);
+        assert_eq!(gc.food, 1);
+    }
+
     use super::*;
     use crate::cosmos::CosmosParams;
 
