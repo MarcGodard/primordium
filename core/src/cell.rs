@@ -124,7 +124,7 @@ impl Default for CellParams {
 pub struct Gene {
     pub start: usize,
     pub end: usize,
-    /// Reverse complement of the gene: what transcription makes.
+    /// Translated product of the gene's codons: what expression makes.
     pub product: Seq,
     pub func: Function,
 }
@@ -273,6 +273,11 @@ pub struct CellStats {
     pub lifts: u64,
     pub restricts: u64,
     pub new_genomes: u64,
+    /// Messenger letters copied in transcription (kept apart from replication's copied_letters).
+    pub tx_letters: u64,
+    /// Heritable errors: daughter genome bits that differ from the parent's (what selection sees).
+    pub bit_errors: u64,
+    pub bits_inherited: u64,
     pub tx_ok: u64,
     pub tx_junk: u64,
     pub tx_short: u64,
@@ -320,6 +325,8 @@ pub struct World {
     pub learn: bool,
     /// Best polymerase seen in a genome so far; beating it is a discovery.
     pub best_poly: f64,
+    /// Re-deriving phenotypes after folds land: not new genomes.
+    refreshing: bool,
 }
 
 fn round_flux(expected: f64, rng: &mut Rng) -> i64 {
@@ -425,6 +432,7 @@ impl World {
             model: cell_table(),
             learn: true,
             best_poly: 0.0,
+            refreshing: false,
         };
         w.seed_founders(founders);
         w
@@ -517,14 +525,8 @@ impl World {
         let amph = genes.iter().map(|g| g.func.amphiphile).fold(0.0, f64::max);
         let pigment = genes.iter().map(|g| g.func.pigment).fold(0.0, f64::max);
         let info = Arc::new(GenomeInfo { genes, poly_cut, synth_cut, amph, pigment, pending });
-        if !self.genomes.contains_key(genome) {
+        if self.genomes.insert(genome.to_vec(), info.clone()).is_none() && !self.refreshing {
             self.stats.new_genomes += 1;
-        }
-        self.genomes.insert(genome.to_vec(), info.clone());
-        if self.genomes.len() > 50_000 {
-            // drop genomes no living cell carries
-            let alive: std::collections::HashSet<&Seq> = self.cells.iter().map(|c| &c.genome).collect();
-            self.genomes.retain(|g, _| alive.contains(g));
         }
         info
     }
@@ -623,8 +625,9 @@ impl World {
         // divide (indices stable: we only append)
         let mut daughters = Vec::new();
         for &ci in &born {
-            let d = self.divide(&mut cells[ci], &mut rng);
-            daughters.push(d);
+            if let Some(d) = self.divide(&mut cells[ci], &mut rng) {
+                daughters.push(d);
+            }
         }
         cells.extend(daughters);
         dead.sort_unstable();
@@ -649,6 +652,7 @@ impl World {
     /// Re-derive phenotypes whose product folds just landed; log record polymerases.
     fn refresh_pending(&mut self) {
         let stale: Vec<Seq> = self.genomes.iter().filter(|(_, i)| i.pending).map(|(g, _)| g.clone()).collect();
+        self.refreshing = true;
         for g in stale {
             self.genomes.remove(&g);
             let info = self.info(&g);
@@ -667,6 +671,12 @@ impl World {
                     },
                 );
             }
+        }
+        self.refreshing = false;
+        if self.genomes.len() > 50_000 {
+            // drop genomes no living cell carries (cells are back in place here, unlike mid-step)
+            let alive: std::collections::HashSet<&Seq> = self.cells.iter().map(|c| &c.genome).collect();
+            self.genomes.retain(|g, _| alive.contains(g));
         }
     }
 
@@ -750,6 +760,11 @@ impl World {
         let mut out = Vec::new();
         let mut errors = 0;
         for &t in template.iter().rev().take(max_letters) {
+            // kinetic proofreading: with the right partner absent a polymerase stalls and
+            // waits rather than misincorporate; the copy resumes when supply returns
+            if free[self.comp[t as usize] as usize] <= 0 {
+                break;
+            }
             let mut w = [0.0; N_LETTERS];
             let mut sum = 0.0;
             for l in 0..N_LETTERS {
@@ -785,12 +800,8 @@ impl World {
         // catalysis actually present: best expressed product per role
         let ka = bidx(KA).unwrap();
         let mut poly: f64 = 0.0;
-        let mut amph_n = 0i64;
         for (k, g) in info.genes.iter().enumerate() {
             poly = poly.max(g.func.catalysis[pair(ka, ka)] * presence(c, k));
-            if g.func.amphiphile >= self.cp.amph_min {
-                amph_n += c.products[k];
-            }
         }
 
         // metabolism: raw Ka + side atom -> monomer, catalysed by expressed synthesis products
@@ -816,7 +827,8 @@ impl World {
                 // messenger: antisense copy of the gene, read back in sense order, then recycled
                 let template: Seq = c.genome[g.start..g.end].to_vec();
                 let (msg, _) = self.copy_strand(&template, &mut c.free, gain, kt, usize::MAX, rng);
-                self.stats.copied_letters += msg.len() as u64;
+                // separate counter: replication error rate (C_ERR) must not be diluted by messengers
+                self.stats.tx_letters += msg.len() as u64;
                 for &l in &msg {
                     c.free[l as usize] += 1;
                 }
@@ -886,7 +898,6 @@ impl World {
                 c.membrane[l as usize] += ins;
             }
         }
-        let _ = amph_n;
 
         // genome replication: start once the membrane has grown, then copy at polymerase speed
         if c.fork.is_none() && c.area() as f64 >= (1.5 * c.birth_area as f64).min(0.75 * self.cp.divide_area as f64) {
@@ -983,25 +994,38 @@ impl World {
         c.products = remap_products(&old_info, &c.products, &info, &mut c.free);
     }
 
-    /// The copied strand is the complement; its own complement-copy restores sense.
-    /// We hand the daughter the complement-of-copy using exact complements of the copy
-    /// (second strand synthesis assumed faithful), so copy errors carry over 1:1.
-    fn divide(&mut self, c: &mut Cell, rng: &mut Rng) -> Cell {
+    /// Second-strand synthesis then fission. The fork holds the antisense strand; the
+    /// daughter's sense strand is a real templated copy of it at the cell's fidelity.
+    /// If monomers run short the copy is undone and division waits (None).
+    fn divide(&mut self, c: &mut Cell, rng: &mut Rng) -> Option<Cell> {
         let fork = c.fork.take().unwrap();
-        // daughter genome: sense strand recovered from the copied antisense strand.
-        // Matter: the antisense letters are swapped for their complements via the monomer pool;
-        // where that monomer is missing the antisense letter is kept (a mutation).
-        let mut genome = Vec::with_capacity(fork.len());
-        for &a in fork.iter().rev() {
-            let s = self.comp[a as usize];
-            if s != a && c.free[s as usize] > 0 {
-                c.free[s as usize] -= 1;
-                c.free[a as usize] += 1;
-                genome.push(s);
-            } else {
-                genome.push(a);
+        let info = self.info(&c.genome);
+        let ka = bidx(KA).unwrap();
+        // surrogate cells carry their phenotype as expressed; detail cells use present products
+        let poly = info
+            .genes
+            .iter()
+            .enumerate()
+            .map(|(k, g)| g.func.catalysis[pair(ka, ka)] * if c.mode == Mode::Surrogate { 1.0 } else { (c.products[k] as f64 / 3.0).min(1.0) })
+            .fold(0.0, f64::max);
+        let gain = DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly);
+        let (mut genome, errs) = self.copy_strand(&fork, &mut c.free, gain, self.env.kt, usize::MAX, rng);
+        if genome.len() < fork.len() {
+            for &l in &genome {
+                c.free[l as usize] += 1;
             }
+            c.fork = Some(fork);
+            return None;
         }
+        // antisense strand is recycled into monomers
+        for &l in &fork {
+            c.free[l as usize] += 1;
+        }
+        self.stats.copied_letters += genome.len() as u64;
+        self.stats.copy_mutations += errs as u64;
+        let same = genome.len().min(c.genome.len());
+        self.stats.bits_inherited += same as u64;
+        self.stats.bit_errors += (0..same).filter(|&i| self.bits[genome[i] as usize] != self.bits[c.genome[i] as usize]).count() as u64;
         if genome.len() > self.cp.genome_max {
             for &l in &genome[self.cp.genome_max..] {
                 c.free[l as usize] += 1;
@@ -1026,7 +1050,6 @@ impl World {
         let d_ka = split(c.raw_ka, rng);
         c.raw_ka -= d_ka;
         // products split; the daughter keeps those its own genome still encodes
-        let info = self.info(&c.genome);
         let mut share = vec![0i64; info.genes.len()];
         for (k, n) in c.products.iter_mut().enumerate() {
             share[k] = split(*n, rng);
@@ -1039,7 +1062,7 @@ impl World {
         let dinfo = self.info(&genome);
         let d_products = remap_products(&info, &share, &dinfo, &mut d_free);
         let id = self.ctx.next_id();
-        Cell {
+        Some(Cell {
             id,
             parent: Some(c.id),
             born: self.t_days,
@@ -1058,7 +1081,7 @@ impl World {
             conf: c.conf,
             mutations: 0,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
-        }
+        })
     }
 
     fn spill(&mut self, c: Cell) {

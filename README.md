@@ -19,7 +19,7 @@ The chemistry is invented, not ours: elements come from a shell rule with capaci
 | 2 Protocells | Amphiphile vesicles with interior metabolism, growth, division | done |
 | 3 Cells | Binary genome, genetic code, expression, gated division, radiation mutation | done |
 
-Each scale's surrogate is measured against a "twin": the same detailed model with different dice. Agreement as a share of that ceiling: scale 0 98.9%, scale 2 95.4%, scale 3 93.2%. Scale 1's function surrogate predicts one-mutation neighbours at ~88-96% of its ceiling.
+Each scale's surrogate is measured against a "twin": the same detailed model with different dice. Agreement as a share of that ceiling (latest runs): scale 0 98.1%, scale 2 94.4%, scale 3 88.0%. Scale 1's function surrogate predicts one-mutation neighbours at ~88-96% of its ceiling.
 
 ## Findings so far
 

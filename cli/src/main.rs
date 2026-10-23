@@ -443,16 +443,16 @@ fn cells(args: &[String]) {
             let maxgen = w.cells.iter().map(|c| c.generation).max().unwrap_or(0);
             let st = &w.stats;
             println!(
-                "t={:6.1} T={:5.1}K | cells {} (sur {}) gen {} div {} death {} | area {:.0} prods {:.1} free {:.0} rawka {:.0} forks {} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:.0} genes {:.1} | err {:.3} radmut {} | {:.1}s",
+                "t={:6.1} T={:5.1}K | cells {} (sur {}) gen {} div {} death {} | area {:.0} prods {:.1} free {:.0} rawka {:.0} forks {} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:.0} genes {:.1} | letter err {:.3} bit err {:.4} radmut {} | {:.1}s",
                 w.t_days, w.env.temperature_k, w.cells.len(), sur, maxgen, st.divisions, st.deaths, area, prods, free, raw, forks, ph[0], ph[1], ph[2], ph[3], ph[4], ph[5],
-                st.copy_mutations as f64 / st.copied_letters.max(1) as f64, st.radiation_mutations, start.elapsed().as_secs_f64()
+                st.copy_mutations as f64 / st.copied_letters.max(1) as f64, st.bit_errors as f64 / st.bits_inherited.max(1) as f64, st.radiation_mutations, start.elapsed().as_secs_f64()
             );
         }
     }
     for d in w.ctx.discoveries.entries.iter().rev().take(5) {
         println!("discovery day {:.1} scale {}: {}", d.t_days, d.scale, d.note);
     }    let st = &w.stats;
-    println!("transcripts ok {} junk {} short {} | products decayed {} inserted {}", st.tx_ok, st.tx_junk, st.tx_short, st.products_decayed, st.products_inserted);
+    println!("transcripts ok {} junk {} short {} ({} messenger letters) | products decayed {} inserted {}", st.tx_ok, st.tx_junk, st.tx_short, st.tx_letters, st.products_decayed, st.products_inserted);
 }
 
 /// Selection gradient at scale 3: does genome phenotype predict lineage growth (descendant count)?

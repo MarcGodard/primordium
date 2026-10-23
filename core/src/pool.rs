@@ -215,7 +215,7 @@ pub const KA: u8 = 5;
 pub const DRY_PAIR_GAIN: f64 = 2.0;
 /// Extra pairing discrimination per kT of backbone catalysis: a polymerase pocket
 /// pins the incoming monomer against the template (escape from Eigen's error threshold).
-pub const FIDELITY_PER_CUT: f64 = 4.0;
+pub const FIDELITY_PER_CUT: f64 = 8.0;
 
 /// Rules and caches shared by every body of water (pond, vesicle interiors).
 #[derive(Clone)]
