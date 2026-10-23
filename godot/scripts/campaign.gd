@@ -5,6 +5,8 @@ extends Node
 
 signal changed
 signal toast(title: String, body: String, color: Color)
+## A goal was reached: main shows the graduation card that leads to the next world.
+signal graduated(k: int, page: String)
 
 var save_path := "user://campaign.json"
 ## Index = view index (0 elements .. 6 reef, 7 garden). Title, what to do, codex page on success.
@@ -87,6 +89,9 @@ func goal_title(k: int) -> String:
 	return GOALS[k][0] if k < GOALS.size() else "Your world"
 
 func set_explore(on: bool) -> void:
+	if on and not finished():
+		toast.emit("Explore mode opens at the end", "Reach every goal first, from the atom to a creature that breeds true.", Color(0.8, 0.85, 0.95))
+		return
 	state.explore = on
 	save()
 	changed.emit()
@@ -110,9 +115,16 @@ func complete(k: int, who: String) -> void:
 		page += " First reached by %s." % who
 	state.codex.append({"title": GOALS[k][0], "text": page, "scale": k})
 	save()
-	var next := "  You bred a new kind of animal." if k + 1 >= GOALS.size() else "  %s is open." % NEXT[k]
-	toast.emit("Goal reached: " + GOALS[k][0], "A codex page was written (J)." + next, Color(1.0, 0.85, 0.4))
+	graduated.emit(k, page)
 	changed.emit()
+
+## Every goal reached: explore mode (all worlds, any order) is the reward.
+func finished() -> bool:
+	return is_done(GOALS.size() - 1)
+
+## Nothing reached and nothing kept yet: a new player, who starts at the smallest scale.
+func is_new() -> bool:
+	return state.done.is_empty() and state.kept.is_empty() and not state.explore
 
 func tick(delta: float, k: int, view: Node) -> void:
 	_timer -= delta

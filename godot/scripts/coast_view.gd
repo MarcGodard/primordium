@@ -23,6 +23,8 @@ const BAND := 22.0
 const TILE_W := 220.0
 const TILE_H := 44.0
 const GAP := 8.0
+const COL_GAP := 60.0
+var cols := 1
 const ROLE_COLORS := [Color(0.3, 0.85, 0.85), Color(0.45, 0.85, 0.4), Color(0.95, 0.9, 0.75), Color(0.95, 0.65, 0.2), Color(0.6, 0.6, 0.65)]
 const ROLE_NAMES := ["polymerase", "metabolism", "membrane", "pigment"]
 
@@ -51,6 +53,9 @@ func _ready() -> void:
 	add_child(sim)
 	ok = sim.start(ProjectSettings.globalize_path("res://../data/rates0.json"), 1)
 	n_sites = sim.site_count()
+	# wide screens (ultrawide) take the coast in two columns, north half on the left
+	var vs0 := get_viewport_rect().size
+	cols = 2 if vs0.x / vs0.y > 2.0 and n_sites > 1 else 1
 	world = Node2D.new()
 	world.scale = Vector2(CELL, CELL)
 	add_child(world)
@@ -71,12 +76,13 @@ func _ready() -> void:
 	world.add_child(art)
 	cam = Camera2D.new()
 	add_child(cam)
-	var total_h := n_sites * (TILE_H + GAP)
+	var total_h := per_col() * (TILE_H + GAP)
+	var total_w := cols * (TILE_W + 140.0) + (cols - 1) * COL_GAP
 	var vs := get_viewport_rect().size
-	var fit: float = min(vs.x / ((TILE_W + 140.0) * CELL), (vs.y - 255.0) / (total_h * CELL)) * 0.95
+	var fit: float = min(vs.x * 0.6 / (total_w * CELL), (vs.y - 255.0) / (total_h * CELL)) * 0.95
 	cam.zoom = Vector2(fit, fit)
 	# strips between the goal banner (top ~105 px) and the evolution chart (bottom ~150 px)
-	cam.position = Vector2(TILE_W * 0.5 + 20.0, total_h * 0.5) * CELL + Vector2(0, 22.0 / fit)
+	cam.position = Vector2(total_w * 0.5 - 50.0, total_h * 0.5) * CELL + Vector2(0, 22.0 / fit)
 	var layer := CanvasLayer.new()
 	layer.layer = 2
 	add_child(layer)
@@ -100,9 +106,18 @@ func _ready() -> void:
 	if ok:
 		sim.step(1, DT)
 
-## Site k's strip; site 0 is the southernmost, drawn at the bottom.
+## Sites per column.
+func per_col() -> int:
+	return int(ceil(float(n_sites) / cols))
+
+## Column of site k: northern sites first (left), so reading order runs north to south.
+func col_of(k: int) -> int:
+	return (n_sites - 1 - k) / per_col()
+
+## Site k's strip; site 0 is the southernmost, drawn last (bottom of the last column).
 func tile_origin(k: int) -> Vector2:
-	return Vector2(0, (n_sites - 1 - k) * (TILE_H + GAP))
+	var i := n_sites - 1 - k
+	return Vector2(col_of(k) * (TILE_W + 140.0 + COL_GAP), (i % per_col()) * (TILE_H + GAP))
 
 func activate(on: bool) -> void:
 	visible = on
@@ -222,12 +237,12 @@ func _draw_coast() -> void:
 		if k == selected:
 			art.draw_rect(Rect2(o - Vector2(1, 1), Vector2(TILE_W + 2, TILE_H + 2)), Color(1, 1, 0.4, 0.9), false, 0.6)
 		# current between neighbours: drifting dashes in the gap
-		if k + 1 < sites.size():
+		if k + 1 < sites.size() and col_of(k + 1) == col_of(k):
 			var gy := o.y - GAP * 0.5
 			for d in 12:
 				var x := fmod(d * 20.0 + tsec * 6.0 * (1.0 if k % 2 == 0 else -1.0), TILE_W)
 				x = x if x >= 0.0 else x + TILE_W
-				art.draw_line(Vector2(x, gy), Vector2(x + 4.0, gy), Color(0.5, 0.75, 1.0, 0.3), 0.4)
+				art.draw_line(Vector2(o.x + x, gy), Vector2(o.x + x + 4.0, gy), Color(0.5, 0.75, 1.0, 0.3), 0.4)
 	# zoomed into the selected site: real cells, placed as on scale 3
 	if selected >= 0:
 		var o := tile_origin(selected)

@@ -26,6 +26,12 @@ var codex_panel: PanelContainer
 var codex_text: RichTextLabel
 var toast_label: Label
 var toast_tw: Tween
+var card: PanelContainer
+var card_title: Label
+var card_body: RichTextLabel
+var card_hint: Label
+## World the graduation card leads to on Enter (-1: just close).
+var card_next := -1
 
 func _ready() -> void:
 	campaign = load("res://scripts/campaign.gd").new()
@@ -53,7 +59,14 @@ func _ready() -> void:
 	_build_warp()
 	_build_campaign_ui()
 	campaign.toast.connect(show_toast)
+	campaign.graduated.connect(show_graduation)
 	enter_hub()
+	# a new player starts at the smallest scale; the hub comes once there is somewhere to go
+	var capture := false
+	for a in OS.get_cmdline_user_args():
+		capture = capture or a.begins_with("--shot=")
+	if campaign.is_new() and not capture:
+		welcome()
 	for a in OS.get_cmdline_user_args():
 		var kv: PackedStringArray = a.trim_prefix("--").split("=")
 		if kv.size() != 2:
@@ -67,6 +80,8 @@ func _ready() -> void:
 				hub.set_process_unhandled_input(false)
 				hub.hover_enabled = false
 			"frames": frames = int(kv[1])
+			"welcome": welcome()
+			"graduate": campaign.complete(int(kv[1]), "")
 			"explore": campaign.state.explore = kv[1] == "1"
 			"codex":
 				codex_panel.visible = kv[1] == "1"
@@ -85,6 +100,14 @@ func _ready() -> void:
 			"ff":
 				if view.has_method("ff_wait"):
 					view.ff_wait(float(kv[1]))
+			"levers":
+				# garden: open the lever panel; "waves:0.25" also sets one
+				if view.get("lever_panel") != null:
+					view.lever_panel.visible = true
+					var kv2: PackedStringArray = kv[1].split(":")
+					if kv2.size() == 2:
+						view._set_lever(kv2[0], float(kv2[1]))
+					view._show_levers()
 			"keep":
 				if view.has_method("keep_selected"):
 					view.keep_selected()
@@ -123,10 +146,16 @@ func switch_to(k: int) -> void:
 	hud.set_process(true)
 	hud.set_process_unhandled_input(true)
 	bar.visible = true
+	_color_bar()
+
+## Current world in its colour, open ones grey, locked ones dim.
+func _color_bar() -> void:
 	for i in bar_buttons.size():
 		var b: Button = bar_buttons[i]
-		b.add_theme_color_override("font_color", hub.SCALES[i][2] if views[i] == view else Color(0.55, 0.62, 0.72))
-		b.add_theme_font_size_override("font_size", 14 if views[i] == view else 12)
+		var here: bool = not in_hub and views[i] == view
+		var open: bool = campaign.is_open(i)
+		b.add_theme_color_override("font_color", hub.SCALES[i][2] if here else (Color(0.55, 0.62, 0.72) if open else Color(0.3, 0.33, 0.4)))
+		b.add_theme_font_size_override("font_size", 14 if here else 12)
 
 func enter_hub() -> void:
 	in_hub = true
@@ -376,9 +405,90 @@ func _build_campaign_ui() -> void:
 	tl.layer = 13
 	add_child(tl)
 	tl.add_child(toast_label)
+	_build_card(tl)
 	campaign.changed.connect(func() -> void:
+		_color_bar()
 		if codex_panel.visible:
 			_fill_codex())
+
+func _build_card(parent: CanvasLayer) -> void:
+	card = PanelContainer.new()
+	var sb := _panel_style(0.96)
+	sb.border_color = Color(1.0, 0.82, 0.4, 0.8)
+	sb.set_border_width_all(2)
+	sb.content_margin_left = 30
+	sb.content_margin_right = 30
+	sb.content_margin_top = 22
+	sb.content_margin_bottom = 22
+	card.add_theme_stylebox_override("panel", sb)
+	card.set_anchors_preset(Control.PRESET_CENTER)
+	card.offset_left = -380
+	card.offset_right = 380
+	card.offset_top = -210
+	card.offset_bottom = 210
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	card.add_child(box)
+	card_title = Label.new()
+	card_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	card_title.add_theme_font_size_override("font_size", 30)
+	card_title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+	box.add_child(card_title)
+	card_body = RichTextLabel.new()
+	card_body.bbcode_enabled = true
+	card_body.fit_content = true
+	card_body.scroll_active = false
+	card_body.add_theme_font_size_override("normal_font_size", 16)
+	card_body.add_theme_font_size_override("bold_font_size", 17)
+	box.add_child(card_body)
+	card_hint = Label.new()
+	card_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	card_hint.add_theme_font_size_override("font_size", 17)
+	card_hint.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
+	box.add_child(card_hint)
+	card.visible = false
+	parent.add_child(card)
+
+## New players: start at the smallest scale with a word on what the game is.
+func welcome() -> void:
+	switch_to(0)
+	show_card("Welcome to Primordium", "Everything alive is built from atoms, and every atom here comes from one rule about electron shells. You start at the smallest scale. Reach each scale's goal (top of the screen) to graduate to the next: molecules, chains that copy themselves, cells, a coastline of life, and finally many-celled creatures you can breed in a world of your own.\n\nH explains any screen. J opens your codex.", "Enter: begin", -1)
+
+func show_card(title: String, body: String, hint: String, next: int) -> void:
+	card_title.text = title
+	card_body.text = body
+	card_hint.text = hint
+	card_next = next
+	card.visible = true
+	# fit the height to the text once it has laid out
+	await get_tree().process_frame
+	var h: float = card.get_combined_minimum_size().y
+	card.offset_top = -h * 0.5
+	card.offset_bottom = h * 0.5
+
+## Goal k reached: what it means (the codex page), and the way on.
+func show_graduation(k: int, page: String) -> void:
+	var last: bool = k + 1 >= campaign.GOALS.size()
+	var body := page + "\n\n"
+	if last:
+		body += "[b]The campaign is complete.[/b] Explore mode is open: E in the hub opens every world. Your world keeps evolving whenever you come back."
+		show_card("You bred a new kind of animal", body, "Enter: continue", -1)
+		return
+	var nk := k + 1
+	body += "[b]Next: %s.[/b] %s\n[color=#ffd36b]Goal there: %s[/color]" % [hub.SCALES[nk][0], hub.SCALES[nk][1], campaign.goal_title(nk)]
+	var here: bool = not in_hub and views.find(view) == nk
+	show_card("Goal reached: " + campaign.goal_title(k), body, "Enter: continue" if here else "Enter: go to %s now      Esc: stay here a while" % hub.SCALES[nk][0], -1 if here else nk)
+
+func _input(e: InputEvent) -> void:
+	if not card.visible or not (e is InputEventKey and e.pressed and not e.echo):
+		return
+	if e.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
+		card.visible = false
+		if card_next >= 0:
+			travel(card_next)
+	elif e.keycode == KEY_ESCAPE:
+		card.visible = false
+	get_viewport().set_input_as_handled()
 
 func show_toast(title: String, body: String, color: Color) -> void:
 	toast_label.text = title + "\n" + body

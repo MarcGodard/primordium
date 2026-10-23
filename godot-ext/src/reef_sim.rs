@@ -13,6 +13,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Cells a kept body's shape records (8 floats each): enough for any body seen so far.
+const SHAPE_MAX: usize = 400;
+
 /// World units per unit of elevation (tide units).
 const VSCALE: f64 = 1.0 / CELL_RISE;
 
@@ -527,6 +530,19 @@ impl ReefSim {
         d.set("genome", &PackedByteArray::from(o.genome.as_slice()));
         d.set("mass", &PackedInt64Array::from(o.cells.first().map_or(&[0; N_LETTERS], |c| &c.mass).as_slice()));
         d.set("jobs", jobs(o, self.goal.split) as i64);
+        // body shape for the gallery: per cell, position relative to the body's lowest corner
+        // (lattice x, y, height) then its five expressed traits
+        let lo = o.cells.iter().fold([i32::MAX; 3], |m, c| [m[0].min(c.pos[0]), m[1].min(c.pos[1]), m[2].min(c.pos[2])]);
+        let mut shape = PackedFloat32Array::new();
+        for c in o.cells.iter().take(SHAPE_MAX) {
+            for k in 0..3 {
+                shape.push((c.pos[k] - lo[k]) as f32);
+            }
+            for k in 0..5 {
+                shape.push(c.expr[k]);
+            }
+        }
+        d.set("shape", &shape);
         d.set("creature", self.goal.body_ok(o));
         d.set("store", o.store.iter().sum::<i64>());
         let tile = if o.settled() { r.tile_index(o.cells[0].pos[0] / TILE, o.cells[0].pos[1] / TILE).unwrap_or(0) } else { o.drift_tile };

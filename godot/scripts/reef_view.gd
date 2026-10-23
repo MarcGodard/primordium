@@ -29,6 +29,10 @@ const GARDEN_EXPLAIN := """[b]Your world[/b]
 
 [b]It lasts.[/b] When you leave, the surviving lineages are saved and come back next time. Keep creatures from several runs of the reef (N starts a new run) and watch which ones win.
 
+[b]Run experiments.[/b] L opens the environment levers: waves, grazers, food and UV, each a real rate in the model (x1/4 to x4). Change one, fast-forward (T) and read the report. In our tests the waves mattered most: in calm water big bodies keep their division of labour, in storms they are torn apart before it pays. Is that what you find too?
+
+[b]Fast-forward.[/b] T runs 100 days (Shift+T 500) and tells you what evolution did. While the game is closed your world keeps running.
+
 [b]Try.[/b] C colours bodies by lineage. Click a body to see whose descendant it is, K to keep it again."""
 const ROLE_COLORS := [Color(0.25, 0.8, 0.85), Color(0.35, 0.8, 0.3), Color(0.95, 0.88, 0.72), Color(0.75, 0.22, 0.32), Color(0.6, 0.6, 0.65), Color(1.0, 0.75, 0.2)]
 const ROLE_NAMES := ["polymerase", "metabolism", "membrane", "pigment", "no clear role", "glue"]
@@ -99,6 +103,17 @@ const TRAIT_WHY := [
 ]
 var ff: CanvasLayer
 var ff_title := ""
+## Your world's levers (L): multipliers on real reef rates, see ReefSim.set_lever.
+const LEVERS := [
+	["waves", "Waves", "How hard the surf pulls on bodies. Calm water lets tall, many-celled bodies keep their shape; storms tear them into pieces."],
+	["grazers", "Grazers", "How often sticky bodies bite smaller ones. Predation pressure."],
+	["food", "Food", "How fast cells take food from the water through their open faces."],
+	["uv", "UV", "How deadly unshaded sunlight is. Pigment protects."],
+]
+var lever_panel: PanelContainer
+var lever_sliders := {}
+var lever_labels := {}
+var wave_mult := 1.0
 ## Unnamed lineages a garden save keeps (biggest first); named ones are always kept.
 const GARDEN_KEEP := 32
 
@@ -124,6 +139,8 @@ func _ready() -> void:
 	_build_overlay()
 	ff = load("res://scripts/ff_panel.gd").new()
 	add_child(ff)
+	if garden:
+		_build_levers()
 	if ok:
 		sim.step(1, DT)
 
@@ -269,6 +286,95 @@ func _build_overlay() -> void:
 	chart.draw.connect(_draw_chart)
 	layer.add_child(chart)
 
+## Lever panel (garden only): a log slider per lever, x1/4 .. x4.
+func _build_levers() -> void:
+	lever_panel = PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.03, 0.05, 0.08, 0.9)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 14
+	sb.content_margin_right = 14
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	lever_panel.add_theme_stylebox_override("panel", sb)
+	lever_panel.position = Vector2(12, 440)
+	lever_panel.custom_minimum_size = Vector2(330, 0)
+	var box := VBoxContainer.new()
+	lever_panel.add_child(box)
+	var head := Label.new()
+	head.text = "Your world's environment (L to hide)"
+	head.add_theme_font_size_override("font_size", 14)
+	box.add_child(head)
+	for lv in LEVERS:
+		var row := HBoxContainer.new()
+		var l := Label.new()
+		l.custom_minimum_size = Vector2(110, 0)
+		l.add_theme_font_size_override("font_size", 13)
+		l.tooltip_text = lv[2]
+		l.mouse_filter = Control.MOUSE_FILTER_PASS
+		row.add_child(l)
+		var sl := HSlider.new()
+		sl.min_value = -2.0
+		sl.max_value = 2.0
+		sl.step = 0.25
+		sl.custom_minimum_size = Vector2(190, 0)
+		sl.tooltip_text = lv[2]
+		sl.focus_mode = Control.FOCUS_NONE
+		var key: String = lv[0]
+		sl.value_changed.connect(func(v: float) -> void: _set_lever(key, pow(2.0, v)))
+		row.add_child(sl)
+		box.add_child(row)
+		lever_sliders[key] = sl
+		lever_labels[key] = l
+	var note := Label.new()
+	note.text = "Each is a real rate in the model, x1/4 to x4.\nRun an experiment: change one, press T, read the report."
+	note.add_theme_font_size_override("font_size", 11)
+	note.add_theme_color_override("font_color", Color(0.6, 0.7, 0.8))
+	box.add_child(note)
+	lever_panel.visible = false
+	layer.add_child(lever_panel)
+	_show_levers()
+
+func _set_lever(key: String, mult: float) -> void:
+	if not ok or sim.busy():
+		return
+	sim.set_lever(key, mult)
+	campaign.state["levers"] = sim.levers() if campaign else {}
+	_show_levers()
+
+## Labels from the sim's actual values; sliders follow without re-firing.
+func _show_levers() -> void:
+	if lever_panel == null or not ok or sim.busy():
+		return
+	var lv: Dictionary = sim.levers()
+	wave_mult = lv.get("waves", 1.0)
+	for x in LEVERS:
+		var m: float = lv.get(x[0], 1.0)
+		lever_labels[x[0]].text = "%s  x%s" % [x[1], ("%.2f" % m).trim_suffix("0").trim_suffix("0").trim_suffix(".")]
+		lever_sliders[x[0]].set_value_no_signal(log(m) / log(2.0))
+
+func _lock_levers(on: bool) -> void:
+	for sl in lever_sliders.values():
+		sl.editable = not on
+
+## Levers saved with the garden come back with it.
+func _restore_levers() -> void:
+	for key in campaign.state.get("levers", {}):
+		sim.set_lever(key, float(campaign.state.levers[key]))
+	_show_levers()
+
+## Non-default levers, for report titles.
+func _lever_note() -> String:
+	if not garden or not ok or sim.busy():
+		return ""
+	var parts := []
+	var lv: Dictionary = sim.levers()
+	for x in LEVERS:
+		var m: float = lv.get(x[0], 1.0)
+		if abs(m - 1.0) > 0.01:
+			parts.append("%s x%.2f" % [x[1].to_lower(), m])
+	return "" if parts.is_empty() else " (" + ", ".join(PackedStringArray(parts)) + ")"
+
 func activate(on: bool) -> void:
 	active = on
 	visible = on
@@ -293,6 +399,7 @@ func activate(on: bool) -> void:
 func _populate() -> void:
 	if not restored:
 		restored = true
+		_restore_levers()
 		for g in campaign.state.garden:
 			var n: int = clamp(int(g.cells) / 10, 4, 24)
 			var c: int = sim.release(PackedByteArray(g.genome), PackedInt64Array(g.mass), n)
@@ -307,7 +414,7 @@ func _populate() -> void:
 		var away_h: float = (campaign.session_start - float(campaign.state.get("saved_at", 0.0))) / 3600.0
 		var days: float = min(away_h * AWAY_DAYS_PER_HOUR, AWAY_MAX_DAYS)
 		if not names.is_empty() and campaign.state.has("saved_at") and days >= 5.0:
-			start_ff(days, "While you were away (%s), your world ran %d days" % [_hours(away_h), int(days)])
+			start_ff(days, "While you were away (%s), your world ran %d days%s" % [_hours(away_h), int(days), _lever_note()])
 			if sim.busy():
 				return
 	# back mid fast-forward: the reef is on the worker, `_ff_done` releases them
@@ -344,6 +451,8 @@ func start_ff(days: float, title: String) -> void:
 	if not ok or sim.busy():
 		return
 	if sim.fast_forward(days, DT):
+		# the reef is on the worker: levers cannot reach it until it is back
+		_lock_levers(true)
 		ff_title = title
 		selected = -1
 		organism = {}
@@ -413,6 +522,9 @@ func _ff_done(r: Dictionary) -> void:
 		if campaign:
 			campaign.toast.emit("The reef crashed while fast-forwarding", "Restart the viewer; your world's last save is intact.", Color(0.95, 0.5, 0.5))
 		return
+	if garden:
+		_lock_levers(false)
+		_show_levers()
 	var text := _ff_report(r)
 	ff.show_report(text + "\n[color=#9ab]Any key to close. Saved in the codex (J).[/color]")
 	timer = 0.0
@@ -517,7 +629,8 @@ func _process(delta: float) -> void:
 	var lvl: float = sim.water_level()
 	water.position.y = lvl
 	var day: float = clamp(env.visible * 1.4 + 0.08, 0.0, 1.0)
-	water_mat.set_shader_parameter("swell", 0.25 + 1.4 * env.cloud * env.cloud)
+	# the waves lever shows in the sea: calm water is flat, storms heave
+	water_mat.set_shader_parameter("swell", (0.25 + 1.4 * env.cloud * env.cloud) * sqrt(wave_mult))
 	water_mat.set_shader_parameter("daylight", day)
 	rock_mat.set_shader_parameter("water_level", lvl)
 	rock_mat.set_shader_parameter("daylight", day)
@@ -656,7 +769,11 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_T:
 				if not e.echo:
 					var days: float = FF_DAYS * (5.0 if e.shift_pressed else 1.0)
-					start_ff(days, "Fast-forward: %d days" % int(days))
+					start_ff(days, "Fast-forward: %d days%s" % [int(days), _lever_note()])
+			KEY_L:
+				if garden and not e.echo:
+					lever_panel.visible = not lever_panel.visible
+					_show_levers()
 			KEY_ESCAPE:
 				selected = -1
 				organism = {}
@@ -708,7 +825,7 @@ func hud_text() -> String:
 		t += "[color=#cbf]" + d + "[/color]\n"
 	if garden and stats.cells == 0:
 		t += "[color=#f9c]Nothing alive here. Keep creatures at the reef (K) to release them.[/color]\n"
-	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nT fast-forward 100 days (Shift+T 500) with a report\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ("" if garden else ", N new run")
+	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ["" if garden else ", N new run", "\nL environment levers" if garden else ""]
 	return t
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.

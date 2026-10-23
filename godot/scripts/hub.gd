@@ -369,7 +369,7 @@ func _hover(mp: Vector2) -> void:
 	hovered = best
 	var explore: bool = campaign != null and campaign.state.explore
 	var done: int = campaign.state.done.size() if campaign else 0
-	foot.text = "click a world (keys 1-8)   ·   J codex   ·   E %s   ·   in any scale: M back here, Tab / Shift+Tab next scale, H guide" % ("explore mode: all worlds open" if explore else "campaign: %d of %d goals" % [done, campaign.GOALS.size()])
+	foot.text = "click a world (keys 1-8)   ·   J codex   ·   E %s   ·   in any scale: M back here, Tab / Shift+Tab next scale, H guide" % ("explore mode: all worlds open" if explore else ("explore mode" if campaign and campaign.finished() else "campaign: %d of %d goals" % [done, campaign.GOALS.size()]))
 	if best >= 0:
 		var open: bool = campaign == null or campaign.is_open(best)
 		card.text = ("Scale %d  ·  %s" % [best - 1, SCALES[best][0]]) if best != GARDEN else SCALES[best][0]
