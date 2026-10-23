@@ -32,6 +32,7 @@ fn main() {
         "reef" => reef(&args),
         "elements" => elements(&args),
         "reef-shadow" => reef_shadow(&args),
+        "reef-goal" => reef_goal(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -1283,4 +1284,36 @@ fn reef_shadow(args: &[String]) {
         }
     }
     println!("mean twin agreement {:.1}% over {n} noons ({warm}-day warm-up, {:.0}s)", sum / n.max(1) as f64 * 100.0, start.elapsed().as_secs_f64());
+}
+
+/// Calibrate the creature goal on an untouched reef: how big, how many jobs and how mobile the
+/// best bodies get with nobody steering, and how long lineages hold the default goal.
+fn reef_goal(args: &[String]) {
+    use primordium_core::goal::{CreatureGoal, Tracker, jobs};
+    use primordium_core::reef::{Reef, ReefParams, ReefSeed};
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 2000.0);
+    let seed: u64 = arg(args, "seed", 1);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
+    let goal = CreatureGoal::default();
+    let mut tr = Tracker::default();
+    let mut next = 99.5;
+    while r.t_days < days {
+        r.step(0.02);
+        if r.t_days >= next {
+            next += 100.0;
+            tr.sample(&goal, &r);
+            let multi: Vec<_> = r.organisms.iter().filter(|o| o.settled() && o.cells.len() > 1).collect();
+            let big = |n: usize| multi.iter().filter(|o| o.cells.len() >= n).count();
+            let jobs_of = |min: usize| multi.iter().filter(|o| o.cells.len() >= min).map(|o| jobs(o)).max().unwrap_or(0);
+            let mob = |min: usize| multi.iter().filter(|o| o.cells.len() >= min && o.speed > 0.0).count();
+            let ok = |n: usize, j: usize| multi.iter().filter(|o| o.cells.len() >= n && jobs(o) >= j && o.speed > 0.0).count();
+            println!(
+                "t={:5.0} bodies>=10 {:3} >=20 {:3} >=40 {:3} | max jobs (>=10) {} (>=20) {} | mobile >=10 {:3} >=20 {:3} | goal(20,2) {:3} (20,3) {:3} (10,3) {:3} | best run {:4.0} won {:?}",
+                r.t_days, big(10), big(20), big(40), jobs_of(10), jobs_of(20), mob(10), mob(20), ok(20, 2), ok(20, 3), ok(10, 3), tr.best_run(r.t_days), tr.won
+            );
+        }
+    }
 }

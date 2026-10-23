@@ -45,6 +45,8 @@ var ok := false
 var auto := true
 var history := PackedFloat32Array()
 var meals: Array = []
+var three_d := false
+var beach3: Node3D
 
 func _ready() -> void:
 	sim = CellSim.new()
@@ -102,6 +104,10 @@ func _ready() -> void:
 	layer.add_child(chart)
 	if ok:
 		sim.step(1, DT)
+	beach3 = load("res://scripts/beach3d.gd").new()
+	add_child(beach3)
+	beach3.setup(BAND * 10.0, HEIGHT)
+	beach3.set_active(false)
 
 func activate(on: bool) -> void:
 	visible = on
@@ -110,7 +116,20 @@ func activate(on: bool) -> void:
 	genome_panel.visible = on and not detail.is_empty()
 	inset.visible = on and not inset.info.is_empty()
 	chart.visible = on
-	if on:
+	beach3.set_active(on and three_d)
+	if on and not three_d:
+		cam.make_current()
+
+## V: the same beach and cells in 3D (or back to the 2D map).
+func set_3d(on: bool) -> void:
+	three_d = on
+	world.visible = not on
+	# release swallowed by the other view would leave a drag stuck
+	dragging = false
+	beach3.orbiting = false
+	beach3.panning = false
+	beach3.set_active(on)
+	if not on:
 		cam.make_current()
 
 func speed() -> int:
@@ -141,6 +160,14 @@ func _process(delta: float) -> void:
 	bm.set_shader_parameter("uv_glow", clamp(env.flare * 0.4, 0.0, 0.5))
 	art.modulate = Color(1, 1, 1).lerp(Color(0.5, 0.55, 0.8), 1.0 - light)
 	art.queue_redraw()
+	if three_d:
+		var colonies := {}
+		for c in cells:
+			if c.colony >= 0:
+				if not colonies.has(c.colony):
+					colonies[c.colony] = []
+				colonies[c.colony].append(c.id)
+		beach3.refresh(env, cells, func(c): return cell_pos(c), cell_tint, selected, meals, colonies)
 	timer -= delta
 	if timer <= 0.0:
 		timer = 0.4
@@ -256,7 +283,7 @@ func hud_text() -> String:
 		t += "\n[b]Cell %d[/b]  gen %d  %s\nmembrane %d   monomers %d   genome %d letters\nradiation mutations %d   %s\n" % [
 			detail.id, detail.generation, "surrogate" if detail.surrogate else "detail", detail.area, detail.free, detail.genome.size(), detail.mutations,
 			"replicating %d/%d" % [detail.fork, detail.genome.size()] if detail.fork >= 0 else "not replicating"]
-	t += "\n[color=#789]Tab: switch scale   A: auto resolution\nclick a cell, then a gene, then a residue[/color]"
+	t += "\n[color=#789]Tab: switch scale   A: auto resolution   V: 3D beach\nclick a cell, then a gene, then a residue\n3D: right-drag orbit, shift-drag pan, wheel zoom[/color]"
 	return t
 
 ## Genome map: bit ring (Li dark, Fl light), gene arcs by role, fork progress; gene list to click.
@@ -353,13 +380,17 @@ func zoom_at(factor: float, sp: Vector2) -> void:
 	cam.position = before - (sp - vs * 0.5) / cam.zoom
 
 func select_at(p: Vector2) -> void:
-	selected = -1
+	var id := -1
 	var best := 1e9
 	for c in cells:
 		var d := cell_pos(c).distance_to(p)
 		if d <= c.r + 0.5 and d < best:
 			best = d
-			selected = c.id
+			id = c.id
+	select_id(id)
+
+func select_id(id: int) -> void:
+	selected = id
 	detail = sim.cell_detail(selected) if selected >= 0 else {}
 	gene_sel = -1
 	inset.show_chain({})
@@ -386,6 +417,17 @@ func pick_longest() -> void:
 	genome_panel.visible = not detail.is_empty()
 
 func _unhandled_input(e: InputEvent) -> void:
+	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_V:
+		set_3d(not three_d)
+		return
+	if three_d:
+		if beach3.handle(e):
+			return
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			select_id(beach3.pick(e.position, cells, func(c): return cell_pos(c)))
+			return
+		if e is InputEventMouseButton or e is InputEventMouseMotion:
+			return
 	if e is InputEventMouseButton:
 		if e.button_index == MOUSE_BUTTON_WHEEL_UP and e.pressed:
 			zoom_at(1.15, e.position)

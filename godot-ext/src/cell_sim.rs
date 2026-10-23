@@ -273,6 +273,7 @@ impl CellSim {
         for (k, v) in [
             ("t_days", e.t_days),
             ("day_phase", e.day_phase),
+            ("sun_height", e.sun_height),
             ("year_phase", e.year_phase),
             ("year", e.year),
             ("temperature_k", e.temperature_k),

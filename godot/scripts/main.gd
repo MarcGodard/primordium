@@ -55,6 +55,9 @@ func _ready() -> void:
 			"warp":
 				show_warp = true
 				travel(int(kv[1]))
+			"view3d":
+				if view.has_method("set_3d"):
+					view.set_3d(kv[1] == "1")
 			"lineage":
 				if view.has_method("set_lineage"):
 					view.set_lineage(kv[1] == "1")

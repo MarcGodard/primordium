@@ -4,6 +4,7 @@ pub mod coast;
 pub mod copying;
 pub mod cosmos;
 pub mod element;
+pub mod goal;
 pub mod hybrid;
 pub mod kinetics;
 pub mod lineage;
