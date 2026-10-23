@@ -34,6 +34,8 @@ var state := {"unlocked": 0, "done": {}, "codex": [], "kept": [], "garden": [], 
 ## Last progress per view index, for the HUD banner and hub cards.
 var progress := {}
 var _timer := 0.0
+## When this session began: time away is measured to here, not to a later garden visit.
+var session_start := Time.get_unix_time_from_system()
 ## Off in captures: they must not touch the player's save.
 var persist := true
 
@@ -151,6 +153,19 @@ func keep(c: Dictionary, where: String) -> String:
 	if c.creature and not is_done(6):
 		complete(6, "%s from %s" % [name, where])
 	return name
+
+## Fast-forward reports kept as codex pages, newest last; only the latest few.
+const FIELD_NOTES := 12
+func field_note(title: String, text: String) -> void:
+	state.codex.append({"title": title, "text": text, "scale": -2})
+	var notes := []
+	for i in state.codex.size():
+		if int(state.codex[i].get("scale", 0)) == -2:
+			notes.append(i)
+	if notes.size() > FIELD_NOTES:
+		state.codex.remove_at(notes[0])
+	save()
+	changed.emit()
 
 func new_run() -> int:
 	state.run = int(state.run) + 1

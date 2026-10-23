@@ -82,6 +82,9 @@ func _ready() -> void:
 				# reef: run on (up to N steps) until a creature exists, then select it
 				if view.has_method("hunt"):
 					view.hunt(int(kv[1]))
+			"ff":
+				if view.has_method("ff_wait"):
+					view.ff_wait(float(kv[1]))
 			"keep":
 				if view.has_method("keep_selected"):
 					view.keep_selected()
@@ -368,7 +371,11 @@ func _build_campaign_ui() -> void:
 	toast_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	toast_label.add_theme_constant_override("outline_size", 6)
 	toast_label.modulate.a = 0.0
-	layer.add_child(toast_label)
+	# above the fast-forward report (12), which may be open when a toast fires
+	var tl := CanvasLayer.new()
+	tl.layer = 13
+	add_child(tl)
+	tl.add_child(toast_label)
 	campaign.changed.connect(func() -> void:
 		if codex_panel.visible:
 			_fill_codex())

@@ -1375,7 +1375,17 @@ fn garden(args: &[String]) {
             }
         }
     }
-    let mut g = Reef::new(ReefParams { founders: 0, ..Default::default() }, CosmosParams { seed: seed + 100, ..Default::default() }, rates, &rs, seed + 100);
+    // the viewer's levers: multipliers on the garden's rates
+    let d = ReefParams::default();
+    let gp = ReefParams {
+        founders: 0,
+        drag: d.drag * arg(args, "waves", 1.0),
+        graze_rate: d.graze_rate * arg(args, "grazers", 1.0),
+        uptake: d.uptake * arg(args, "food", 1.0),
+        uv_death: d.uv_death * arg(args, "uv", 1.0),
+        ..d
+    };
+    let mut g = Reef::new(gp, CosmosParams { seed: seed + 100, ..Default::default() }, rates, &rs, seed + 100);
     let m0 = g.matter();
     for k in &kept {
         let got = g.release(&k.1, k.2, (0.0, 0.5), 12);

@@ -83,6 +83,22 @@ const RATES := "res://../data/rates0.json"
 const SEED := "res://../data/reef_seed.json"
 ## Spores per release: one alone usually dies young.
 const RELEASE_SPORES := 12
+## Fast-forward: T runs this many days on a worker thread, Shift+T five times as many.
+const FF_DAYS := 100.0
+## Your world keeps evolving while the game is closed: days per real hour away, capped.
+const AWAY_DAYS_PER_HOUR := 10.0
+const AWAY_MAX_DAYS := 300.0
+const TRAIT_NAMES := ["copying (polymerase)", "metabolism", "membrane", "pigment", "glue"]
+## What a rise in each trait means on the reef, for the report.
+const TRAIT_WHY := [
+	"more copying machinery: faster, more faithful genome copies",
+	"more metabolism: cells make more of their own building blocks",
+	"more membrane: on the skin it beats like cilia, so bodies crawl more",
+	"more pigment: shade against UV, for the cell and the ones below it",
+	"more glue: a firmer grip against waves, and grazers bite with it",
+]
+var ff: CanvasLayer
+var ff_title := ""
 ## Unnamed lineages a garden save keeps (biggest first); named ones are always kept.
 const GARDEN_KEEP := 32
 
@@ -106,6 +122,8 @@ func _ready() -> void:
 	cam.far = 4000.0
 	add_child(cam)
 	_build_overlay()
+	ff = load("res://scripts/ff_panel.gd").new()
+	add_child(ff)
 	if ok:
 		sim.step(1, DT)
 
@@ -257,6 +275,8 @@ func activate(on: bool) -> void:
 	set_process(on)
 	set_process_unhandled_input(on)
 	layer.visible = on
+	ff.visible = on
+	ff.set_process_unhandled_input(on)
 	# the 2D scales draw over an empty world: no sky, no 3D camera behind them
 	rig.set_active(on)
 	if on:
@@ -282,6 +302,27 @@ func _populate() -> void:
 					mine[c] = true
 			elif not str(g.name).begins_with("Wild-"):
 				unplaced.append(g)
+		# time since the garden last ran (closed game, or other scales before quitting) becomes
+		# days of evolution; creatures kept since arrive after it
+		var away_h: float = (campaign.session_start - float(campaign.state.get("saved_at", 0.0))) / 3600.0
+		var days: float = min(away_h * AWAY_DAYS_PER_HOUR, AWAY_MAX_DAYS)
+		if not names.is_empty() and campaign.state.has("saved_at") and days >= 5.0:
+			start_ff(days, "While you were away (%s), your world ran %d days" % [_hours(away_h), int(days)])
+			if sim.busy():
+				return
+	# back mid fast-forward: the reef is on the worker, `_ff_done` releases them
+	if sim.busy():
+		return
+	_release_kept()
+
+static func _hours(h: float) -> String:
+	if h < 1.0:
+		return "%d min" % int(h * 60.0)
+	if h < 48.0:
+		return "%.0f h" % h
+	return "%.0f days" % (h / 24.0)
+
+func _release_kept() -> void:
 	var arrived := []
 	for k in campaign.state.kept:
 		if k.get("released", false):
@@ -299,10 +340,92 @@ func _populate() -> void:
 		save_garden()
 		campaign.toast.emit("Released into your world", ", ".join(PackedStringArray(arrived)), Color(0.75, 1.0, 0.55))
 
+func start_ff(days: float, title: String) -> void:
+	if not ok or sim.busy():
+		return
+	if sim.fast_forward(days, DT):
+		ff_title = title
+		selected = -1
+		organism = {}
+		creatures = PackedInt64Array()
+		rings_mm.instance_count = 0
+
+## Captures: fast-forward and wait for the report on the main thread.
+func ff_wait(days: float) -> void:
+	start_ff(days, "Fast-forward: %d days" % int(days))
+	while sim.busy():
+		var r: Dictionary = sim.poll_fast_forward()
+		if not r.is_empty():
+			_ff_done(r)
+			break
+		OS.delay_msec(50)
+
+func _lineage_name(c: int) -> String:
+	return names.get(c, "#%d" % c)
+
+## The report: what changed, in words, from the numbers the worker measured.
+func _ff_report(r: Dictionary) -> String:
+	var b: Dictionary = r.before
+	var a: Dictionary = r.after
+	var t := "[b]%s[/b]\n[color=#9ab]day %d to day %d[/color]\n\n" % [ff_title, int(b.t), int(a.t)]
+	t += "[b]Population.[/b] %d cells -> %d. Biggest body %d -> %d cells.\n" % [b.cells, a.cells, b.biggest, a.biggest]
+	t += "[b]Evolution.[/b] Deepest spore lineage %d -> %d generations; %d -> %d different genomes alive. Each generation is a chance for copy mistakes, and the environment keeps the ones that work.\n\n" % [b.max_generation, a.max_generation, b.genomes, a.genomes]
+	var before := {}
+	var bl: PackedInt64Array = b.lineages
+	for i in range(0, bl.size(), 2):
+		before[bl[i]] = bl[i + 1]
+	var al: PackedInt64Array = a.lineages
+	t += "[b]Lineages[/b] (%d alive):\n" % (al.size() / 2)
+	for i in range(0, min(al.size(), 24), 2):
+		var c: int = al[i]
+		var was: int = before.get(c, 0)
+		var arrow := "new" if was == 0 else ("up" if al[i + 1] > was * 1.2 else ("down" if al[i + 1] < was * 0.8 else "steady"))
+		t += "  %s: %d -> %d cells (%s)\n" % [_lineage_name(c), was, al[i + 1], arrow]
+	var lost: PackedInt64Array = r.lost
+	if lost.size() > 0:
+		var gone := []
+		for c in lost:
+			gone.append(_lineage_name(c))
+		var more := "" if gone.size() <= 12 else " and %d more" % (gone.size() - 12)
+		t += "[color=#f9a]Extinct (%d): %s%s[/color]\n" % [gone.size(), ", ".join(PackedStringArray(gone.slice(0, 12))), more]
+	t += "\n[b]What the bodies do[/b] (mean over all cells):\n"
+	var tb: PackedFloat32Array = b.traits
+	var ta: PackedFloat32Array = a.traits
+	var shifts := 0
+	for k in 5:
+		if tb[k] <= 0.001:
+			continue
+		var d: float = (ta[k] - tb[k]) / tb[k]
+		if abs(d) >= 0.08:
+			shifts += 1
+			t += "  %s %+.0f%%: %s\n" % [TRAIT_NAMES[k], d * 100.0, TRAIT_WHY[k] if d > 0 else "less of it pays here now"]
+	if tb[0] + tb[1] + tb[2] <= 0.003:
+		t += "  nothing to compare yet: it started as spores that had not switched any genes on.\n"
+	elif shifts == 0:
+		t += "  no trait moved by more than 8%: the reef is near a balance for now.\n"
+	t += "\n[b]Creatures[/b] (20+ cells, 3+ jobs, crawling): seen on %d noons in %d days, at most %d at once.\n" % [r.creature_days, int(round(r.days)), r.peak_creatures]
+	return t
+
+func _ff_done(r: Dictionary) -> void:
+	if r.has("failed"):
+		ok = false
+		ff.close()
+		if campaign:
+			campaign.toast.emit("The reef crashed while fast-forwarding", "Restart the viewer; your world's last save is intact.", Color(0.95, 0.5, 0.5))
+		return
+	var text := _ff_report(r)
+	ff.show_report(text + "\n[color=#9ab]Any key to close. Saved in the codex (J).[/color]")
+	timer = 0.0
+	if campaign:
+		campaign.field_note(ff_title, text)
+	if garden:
+		_release_kept()
+		save_garden()
+
 ## Garden: the surviving lineages, one representative each, to come back next session.
 func save_garden() -> void:
 	# before the first visit the sim is empty: saving would wipe last session's garden
-	if not garden or not ok or campaign == null or not restored:
+	if not garden or not ok or campaign == null or not restored or sim.busy():
 		return
 	# the player's own lineages (`mine`) survive a save however small, and so do ones that
 	# could not be placed this session; wild offshoots only the biggest few
@@ -320,11 +443,12 @@ func save_garden() -> void:
 		out.append({"name": names[int(l.lineage)], "genome": Array(l.genome), "mass": Array(l.mass), "cells": l.cells})
 	out.append_array(unplaced)
 	campaign.state.garden = out
+	campaign.state.saved_at = Time.get_unix_time_from_system()
 	campaign.save()
 
 ## Keep the selected body: its genome goes to the player's world.
 func keep_selected() -> void:
-	if campaign == null or organism.is_empty():
+	if campaign == null or organism.is_empty() or sim.busy():
 		return
 	var name: String = campaign.keep(organism, "your world" if garden else "reef run %d" % campaign.state.run)
 	if name == "":
@@ -334,7 +458,7 @@ func keep_selected() -> void:
 
 ## A fresh reef from the same founders with new dice: another try at a creature.
 func new_run() -> void:
-	if campaign == null or garden:
+	if campaign == null or garden or sim.busy():
 		return
 	var run: int = campaign.new_run()
 	ok = sim.start(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), run)
@@ -376,6 +500,12 @@ func pick_longest() -> void:
 func _process(delta: float) -> void:
 	if not ok:
 		return
+	if sim.busy():
+		var r: Dictionary = sim.poll_fast_forward()
+		if r.is_empty():
+			ff.show_progress("%s   %d%%" % [ff_title, int(sim.fast_forward_progress() * 100.0)], sim.fast_forward_progress())
+			return
+		_ff_done(r)
 	if speed() > 0:
 		acc += speed() * DAYS_PER_UNIT * delta
 		var n := int(acc / DT)
@@ -523,6 +653,10 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_G:
 				if not e.echo:
 					next_creature()
+			KEY_T:
+				if not e.echo:
+					var days: float = FF_DAYS * (5.0 if e.shift_pressed else 1.0)
+					start_ff(days, "Fast-forward: %d days" % int(days))
 			KEY_ESCAPE:
 				selected = -1
 				organism = {}
@@ -530,7 +664,8 @@ func _unhandled_input(e: InputEvent) -> void:
 ## Campaign goals (core goal.rs). Reef: find and keep a creature (the keep completes it).
 ## Garden: one lineage makes creatures on enough days of the window.
 func goal_progress() -> Dictionary:
-	var g: Dictionary = sim.goal() if ok else {}
+	# while fast-forwarding the reef is on the worker: no numbers to read
+	var g: Dictionary = sim.goal() if ok and not sim.busy() else {}
 	if g.is_empty():
 		return {}
 	var near_c: int = g.get("near_cells", 0)
@@ -573,7 +708,7 @@ func hud_text() -> String:
 		t += "[color=#cbf]" + d + "[/color]\n"
 	if garden and stats.cells == 0:
 		t += "[color=#f9c]Nothing alive here. Keep creatures at the reef (K) to release them.[/color]\n"
-	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ("" if garden else ", N new run")
+	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nT fast-forward 100 days (Shift+T 500) with a report\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ("" if garden else ", N new run")
 	return t
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.
