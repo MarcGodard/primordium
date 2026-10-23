@@ -548,7 +548,7 @@ impl Contents {
                 // read 3' to 5': the copy is the reverse complement
                 let how = match learned {
                     Some(m) => Copier::Learned(m),
-                    None => Copier::Pairing { gain, kt, pair: &ctx.ph.pair, stall_on_mismatch: true },
+                    None => Copier::Pairing { gain, kt, pair: &ctx.ph.pair, fray: 1.0 },
                 };
                 for &t in template.iter().rev() {
                     if rng.chance(ctx.p.stall) {

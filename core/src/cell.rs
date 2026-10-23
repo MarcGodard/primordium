@@ -287,11 +287,15 @@ pub struct CellStats {
 }
 
 pub fn cell_table() -> RateTable {
-    RateTable::new(
+    let mut t = RateTable::new(
         // selectivity is pairing chemistry: temperature and the polymerase actually present
         vec![Axis::new("kT", 0.85, 1.15, 12), Axis::new("poly", 0.0, 1.0, 10)],
         COPY_CHANNELS,
-    )
+    );
+    // a cell-step copies only a few letters; mismatches per (template, partner) are rare, so a
+    // bin needs many steps before its odds are worth trusting
+    t.samples_for_confidence = 400.0;
+    t
 }
 
 #[derive(Clone)]
@@ -367,6 +371,12 @@ fn remap_products(old: &GenomeInfo, counts: &[i64], new: &GenomeInfo, free: &mut
         }
     }
     out
+}
+
+/// Chance a frayed end is clipped before it is extended: clipping is the polymerase pocket's
+/// reverse reaction, sped by the same cut (e^(cut/kT) - 1 over e^(cut/kT)).
+fn clip_odds(poly: f64, kt: f64) -> f64 {
+    1.0 - (-poly / kt).exp()
 }
 
 /// Polymerase catalysis actually present: best expressed product, full strength from 3 copies.
@@ -745,19 +755,31 @@ impl World {
     fn copy_strand(&self, template: &[u8], free: &mut [i64; N_LETTERS], how: Copier, max_letters: usize, tally: &mut PairTally, rng: &mut Rng) -> (Seq, u32) {
         let mut out = Vec::new();
         let mut errors = 0;
-        for &t in template.iter().rev().take(max_letters) {
+        // attempts, not letters: a clipped mismatch costs the polymerase a turn
+        let mut budget = max_letters;
+        for &t in template.iter().rev() {
             let right = self.comp[t as usize] as usize;
-            // kinetic proofreading: with the right partner absent a polymerase stalls and
-            // waits rather than misincorporate; the copy resumes when supply returns
-            if free[right] <= 0 {
+            loop {
+                // kinetic proofreading: with the right partner absent a polymerase stalls and
+                // waits rather than misincorporate; the copy resumes when supply returns
+                if budget == 0 || free[right] <= 0 {
+                    return (out, errors);
+                }
+                budget -= 1;
+                let Some((pick, frayed)) = how.pick(t as usize, right, free, tally, rng) else { return (out, errors) };
+                // a mismatched end frays; the pocket that joins backbone bonds also clips them
+                // (catalysis runs both ways): the wrong letter goes back to the pool and the
+                // polymerase tries again. Without a pocket a frayed end is extended anyway
+                if frayed {
+                    continue;
+                }
+                free[pick] -= 1;
+                if pick != right {
+                    errors += 1;
+                }
+                out.push(pick as u8);
                 break;
             }
-            let Some((pick, _)) = how.pick(t as usize, right, free, tally, rng) else { break };
-            free[pick] -= 1;
-            if pick != right {
-                errors += 1;
-            }
-            out.push(pick as u8);
         }
         (out, errors)
     }
@@ -800,7 +822,7 @@ impl World {
         let boost = UNAIDED_COPY + POLY_SPEEDUP * ((poly / kt).exp() - 1.0);
         let how = match &model {
             Some(m) => Copier::Learned(m),
-            None => Copier::Pairing { gain, kt, pair: &self.ctx.ph.pair, stall_on_mismatch: false },
+            None => Copier::Pairing { gain, kt, pair: &self.ctx.ph.pair, fray: clip_odds(poly, kt) },
         };
 
         // transcription: each gene makes product copies; any copy error makes junk
@@ -937,9 +959,12 @@ impl World {
         let model = (c.mode == Mode::Surrogate).then(|| self.learned_copy(&Self::features(c, &info, self.env.kt)));
         let how = match &model {
             Some(m) => Copier::Learned(m),
-            None => {
-                Copier::Pairing { gain: DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly), kt: self.env.kt, pair: &self.ctx.ph.pair, stall_on_mismatch: false }
-            }
+            None => Copier::Pairing {
+                gain: DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly),
+                kt: self.env.kt,
+                pair: &self.ctx.ph.pair,
+                fray: clip_odds(poly, self.env.kt),
+            },
         };
         let (mut genome, errs) = self.copy_strand(&fork, &mut c.free, how, usize::MAX, &mut PairTally::default(), rng);
         if genome.len() < fork.len() {
@@ -1151,7 +1176,7 @@ mod tests {
     fn learned_copying_matches_detail_error_rate() {
         let cp = CellParams { auto: false, ..Default::default() };
         let mut w = World::new(PoolParams::default(), cp, Cosmos::new(CosmosParams::default()), rates(), 7, 120);
-        for _ in 0..1500 {
+        for _ in 0..4000 {
             w.step(0.02);
         }
         let err_rate = |w: &mut World| {

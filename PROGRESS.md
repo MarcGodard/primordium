@@ -10,11 +10,13 @@
 
 ## Next
 
-- **Heredity below the error threshold.** Heritable bit error is ~6-7% per division (130-bit genomes need < ~0.8%): lineages are a quasi-species, not faithful copies. Levers: proofreading/repair genes, selection for Li/Fl-rich monomer supply, shorter genomes.
+- **Heredity below the error threshold (Eigen's paradox).** With pocket-catalysed proofreading, bit error is ~4.5% per division (130-bit genomes need < ~0.8%) and polymerase strength creeps up 0.24 -> 0.27 over 400 days, then stalls: genomes cannot hold improvements at this error. Free proofreading for every cell reaches 0.57% but removes the pressure on polymerases. Levers left: per-letter error is driven by scarce Li (wrong letters dominate the pool when copying starts), so supply-gated forks or Li-selective metabolism; shorter genomes; repair genes.
 - **Niches by elevation:** patches differ in wet/dry and UV but phenotypes do not yet sort by them.
 - **Scale 1 cost:** folding dominates every scale above; the blend predicts well near cached relatives but cannot reach novel sequences, so scales 2/3 are no faster in surrogate mode. A lineage-level surrogate (a cell genome -> division time and mutation spectrum) is what would buy speed for the scales above the cell.
 
 ## Log
+
+- 2026-10-23 Proofreading. A mismatched growing end frays (odds 1 - e^(-gain * pairing shortfall / kT), the rule the pool already uses for stalls); in cells the polymerase pocket clips it back into the pool and retries, at odds 1 - e^(-poly/kT) since clipping is the pocket's reverse reaction. Retries cost copying time. Effects: selection for polymerase is now the strongest gradient seen (r = +0.10..+0.14 vs lineage growth at days 80-140, was +0.06..+0.09), bit error 6-7% -> ~4.5% after 400 days. Cell surrogate learns clip odds per (template, partner); its table now needs 400 samples per bin before it is trusted (with 6, surrogate bit error ran at 9% on thin bins). Cell shadow 99.3-100.1% of ceiling.
 
 - 2026-10-23 Scale 1 surrogate predicts from a distance-weighted blend (e^-d) of cached relatives instead of the single nearest fold: averaging relatives cancels fold noise. `primordium fold-kernel` (held-out sequence, 8 cached 1-2 mutant relatives, behind the sim's 0.9 confidence gate): **98-104% of ceiling vs 86-94% for nearest-only** at lengths 16-32; with 3 relatives 95-100% (nearest 90-93%). Length 8 never passes the gate, so short chains always fold exactly. Scale 0 re-measured over 10 days and 6 seeds: **98.8-99.5%, mean 99.2%** (4-day runs are noisy).
 

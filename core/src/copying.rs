@@ -5,7 +5,8 @@ use crate::polymer::N_LETTERS;
 use crate::rng::Rng;
 use crate::surrogate::RateTable;
 
-/// Channels per table: inverse selectivity per (template, partner), then stall-after-mismatch.
+/// Channels per table: inverse selectivity per (template, partner), then fray-after-mismatch
+/// (a pool copy stalls on a fray; a cell's polymerase clips the letter and retries).
 pub const COPY_CHANNELS: usize = 2 * N_LETTERS * N_LETTERS;
 
 fn sel_channel(t: usize, l: usize) -> usize {
@@ -19,7 +20,7 @@ fn stall_channel(t: usize, l: usize) -> usize {
 /// Detail tallies, per (template, partner). Selectivity: wrong picks, and the summed supply
 /// ratio free[partner] / free[right] over right picks; their ratio estimates 1 / selectivity
 /// exactly in expectation (only letters with the right partner present count). Stalls: how
-/// often a mismatch of that kind ends the copy.
+/// often a mismatch of that kind frays (pool: the copy ends; cell: the letter is clipped).
 #[derive(Clone, Debug, Default)]
 pub struct PairTally {
     pub picks: [[f64; N_LETTERS]; N_LETTERS],
@@ -72,12 +73,13 @@ impl LearnedCopy {
 
 #[derive(Clone, Copy)]
 pub enum Copier<'a> {
-    /// Boltzmann weights exp(gain * pair / kT); a mismatch stalls with 1 - exp(-shortfall / kT).
+    /// Boltzmann weights exp(gain * pair / kT). A mismatched end frays with 1 - exp(-shortfall / kT);
+    /// `fray` (0..1) scales how often that ends in a stall or a clip (0: never handled).
     Pairing {
         gain: f64,
         kt: f64,
         pair: &'a [[f64; N_LETTERS]; N_LETTERS],
-        stall_on_mismatch: bool,
+        fray: f64,
     },
     Learned(&'a LearnedCopy),
 }
@@ -117,13 +119,11 @@ impl Copier<'_> {
         let mut stall = false;
         if pick != right {
             stall = match *self {
-                Copier::Pairing { gain, kt, pair, stall_on_mismatch } => {
-                    stall_on_mismatch && rng.chance(1.0 - (-(gain * (pair[t][right] - pair[t][pick])) / kt).exp())
-                }
+                Copier::Pairing { gain, kt, pair, fray } => fray > 0.0 && rng.chance(fray * (1.0 - (-(gain * (pair[t][right] - pair[t][pick])) / kt).exp())),
                 Copier::Learned(m) => m.stall[t][pick] > 0.0 && rng.chance(m.stall[t][pick]),
             };
         }
-        if let Copier::Pairing { stall_on_mismatch, .. } = *self {
+        if let Copier::Pairing { .. } = *self {
             if free[right] > 0 {
                 if pick != right {
                     tally.picks[t][pick] += 1.0;
@@ -133,7 +133,8 @@ impl Copier<'_> {
                     }
                 }
             }
-            if pick != right && stall_on_mismatch {
+            // count every mismatch, clipped or not: a pocketless cell's zero clip rate is data too
+            if pick != right {
                 tally.mismatches[t][pick] += 1.0;
                 tally.stalls[t][pick] += stall as u8 as f64;
             }
