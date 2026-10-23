@@ -182,6 +182,30 @@ func _draw_cells() -> void:
 			art.draw_arc(pos, r + 0.8, 0, TAU, 32, Color(1, 1, 0.4), 0.2)
 		if near:
 			art.draw_string(font, pos + Vector2(-r, r + 1.2), "g%d" % c.generation, HORIZONTAL_ALIGNMENT_LEFT, -1, 1, Color(1, 1, 1, 0.6))
+	# colonies on top: overlapping membranes would hide the bridges
+	_draw_colonies(cells, func(c): return cell_pos(c), 1.0)
+
+## Colonies: members stuck together by adhesive products, joined by soft bridges.
+func _draw_colonies(list: Array, pos_of: Callable, scale_r: float) -> void:
+	var groups := {}
+	for c in list:
+		if c.colony >= 0:
+			if not groups.has(c.colony):
+				groups[c.colony] = []
+			groups[c.colony].append(c)
+	for k in groups:
+		var g: Array = groups[k]
+		if g.size() < 2:
+			continue
+		var centre := Vector2.ZERO
+		for c in g:
+			centre += pos_of.call(c)
+		centre /= g.size()
+		for c in g:
+			var p: Vector2 = pos_of.call(c)
+			art.draw_line(p, centre, Color(1.0, 0.85, 0.45, 0.9), 0.5 * scale_r)
+			art.draw_circle(p, 0.45 * scale_r, Color(1.0, 0.85, 0.45, 0.9))
+		art.draw_circle(centre, 0.8 * scale_r, Color(1.0, 0.85, 0.45, 0.95))
 
 func hud_text() -> String:
 	if not ok:
@@ -189,8 +213,12 @@ func hud_text() -> String:
 	var s := stats
 	if s.is_empty():
 		return ""
-	var t := "[b]Beach[/b] sea left, dune right\ncells %d (surrogate %d)   generation %d\ndivisions %d   deaths %d   genomes seen %d\nreplication error %.1f%%   radiation mutations %d\n" % [
-		s.cells, s.surrogate, s.max_generation, s.divisions, s.deaths, s.genomes, s.copy_error * 100.0, s.radiation_mutations]
+	var colonial := 0
+	for c in cells:
+		if c.colony >= 0:
+			colonial += 1
+	var t := "[b]Beach[/b] sea left, dune right\ncells %d (surrogate %d)   generation %d   in colonies %d\ndivisions %d   deaths %d   genomes seen %d\nreplication error %.1f%%   radiation mutations %d\n" % [
+		s.cells, s.surrogate, s.max_generation, colonial, s.divisions, s.deaths, s.genomes, s.copy_error * 100.0, s.radiation_mutations]
 	t += "[b]Resolution[/b] %s   lifts %d\n" % ["auto (A)" if s.auto else "detail (A)", s.lifts]
 	t += "[b]Discoveries[/b]\n"
 	for d in s.discoveries:

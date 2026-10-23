@@ -191,6 +191,9 @@ func _draw_coast() -> void:
 	if selected >= 0:
 		var o := tile_origin(selected)
 		var sy := TILE_H / 140.0
+		var place := func(c: Dictionary) -> Vector2:
+			var jit: float = fmod(float(c.id) * 0.618, 1.0)
+			return o + Vector2((float(c.patch) + 0.15 + 0.7 * jit) * BAND, float(c.y) * 140.0 * sy)
 		for c in site_cells:
 			var jitter: float = fmod(float(c.id) * 0.618, 1.0)
 			var p := o + Vector2((float(c.patch) + 0.15 + 0.7 * jitter) * BAND, float(c.y) * 140.0 * sy)
@@ -198,6 +201,28 @@ func _draw_coast() -> void:
 			var r: float = c.r * sy * 1.6
 			art.draw_circle(p, r, Color(col, 0.35))
 			art.draw_arc(p, r, 0, TAU, 16, Color(0.75, 0.6, 1.0, 0.9) if c.surrogate else Color(col.lightened(0.3), 0.9), 0.12)
+		# bridges on top: translucent cells would paint over them
+		_draw_colonies(site_cells, place)
+
+## Colonies: members stuck together by adhesive products, joined by soft bridges.
+func _draw_colonies(list: Array, pos_of: Callable) -> void:
+	var groups := {}
+	for c in list:
+		if c.colony >= 0:
+			if not groups.has(c.colony):
+				groups[c.colony] = []
+			groups[c.colony].append(c)
+	for k in groups:
+		var g: Array = groups[k]
+		if g.size() < 2:
+			continue
+		var centre := Vector2.ZERO
+		for c in g:
+			centre += pos_of.call(c)
+		centre /= g.size()
+		for c in g:
+			art.draw_line(pos_of.call(c), centre, Color(0.95, 0.8, 0.5, 0.55), 0.12)
+		art.draw_circle(centre, 0.25, Color(0.95, 0.8, 0.5, 0.8))
 
 func hud_text() -> String:
 	if not ok:
@@ -209,8 +234,8 @@ func hud_text() -> String:
 	t += "[color=#cbf]purple frame: site runs as lineages (learned division rates)[/color]\n"
 	if selected >= 0 and selected < sites.size():
 		var s: Dictionary = sites[selected]
-		t += "\n[b]Site %+.0f°[/b]  %.1f K  tide x%.1f\ncells %d   generation %d   divisions %d\nbit error %.2f%%   genome %.0f letters\npolymerase %.2f  metabolism %.2f\nmembrane %.2f  pigment %.2f\n" % [
-			rad_to_deg(s.latitude), s.temperature_k, s.tide_scale, s.cells, s.max_generation, s.divisions, s.bit_error * 100.0, s.genome_len, s.poly, s.synth, s.amph, s.pigment]
+		t += "\n[b]Site %+.0f°[/b]  %.1f K  tide x%.1f\ncells %d   generation %d   divisions %d\nbit error %.2f%%   genome %.0f letters\nin colonies %.0f%% (mean size %.1f)   adhesion %.2f\npolymerase %.2f  metabolism %.2f\nmembrane %.2f  pigment %.2f\n" % [
+			rad_to_deg(s.latitude), s.temperature_k, s.tide_scale, s.cells, s.max_generation, s.divisions, s.bit_error * 100.0, s.genome_len, s.colonial * 100.0, s.colony_size, s.adhesion, s.poly, s.synth, s.amph, s.pigment]
 		t += "[color=#9ab]sky and tide shown for this site[/color]\n"
 	t += "[b]Discoveries[/b]\n"
 	for d in stats.discoveries:

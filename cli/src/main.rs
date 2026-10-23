@@ -838,9 +838,10 @@ fn coast(args: &[String]) {
             for s in c.sites.iter_mut() {
                 let w = &mut s.world;
                 let ph = w.phenotype_means();
+                let (colonial, size, adh) = w.colony_stats();
                 let st = &w.stats;
                 println!(
-                    "   lat {:+5.2} tide x{:.2} T {:5.1}K | cells {:3} gen {:3} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:3.0} | bit err {:.3}",
+                    "   lat {:+5.2} tide x{:.2} T {:5.1}K | cells {:3} gen {:3} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:3.0} | bit err {:.3} | adh {adh:.3} colonial {:3.0}% size {size:4.1}",
                     s.latitude,
                     s.tide_scale,
                     w.env.temperature_k,
@@ -851,7 +852,8 @@ fn coast(args: &[String]) {
                     ph[2],
                     ph[3],
                     ph[4],
-                    st.bit_errors as f64 / st.bits_inherited.max(1) as f64
+                    st.bit_errors as f64 / st.bits_inherited.max(1) as f64,
+                    colonial * 100.0
                 );
             }
         }
@@ -938,10 +940,22 @@ fn coast_shadow(args: &[String]) {
         let mut v = Vec::new();
         for (k, s) in c.sites.iter_mut().enumerate() {
             let ph = s.world.phenotype_means();
-            v.extend([s.world.cells.len() as f64, (s.world.stats.divisions - d0[k]) as f64, ph[0] * 100.0, ph[1] * 100.0, ph[2] * 100.0, ph[3] * 100.0, ph[4]]);
+            let (colonial, _, adh) = s.world.colony_stats();
+            v.extend([
+                s.world.cells.len() as f64,
+                (s.world.stats.divisions - d0[k]) as f64,
+                ph[0] * 100.0,
+                ph[1] * 100.0,
+                ph[2] * 100.0,
+                ph[3] * 100.0,
+                ph[4],
+                colonial * 100.0,
+                adh * 100.0,
+            ]);
         }
         v
     };
+    const STATS: usize = 9;
     let (mut acc, mut ceil, mut n) = (0.0, 0.0, 0.0);
     let (mut ta, mut tb) = (0.0, 0.0);
     let end = a.t_days + days;
@@ -978,11 +992,11 @@ fn coast_shadow(args: &[String]) {
             ceil += y;
             n += 1.0;
             let lin = b.sites.iter().filter(|s| s.mode == Mode::Surrogate).count();
-            let div = |v: &[f64]| v.chunks(7).map(|c| c[1]).sum::<f64>();
+            let div = |v: &[f64]| v.chunks(STATS).map(|c| c[1]).sum::<f64>();
             if std::env::var("DIAG").is_ok() {
-                let col = |v: &[f64], j: usize| v.chunks(7).map(|c| c[j]).collect::<Vec<_>>();
-                let names = ["cells", "divs", "poly", "synth", "amph", "pig", "len"];
-                let row: Vec<String> = (0..7)
+                let col = |v: &[f64], j: usize| v.chunks(STATS).map(|c| c[j]).collect::<Vec<_>>();
+                let names = ["cells", "divs", "poly", "synth", "amph", "pig", "len", "colonial", "adh"];
+                let row: Vec<String> = (0..STATS)
                     .map(|j| format!("{} {:.1}/{:.1}", names[j], 100.0 * agreement(&col(&sa, j), &col(&sb, j)), 100.0 * agreement(&col(&sa, j), &col(&st, j))))
                     .collect();
                 println!("   {}", row.join("  "));

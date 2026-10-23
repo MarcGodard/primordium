@@ -108,7 +108,7 @@ impl CellSim {
     fn cells(&mut self) -> VarArray {
         let mut arr = VarArray::new();
         let Some(w) = self.world.as_ref() else { return arr };
-        let rows: Vec<(u64, usize, f64, i64, Vec<u8>, Mode, f64, u32, i64, f64)> = w
+        let rows: Vec<(u64, usize, f64, i64, Vec<u8>, Mode, f64, u32, i64, f64, i64)> = w
             .cells
             .iter()
             .map(|c| {
@@ -123,10 +123,11 @@ impl CellSim {
                     c.generation,
                     c.products.iter().sum::<i64>(),
                     c.fork.as_ref().map_or(0.0, |f| f.len() as f64 / c.genome.len().max(1) as f64),
+                    c.colony.map_or(-1, |k| k as i64),
                 )
             })
             .collect();
-        for (id, patch, y, area, genome, mode, conf, generation, prods, fork) in rows {
+        for (id, patch, y, area, genome, mode, conf, generation, prods, fork, colony) in rows {
             let info = self.info(&genome);
             let mut d = VarDictionary::new();
             d.set("id", id as i64);
@@ -144,6 +145,8 @@ impl CellSim {
             d.set("surrogate", mode == Mode::Surrogate);
             d.set("confidence", conf);
             d.set("generation", generation as i64);
+            d.set("colony", colony);
+            d.set("adhesion", info.adhesion);
             arr.push(&d.to_variant());
         }
         arr

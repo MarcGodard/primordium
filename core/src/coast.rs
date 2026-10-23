@@ -218,7 +218,8 @@ impl Coast {
             let tide = w.env.tide_level;
             let mut i = 0;
             while i < w.cells.len() {
-                let wet = w.patches[w.cells[i].patch].elevation < tide;
+                // colony cells hold on to the beach and each other: the current takes loners
+                let wet = w.patches[w.cells[i].patch].elevation < tide && w.cells[i].colony.is_none();
                 if wet && self.rng.chance(p) {
                     let to = if k == 0 {
                         1

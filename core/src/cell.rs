@@ -79,6 +79,13 @@ pub struct CellParams {
     /// Chance per day a cell drifts to a neighbouring patch (wet only).
     pub drift: f64,
     pub genome_max: usize,
+    /// Adhesion below `stick_floor` never holds a daughter; at floor + span it always does.
+    pub stick_floor: f64,
+    pub stick_span: f64,
+    /// Colony size past which a random member breaks away.
+    pub colony_max: usize,
+    /// Loose monomers flowing toward the colony average, fraction per day.
+    pub share_rate: f64,
     pub auto: bool,
     pub lift_below: f64,
     pub restrict_above: f64,
@@ -113,6 +120,10 @@ impl Default for CellParams {
             max_cells: 500,
             drift: 0.3,
             genome_max: 160,
+            stick_floor: 0.2,
+            stick_span: 0.2,
+            colony_max: 16,
+            share_rate: 2.0,
             auto: true,
             lift_below: 0.5,
             restrict_above: 0.85,
@@ -139,6 +150,9 @@ pub struct GenomeInfo {
     pub synth_cut: f64,
     pub amph: f64,
     pub pigment: f64,
+    /// Best stickiness among the genes' products.
+    #[serde(default)]
+    pub adhesion: f64,
     pub pending: bool,
 }
 
@@ -223,6 +237,9 @@ pub struct Cell {
     /// inherited; lineage daughters copy this snapshot to keep that. Information, not matter.
     #[serde(default)]
     pub template: Option<Seq>,
+    /// Colony this cell is stuck in (daughters of sticky cells stay attached).
+    #[serde(default)]
+    pub colony: Option<u64>,
 }
 
 impl Cell {
@@ -304,6 +321,10 @@ pub struct CellStats {
     pub tx_short: u64,
     pub products_decayed: u64,
     pub products_inserted: u64,
+    #[serde(default)]
+    pub colony_breakaways: u64,
+    #[serde(default)]
+    pub shared_monomers: u64,
 }
 
 pub fn cell_table() -> RateTable {
@@ -527,6 +548,7 @@ impl World {
                 mutations: 0,
                 ready: false,
                 template: None,
+                colony: None,
                 y: rng.f64(),
             };
             self.cells.push(cell);
@@ -558,7 +580,8 @@ impl World {
             genes.iter().map(|g| LETTERS.iter().map(|&z| g.func.catalysis[pair(ka, bidx(z).unwrap())]).sum::<f64>() / N_LETTERS as f64).fold(0.0, f64::max);
         let amph = genes.iter().map(|g| g.func.amphiphile).fold(0.0, f64::max);
         let pigment = genes.iter().map(|g| g.func.pigment).fold(0.0, f64::max);
-        let info = Arc::new(GenomeInfo { genes, poly_cut, synth_cut, amph, pigment, pending });
+        let adhesion = genes.iter().map(|g| g.func.adhesion).fold(0.0, f64::max);
+        let info = Arc::new(GenomeInfo { genes, poly_cut, synth_cut, amph, pigment, adhesion, pending });
         if self.genomes.insert(genome.to_vec(), info.clone()).is_none() && !self.refreshing {
             self.stats.new_genomes += 1;
         }
@@ -616,11 +639,12 @@ impl World {
         let mut born = Vec::new();
         let mut dead = Vec::new();
         let logging = self.lineage_log.is_some();
+        let colony_shade = self.colony_shades(&cells);
         let mut samples = Vec::new();
         for (ci, c) in cells.iter_mut().enumerate() {
             let info = self.info(&c.genome);
             debug_assert_eq!(c.products.len(), info.genes.len());
-            let shade = self.cp.max_shade * info.pigment * self.expressed_fraction(c, &info, |g| g.func.pigment > 0.0);
+            let shade = c.colony.and_then(|k| colony_shade.get(&k).copied()).unwrap_or_else(|| self.own_shade(c, &info));
             let site = self.patch_site(c.patch, shade);
             if logging {
                 samples.push(crate::lineage::LineageSample { x: self.lineage_features(c, &info, &site), ..Default::default() });
@@ -651,7 +675,8 @@ impl World {
             if c.fork.as_ref().is_some_and(|f| f.len() == c.genome.len()) && c.area() >= (2 * c.birth_area).min(self.cp.divide_area) {
                 born.push(ci);
             }
-            if site.wet && rng.chance((self.cp.drift * dt).min(1.0)) {
+            // colony cells are stuck to the substrate and each other: no drifting off alone
+            if site.wet && c.colony.is_none() && rng.chance((self.cp.drift * dt).min(1.0)) {
                 let np = if rng.chance(0.5) { c.patch.saturating_sub(1) } else { (c.patch + 1).min(self.cp.patches - 1) };
                 c.patch = np;
             }
@@ -686,6 +711,7 @@ impl World {
             self.spill(c);
             self.stats.deaths += 1;
         }
+        self.colony_physics(&mut cells, dt, &mut rng);
         self.cells = cells;
         self.ctx.rng = rng;
         self.ctx.resolve(self.t_days);
@@ -1027,6 +1053,8 @@ impl World {
             c.fork = Some(fork);
             return None;
         }
+        // adhesion as expressed before the parent's products are split with the daughter
+        let colony = self.stick(c, &info, rng);
         // antisense strand is recycled into monomers
         for &l in &fork {
             c.free[l as usize] += 1;
@@ -1104,7 +1132,98 @@ impl World {
             ready: false,
             template: None,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
+            colony,
         })
+    }
+
+    /// Pigment shade a cell makes for itself (only expressed pigment shades).
+    pub(crate) fn own_shade(&self, c: &Cell, info: &GenomeInfo) -> f64 {
+        self.cp.max_shade * info.pigment * self.expressed_fraction(c, info, |g| g.func.pigment > 0.0)
+    }
+
+    /// A colony shares its shade: each member sits under the colony's mean pigment cover.
+    pub(crate) fn colony_shades(&mut self, cells: &[Cell]) -> HashMap<u64, f64> {
+        let mut acc: HashMap<u64, (f64, f64)> = HashMap::new();
+        for c in cells {
+            if let Some(k) = c.colony {
+                let info = self.info(&c.genome);
+                let e = acc.entry(k).or_default();
+                e.0 += self.own_shade(c, &info);
+                e.1 += 1.0;
+            }
+        }
+        acc.into_iter().map(|(k, (s, n))| (k, s / n)).collect()
+    }
+
+    /// Whether a daughter stays stuck to its parent: odds rise with the adhesion the parent
+    /// actually expresses. Returns the shared colony id (the parent joins it too).
+    pub(crate) fn stick(&mut self, c: &mut Cell, info: &GenomeInfo, rng: &mut Rng) -> Option<u64> {
+        let adh = info.genes.iter().zip(&c.products).map(|(g, &n)| g.func.adhesion * (n as f64 / 3.0).min(1.0)).fold(0.0, f64::max);
+        let p = ((adh - self.cp.stick_floor) / self.cp.stick_span).clamp(0.0, 1.0);
+        if !rng.chance(p) {
+            return None;
+        }
+        Some(*c.colony.get_or_insert_with(|| self.ctx.next_id()))
+    }
+
+    /// Colonies: oversized ones shed a member; members' loose monomers flow toward the
+    /// colony mean. Transfers are whole monomers from donors to the needy, matter exact.
+    pub(crate) fn colony_physics(&mut self, cells: &mut [Cell], dt: f64, rng: &mut Rng) {
+        let mut members: HashMap<u64, Vec<usize>> = HashMap::new();
+        for (i, c) in cells.iter().enumerate() {
+            if let Some(k) = c.colony {
+                members.entry(k).or_default().push(i);
+            }
+        }
+        let k_share = (self.cp.share_rate * dt).min(1.0);
+        let mut ids: Vec<u64> = members.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let mut m = members.remove(&id).unwrap();
+            while m.len() > self.cp.colony_max {
+                let j = m.swap_remove(rng.below(m.len()));
+                cells[j].colony = None;
+                self.stats.colony_breakaways += 1;
+            }
+            if m.len() < 2 {
+                // mates died or broke away: a colony of one is a free cell again
+                for &i in &m {
+                    cells[i].colony = None;
+                }
+                continue;
+            }
+            for l in 0..N_LETTERS {
+                let total: i64 = m.iter().map(|&i| cells[i].free[l]).sum();
+                let mean = total as f64 / m.len() as f64;
+                let mut pot = 0i64;
+                for &i in &m {
+                    let give = ((cells[i].free[l] as f64 - mean).max(0.0) * k_share).floor() as i64;
+                    cells[i].free[l] -= give;
+                    pot += give;
+                }
+                let need: f64 = m.iter().map(|&i| (mean - cells[i].free[l] as f64).max(0.0)).sum();
+                if pot == 0 || need <= 0.0 {
+                    if pot > 0 {
+                        cells[m[0]].free[l] += pot;
+                    }
+                    continue;
+                }
+                let mut left = pot;
+                for &i in &m {
+                    let want = (mean - cells[i].free[l] as f64).max(0.0);
+                    let take = ((want / need) * pot as f64).floor() as i64;
+                    let take = take.min(left);
+                    cells[i].free[l] += take;
+                    left -= take;
+                }
+                // rounding remainder to the neediest member
+                if left > 0 {
+                    let &i = m.iter().min_by_key(|&&i| cells[i].free[l]).unwrap();
+                    cells[i].free[l] += left;
+                }
+                self.stats.shared_monomers += pot as u64;
+            }
+        }
     }
 
     pub(crate) fn spill(&mut self, c: Cell) {
@@ -1164,6 +1283,22 @@ impl World {
     /// Fresh dice, same state: shadow mode's detail twin.
     pub fn reseed(&mut self, seed: u64) {
         self.ctx.reseed(seed);
+    }
+
+    /// (share of cells in colonies of 2+, mean size of those colonies, mean genome adhesion).
+    pub fn colony_stats(&mut self) -> (f64, f64, f64) {
+        let mut sizes: HashMap<u64, usize> = HashMap::new();
+        for c in &self.cells {
+            if let Some(k) = c.colony {
+                *sizes.entry(k).or_default() += 1;
+            }
+        }
+        let colonial: usize = sizes.values().filter(|&&n| n >= 2).sum();
+        let groups = sizes.values().filter(|&&n| n >= 2).count();
+        let genomes: Vec<Seq> = self.cells.iter().map(|c| c.genome.clone()).collect();
+        let adh: f64 = genomes.iter().map(|g| self.info(g).adhesion).sum();
+        let n = self.cells.len().max(1) as f64;
+        (colonial as f64 / n, if groups > 0 { colonial as f64 / groups as f64 } else { 0.0 }, adh / n)
     }
 
     /// Population means of the phenotype, for watching evolution.
@@ -1264,5 +1399,20 @@ mod tests {
         let n_sur = sur.cells.iter().filter(|c| c.mode == Mode::Surrogate).count();
         assert!(n_sur * 10 >= sur.cells.len() * 9, "trained cells stayed in detail: {n_sur}/{}", sur.cells.len());
         assert!(d > 0.01 && (s - d).abs() < 0.2 * d, "detail error {d:.4} vs learned {s:.4}");
+    }
+
+    #[test]
+    fn colonies_form_share_and_keep_matter() {
+        // every expressed sticky product holds: colonies must form, and sharing is exact
+        let cp = CellParams { stick_floor: 0.0, stick_span: 0.01, max_cells: 120, ..Default::default() };
+        let mut w = World::new(PoolParams::default(), cp, Cosmos::new(CosmosParams::default()), rates(), 11, 60);
+        let start = w.matter();
+        for _ in 0..1500 {
+            w.step(0.02);
+        }
+        assert_eq!(w.matter(), start);
+        let (colonial, size, _) = w.colony_stats();
+        assert!(colonial > 0.2 && size >= 2.0, "colonies did not form: {colonial} {size}");
+        assert!(w.stats.shared_monomers > 0, "colony members never shared: test would pass vacuously");
     }
 }

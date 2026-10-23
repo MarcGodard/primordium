@@ -99,6 +99,10 @@ impl CoastSim {
             d.set("divisions", w.stats.divisions as i64);
             d.set("bit_error", w.stats.bit_errors as f64 / w.stats.bits_inherited.max(1) as f64);
             d.set("lineage", s.mode == Mode::Surrogate);
+            let (colonial, size, adh) = w.colony_stats();
+            d.set("colonial", colonial);
+            d.set("colony_size", size);
+            d.set("adhesion", adh);
             d.set("confidence", s.conf);
             arr.push(&d.to_variant());
         }
@@ -112,8 +116,9 @@ impl CoastSim {
         let Some(c) = self.coast.as_mut() else { return arr };
         let Some(s) = c.sites.get_mut(k as usize) else { return arr };
         let w = &mut s.world;
-        let rows: Vec<_> = w.cells.iter().map(|c| (c.id, c.patch, c.y, c.area(), c.genome.clone(), c.generation, c.mode)).collect();
-        for (id, patch, y, area, genome, generation, mode) in rows {
+        let rows: Vec<_> =
+            w.cells.iter().map(|c| (c.id, c.patch, c.y, c.area(), c.genome.clone(), c.generation, c.mode, c.colony.map_or(-1, |k| k as i64))).collect();
+        for (id, patch, y, area, genome, generation, mode, colony) in rows {
             let info = w.info(&genome);
             let mut d = VarDictionary::new();
             d.set("id", id as i64);
@@ -126,6 +131,7 @@ impl CoastSim {
             d.set("pigment", info.pigment);
             d.set("generation", generation as i64);
             d.set("surrogate", mode == Mode::Surrogate);
+            d.set("colony", colony);
             arr.push(&d.to_variant());
         }
         arr

@@ -233,6 +233,10 @@ pub struct Function {
     pub pigment: f64,
     /// Fold energy, kT (negative = compact).
     pub fold_energy: f64,
+    /// Stickiness, 0..1: oily residues left exposed on a stable fold grab the membrane of a
+    /// neighbouring cell. Exposing them costs fold stability, so adhesion is not free.
+    #[serde(default)]
+    pub adhesion: f64,
 }
 
 impl Function {
@@ -247,6 +251,7 @@ impl Function {
         f.amphiphile *= w;
         f.pigment *= w;
         f.fold_energy *= w;
+        f.adhesion *= w;
         f
     }
 
@@ -258,12 +263,13 @@ impl Function {
         self.amphiphile += w * o.amphiphile;
         self.pigment += w * o.pigment;
         self.fold_energy += w * o.fold_energy;
+        self.adhesion += w * o.adhesion;
     }
 
     /// Flat vector for distance/accuracy comparisons.
     pub fn as_vec(&self) -> Vec<f64> {
         let mut v = self.catalysis.clone();
-        v.extend_from_slice(&[self.stability, self.amphiphile, self.pigment]);
+        v.extend_from_slice(&[self.stability, self.amphiphile, self.pigment, self.adhesion]);
         v
     }
 }
@@ -325,7 +331,12 @@ pub fn function_of(seq: &[u8], f: &Fold, ph: &LetterPhysics, kt: f64) -> Functio
     let h = |r: &[u8]| r.iter().map(|&l| ph.hydropathy[l as usize]).sum::<f64>() / r.len().max(1) as f64;
     let amphiphile = if n >= 4 { ((h(&seq[half..]) - h(&seq[..half])).abs() * (n as f64 / 8.0).min(1.0)).min(1.0) } else { 0.0 };
     let pigment = seq.iter().map(|&l| ph.absorb[l as usize]).sum::<f64>() / n.max(1) as f64;
-    Function { catalysis, stability, amphiphile, pigment, fold_energy: f.energy }
+    // adhesion: oily residues with open lattice sides, on a fold that holds together
+    let occupied: std::collections::HashSet<(i32, i32)> = f.pos.iter().cloned().collect();
+    let open = |k: usize| SQ.iter().filter(|(dx, dy)| !occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy))).count() as f64;
+    let sticky: f64 = (0..n).map(|k| ph.hydropathy[seq[k] as usize].max(0.0) * open(k)).sum();
+    let adhesion = (stability * sticky / (2.0 * n.max(1) as f64)).min(1.0);
+    Function { catalysis, stability, amphiphile, pigment, fold_energy: f.energy, adhesion }
 }
 
 /// Convenience: fold then read function.
@@ -355,6 +366,7 @@ pub fn express_ensemble(seq: &[u8], ph: &LetterPhysics, kt: f64, seed: u64, k: u
                 }
                 a.stability += func.stability;
                 a.fold_energy += func.fold_energy;
+                a.adhesion += func.adhesion;
                 a
             }
         });
@@ -367,6 +379,7 @@ pub fn express_ensemble(seq: &[u8], ph: &LetterPhysics, kt: f64, seed: u64, k: u
     a.catalysis.iter_mut().for_each(|x| *x /= kf);
     a.stability /= kf;
     a.fold_energy /= kf;
+    a.adhesion /= kf;
     (best.unwrap(), a)
 }
 

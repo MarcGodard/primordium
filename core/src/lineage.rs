@@ -197,11 +197,12 @@ impl World {
         let mut rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
         self.tides(dt, &mut rng);
         let mut cells = std::mem::take(&mut self.cells);
+        let colony_shade = self.colony_shades(&cells);
         let mut born = Vec::new();
         let mut dead = Vec::new();
         for (ci, c) in cells.iter_mut().enumerate() {
             let info = self.info(&c.genome);
-            let shade = self.cp.max_shade * info.pigment * self.expressed_fraction(c, &info, |g| g.func.pigment > 0.0);
+            let shade = c.colony.and_then(|k| colony_shade.get(&k).copied()).unwrap_or_else(|| self.own_shade(c, &info));
             let site = self.patch_site(c.patch, shade);
             let x = self.lineage_features(c, &info, &site);
             if c.template.is_none() {
@@ -218,7 +219,7 @@ impl World {
                 c.ready = true;
                 born.push((ci, p_bit));
             }
-            if site.wet && rng.chance((self.cp.drift * dt).min(1.0)) {
+            if site.wet && c.colony.is_none() && rng.chance((self.cp.drift * dt).min(1.0)) {
                 c.patch = if rng.chance(0.5) { c.patch.saturating_sub(1) } else { (c.patch + 1).min(self.cp.patches - 1) };
             }
         }
@@ -248,6 +249,7 @@ impl World {
             self.spill(c);
             self.stats.deaths += 1;
         }
+        self.colony_physics(&mut cells, dt, &mut rng);
         self.cells = cells;
         self.ctx.rng = rng;
         self.ctx.resolve(self.t_days);
@@ -313,6 +315,7 @@ impl World {
         }
         p.raw_ka -= ka_needed;
         let dinfo = self.info(&genome);
+        let colony = self.stick(c, &info, rng);
         let mut free = c.free;
         let products = if genome == c.genome { c.products.clone() } else { remap_products(&info, &c.products, &dinfo, &mut free) };
         let d = Cell {
@@ -335,6 +338,7 @@ impl World {
             mutations: 0,
             ready: false,
             template: None,
+            colony,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
         };
         debug_assert_eq!(d.matter(&dinfo).0, m, "daughter priced wrong");
