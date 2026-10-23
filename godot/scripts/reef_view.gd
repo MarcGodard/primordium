@@ -111,8 +111,6 @@ const LEVERS := [
 	["uv", "UV", "How deadly unshaded sunlight is. Pigment protects."],
 ]
 var lever_panel: PanelContainer
-var lever_sliders := {}
-var lever_labels := {}
 var wave_mult := 1.0
 ## Unnamed lineages a garden save keeps (biggest first); named ones are always kept.
 const GARDEN_KEEP := 32
@@ -286,76 +284,42 @@ func _build_overlay() -> void:
 	chart.draw.connect(_draw_chart)
 	layer.add_child(chart)
 
-## Lever panel (garden only): a log slider per lever, x1/4 .. x4.
+## Lever panel (garden only), under the goal banner: the body panel owns the left column.
 func _build_levers() -> void:
-	lever_panel = PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.03, 0.05, 0.08, 0.9)
-	sb.set_corner_radius_all(8)
-	sb.content_margin_left = 14
-	sb.content_margin_right = 14
-	sb.content_margin_top = 10
-	sb.content_margin_bottom = 10
-	lever_panel.add_theme_stylebox_override("panel", sb)
-	lever_panel.position = Vector2(12, 440)
-	lever_panel.custom_minimum_size = Vector2(330, 0)
-	var box := VBoxContainer.new()
-	lever_panel.add_child(box)
-	var head := Label.new()
-	head.text = "Your world's environment (L to hide)"
-	head.add_theme_font_size_override("font_size", 14)
-	box.add_child(head)
-	for lv in LEVERS:
-		var row := HBoxContainer.new()
-		var l := Label.new()
-		l.custom_minimum_size = Vector2(110, 0)
-		l.add_theme_font_size_override("font_size", 13)
-		l.tooltip_text = lv[2]
-		l.mouse_filter = Control.MOUSE_FILTER_PASS
-		row.add_child(l)
-		var sl := HSlider.new()
-		sl.min_value = -2.0
-		sl.max_value = 2.0
-		sl.step = 0.25
-		sl.custom_minimum_size = Vector2(190, 0)
-		sl.tooltip_text = lv[2]
-		sl.focus_mode = Control.FOCUS_NONE
-		var key: String = lv[0]
-		sl.value_changed.connect(func(v: float) -> void: _set_lever(key, pow(2.0, v)))
-		row.add_child(sl)
-		box.add_child(row)
-		lever_sliders[key] = sl
-		lever_labels[key] = l
-	var note := Label.new()
-	note.text = "Each is a real rate in the model, x1/4 to x4.\nRun an experiment: change one, press T, read the report."
-	note.add_theme_font_size_override("font_size", 11)
-	note.add_theme_color_override("font_color", Color(0.6, 0.7, 0.8))
-	box.add_child(note)
-	lever_panel.visible = false
+	lever_panel = load("res://scripts/lever_panel.gd").new()
+	lever_panel.setup("Your world's environment (L to hide)", LEVERS, _apply_lever,
+		func() -> Dictionary: return sim.levers() if ok and not sim.busy() else {},
+		"Each is a real rate in the model, x1/4 to x4. Run an experiment: change one, press T, read the report.")
+	lever_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	lever_panel.offset_left = -180
+	lever_panel.offset_top = 124
 	layer.add_child(lever_panel)
 	_show_levers()
 
-func _set_lever(key: String, mult: float) -> void:
+## False while the reef is on the worker (sliders are locked then, see `_lock_levers`).
+func _apply_lever(key: String, mult: float) -> bool:
 	if not ok or sim.busy():
-		return
+		return false
 	sim.set_lever(key, mult)
-	campaign.state["levers"] = sim.levers() if campaign else {}
+	if campaign:
+		campaign.state["levers"] = sim.levers()
+	wave_mult = sim.levers().get("waves", 1.0)
+	return true
+
+## Set one lever and show it (capture flag --levers=key:mult).
+func _set_lever(key: String, mult: float) -> void:
+	_apply_lever(key, mult)
 	_show_levers()
 
-## Labels from the sim's actual values; sliders follow without re-firing.
 func _show_levers() -> void:
 	if lever_panel == null or not ok or sim.busy():
 		return
-	var lv: Dictionary = sim.levers()
-	wave_mult = lv.get("waves", 1.0)
-	for x in LEVERS:
-		var m: float = lv.get(x[0], 1.0)
-		lever_labels[x[0]].text = "%s  x%s" % [x[1], ("%.2f" % m).trim_suffix("0").trim_suffix("0").trim_suffix(".")]
-		lever_sliders[x[0]].set_value_no_signal(log(m) / log(2.0))
+	wave_mult = sim.levers().get("waves", 1.0)
+	lever_panel.refresh()
 
 func _lock_levers(on: bool) -> void:
-	for sl in lever_sliders.values():
-		sl.editable = not on
+	if lever_panel:
+		lever_panel.lock(on)
 
 ## Levers saved with the garden come back with it.
 func _restore_levers() -> void:
@@ -365,15 +329,9 @@ func _restore_levers() -> void:
 
 ## Non-default levers, for report titles.
 func _lever_note() -> String:
-	if not garden or not ok or sim.busy():
+	if not garden or lever_panel == null or not ok or sim.busy():
 		return ""
-	var parts := []
-	var lv: Dictionary = sim.levers()
-	for x in LEVERS:
-		var m: float = lv.get(x[0], 1.0)
-		if abs(m - 1.0) > 0.01:
-			parts.append("%s x%.2f" % [x[1].to_lower(), m])
-	return "" if parts.is_empty() else " (" + ", ".join(PackedStringArray(parts)) + ")"
+	return lever_panel.note()
 
 func activate(on: bool) -> void:
 	active = on

@@ -156,7 +156,7 @@ func keep(c: Dictionary, where: String) -> String:
 	state.named = int(state.named) + 1
 	var n: int = state.named
 	var name := "%s-%d" % [NAMES[n % NAMES.size()], n]
-	var rec := {"name": name, "genome": Array(c.genome), "mass": Array(c.mass), "cells": c.cells, "jobs": c.jobs, "creature": c.creature, "from": where, "released": false}
+	var rec := {"name": name, "genome": Array(c.genome), "mass": Array(c.mass), "cells": c.cells, "jobs": c.jobs, "creature": c.creature, "from": where, "released": false, "shape": _compact(c.get("shape", []))}
 	state.kept.append(rec)
 	if c.creature:
 		state.codex.append({"title": "Creature " + name, "text": "[b]%s[/b], kept from %s: %d cells doing %d jobs, crawling." % [name, where, c.cells, c.jobs], "scale": 6})
@@ -178,6 +178,13 @@ func field_note(title: String, text: String) -> void:
 		state.codex.remove_at(notes[0])
 	save()
 	changed.emit()
+
+## Shape for the save: positions as whole lattice steps, traits to 2 decimals.
+static func _compact(a) -> Array:
+	var out := []
+	for i in a.size():
+		out.append(int(a[i]) if i % 8 < 3 else snappedf(float(a[i]), 0.01))
+	return out
 
 func new_run() -> int:
 	state.run = int(state.run) + 1

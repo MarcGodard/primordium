@@ -19,6 +19,10 @@ const EXPLAIN := """[b]Scale 2: protocells[/b]
 [b]Try.[/b] Click a bubble to look inside, then a chain for its fold, then a letter for its atoms."""
 const SCALE_NAME := "scale 2: protocells"
 
+## Environment levers (L): real rates in the model, x1/4..x4 (lever_panel.gd).
+const LEVERS := [["shear", "Tidal shear", "How readily a grown vesicle splits when the tide churns the pond."], ["uv", "UV", "How fast UV erodes vesicle membranes."]]
+var levers: PanelContainer
+var levers_open := false
 var sim: PondSim
 var world: Node2D
 var floor_rect: ColorRect
@@ -70,6 +74,13 @@ func _ready() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 2
 	add_child(layer)
+	levers = load("res://scripts/lever_panel.gd").new()
+	levers.setup("Environment levers (L to hide)", LEVERS, func(k: String, m: float) -> bool: return sim.set_lever(k, m), func() -> Dictionary: return sim.levers(), "Run an experiment: change one and watch divisions, bursts and how deep the lineages get.")
+	# under the goal banner: the selection panels own the left column
+	levers.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	levers.offset_left = -180
+	levers.offset_top = 124
+	layer.add_child(levers)
 	thumbs = Control.new()
 	thumbs.position = Vector2(12, 430)
 	thumbs.size = Vector2(330, 150)
@@ -90,6 +101,7 @@ func activate(on: bool) -> void:
 	visible = on
 	set_process(on)
 	set_process_unhandled_input(on)
+	levers.visible = on and levers_open
 	thumbs.visible = on and selected >= 0
 	inset.visible = on and not inset.info.is_empty()
 	if on:
@@ -191,7 +203,7 @@ func hud_text() -> String:
 			if v.id == selected:
 				t += "\n[b]Vesicle %d[/b] gen %d  %s\nmembrane %d residues   chains %d   monomers %d\ncatalysis %.2f kT   pigment %.2f   osmotic %.3f\n" % [
 					v.id, v.generation, "surrogate %.2f" % v.confidence if v.surrogate else "detail", v.area, v.chains, v.free, v.cut, v.pigment, v.osmotic]
-	t += "\n[color=#789]Tab: switch scale   A: auto resolution\nclick a vesicle, then a chain, then a residue[/color]"
+	t += "\n[color=#789]Tab: switch scale   A: auto resolution   L: levers\nclick a vesicle, then a chain, then a residue[/color]"
 	return t
 
 func _thumb_layout() -> Array:
@@ -288,6 +300,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		cam.position -= e.relative / cam.zoom
 	elif e is InputEventKey and e.pressed:
 		match e.keycode:
+			KEY_L:
+				if not e.echo:
+					levers_open = not levers_open
+					levers.visible = levers_open
+					levers.refresh()
 			KEY_SPACE:
 				speed_idx = 0 if speed_idx != 0 else 2
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:

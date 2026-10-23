@@ -130,6 +130,31 @@ impl PondSim {
 
 #[godot_api]
 impl PondSim {
+    /// Levers (see lever_panel.gd), x1/4..x4 of default: "shear" (how readily a ripe vesicle
+    /// splits in the tide's shear), "uv" (UV erosion of membranes). False when unknown.
+    #[func]
+    fn set_lever(&mut self, name: GString, mult: f64) -> bool {
+        let Some(p) = self.pond.as_mut() else { return false };
+        let d = PondParams::default();
+        let m = mult.clamp(0.25, 4.0);
+        match name.to_string().as_str() {
+            "shear" => p.pp.div_rate = d.div_rate * m,
+            "uv" => p.pp.uv_damage = d.uv_damage * m,
+            _ => return false,
+        }
+        true
+    }
+
+    #[func]
+    fn levers(&self) -> VarDictionary {
+        let mut out = VarDictionary::new();
+        let Some(p) = self.pond.as_ref() else { return out };
+        let d = PondParams::default();
+        out.set("shear", p.pp.div_rate / d.div_rate);
+        out.set("uv", p.pp.uv_damage / d.uv_damage);
+        out
+    }
+
     #[func]
     fn start(&mut self, rates_path: GString, seed: i64, auto: bool) -> bool {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };

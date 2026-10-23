@@ -23,6 +23,10 @@ const HEIGHT := 140.0
 const ROLE_COLORS := [Color(0.3, 0.85, 0.85), Color(0.45, 0.85, 0.4), Color(0.95, 0.9, 0.75), Color(0.95, 0.65, 0.2), Color(0.6, 0.6, 0.65)]
 const ROLE_NAMES := ["polymerase", "metabolism", "membrane", "pigment", "no clear role"]
 
+## Environment levers (L): real rates in the model, x1/4..x4 (lever_panel.gd).
+const LEVERS := [["mutation", "Mutation", "UV and cosmic-ray mutations per copied letter. Too few: little for selection to work with. Too many: good genes are lost faster than selection keeps them (the error threshold)."], ["uv", "UV wear", "How fast sunlight wears cell membranes. Pigment shades."]]
+var levers: PanelContainer
+var levers_open := false
 var sim: CellSim
 var world: Node2D
 var beach: ColorRect
@@ -76,6 +80,13 @@ func _ready() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 2
 	add_child(layer)
+	levers = load("res://scripts/lever_panel.gd").new()
+	levers.setup("Environment levers (L to hide)", LEVERS, func(k: String, m: float) -> bool: return sim.set_lever(k, m), func() -> Dictionary: return sim.levers(), "Run an experiment: change one, let generations pass, watch replication error and what the population means do.")
+	# under the goal banner: the selection panels own the left column
+	levers.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	levers.offset_left = -180
+	levers.offset_top = 124
+	layer.add_child(levers)
 	genome_panel = Control.new()
 	genome_panel.position = Vector2(12, 430)
 	genome_panel.size = Vector2(330, 250)
@@ -113,6 +124,7 @@ func activate(on: bool) -> void:
 	visible = on
 	set_process(on)
 	set_process_unhandled_input(on)
+	levers.visible = on and levers_open
 	genome_panel.visible = on and not detail.is_empty()
 	inset.visible = on and not inset.info.is_empty()
 	chart.visible = on
@@ -289,7 +301,7 @@ func hud_text() -> String:
 		t += "\n[b]Cell %d[/b]  gen %d  %s\nmembrane %d   monomers %d   genome %d letters\nradiation mutations %d   %s\n" % [
 			detail.id, detail.generation, "surrogate" if detail.surrogate else "detail", detail.area, detail.free, detail.genome.size(), detail.mutations,
 			"replicating %d/%d" % [detail.fork, detail.genome.size()] if detail.fork >= 0 else "not replicating"]
-	t += "\n[color=#789]Tab: switch scale   A: auto resolution   V: 3D beach\nclick a cell, then a gene, then a residue\n3D: right-drag orbit, shift-drag pan, wheel zoom[/color]"
+	t += "\n[color=#789]Tab: switch scale   A: auto resolution   L: levers   V: 3D beach\nclick a cell, then a gene, then a residue\n3D: right-drag orbit, shift-drag pan, wheel zoom[/color]"
 	return t
 
 ## Genome map: bit ring (Li dark, Fl light), gene arcs by role, fork progress; gene list to click.
@@ -447,6 +459,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		cam.position -= e.relative / cam.zoom
 	elif e is InputEventKey and e.pressed:
 		match e.keycode:
+			KEY_L:
+				if not e.echo:
+					levers_open = not levers_open
+					levers.visible = levers_open
+					levers.refresh()
 			KEY_SPACE:
 				speed_idx = 0 if speed_idx != 0 else 2
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:

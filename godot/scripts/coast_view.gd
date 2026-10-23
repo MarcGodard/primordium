@@ -28,6 +28,10 @@ var cols := 1
 const ROLE_COLORS := [Color(0.3, 0.85, 0.85), Color(0.45, 0.85, 0.4), Color(0.95, 0.9, 0.75), Color(0.95, 0.65, 0.2), Color(0.6, 0.6, 0.65)]
 const ROLE_NAMES := ["polymerase", "metabolism", "membrane", "pigment"]
 
+## Environment levers (L): real rates in the model, x1/4..x4 (lever_panel.gd).
+const LEVERS := [["current", "Ocean current", "How fast the along-shore current carries flooded cells to the next beach. Faster: more travellers and beaches mix; slower: each beach evolves on its own."]]
+var levers: PanelContainer
+var levers_open := false
 var sim: CoastSim
 var world: Node2D
 var art: Node2D
@@ -86,6 +90,10 @@ func _ready() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 2
 	add_child(layer)
+	levers = load("res://scripts/lever_panel.gd").new()
+	levers.setup("Environment levers (L to hide)", LEVERS, func(k: String, m: float) -> bool: return sim.set_lever(k, m), func() -> Dictionary: return sim.levers(), "Run an experiment: change it, let time run, watch migrations and how alike the beaches get.")
+	levers.position = Vector2(12, 440)
+	layer.add_child(levers)
 	chart = Control.new()
 	chart.anchor_left = 0.5
 	chart.anchor_right = 0.5
@@ -123,6 +131,7 @@ func activate(on: bool) -> void:
 	visible = on
 	set_process(on)
 	set_process_unhandled_input(on)
+	levers.visible = on and levers_open
 	chart.visible = on
 	globe.visible = on
 	if on:
@@ -313,7 +322,7 @@ func hud_text() -> String:
 	t += "[b]Discoveries[/b]\n"
 	for d in stats.discoveries:
 		t += "[color=#cbf]" + d + "[/color]\n"
-	t += "\n[color=#789]Tab: switch scale   A: auto resolution\nclick a site, zoom in to see its cells[/color]"
+	t += "\n[color=#789]Tab: switch scale   A: auto resolution   L: levers\nclick a site, zoom in to see its cells[/color]"
 	return t
 
 ## Evolution map: one row per site (north on top), one column per day, colour = mean tint.
@@ -386,6 +395,11 @@ func _unhandled_input(e: InputEvent) -> void:
 		cam.position -= e.relative / cam.zoom
 	elif e is InputEventKey and e.pressed:
 		match e.keycode:
+			KEY_L:
+				if not e.echo:
+					levers_open = not levers_open
+					levers.visible = levers_open
+					levers.refresh()
 			KEY_SPACE:
 				speed_idx = 0 if speed_idx != 0 else 2
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:

@@ -17,6 +17,26 @@ pub struct CoastSim {
 
 #[godot_api]
 impl CoastSim {
+    /// Lever (see lever_panel.gd): "current", the along-shore current, x1/4..x4 of default. It
+    /// sets how many flooded cells a day ride to the next beach. False when unknown.
+    #[func]
+    fn set_lever(&mut self, name: GString, mult: f64) -> bool {
+        let Some(c) = self.coast.as_mut() else { return false };
+        match name.to_string().as_str() {
+            "current" => c.cp.current_m_s = CoastParams::default().current_m_s * mult.clamp(0.25, 4.0),
+            _ => return false,
+        }
+        true
+    }
+
+    #[func]
+    fn levers(&self) -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let Some(c) = self.coast.as_ref() else { return d };
+        d.set("current", c.cp.current_m_s / CoastParams::default().current_m_s);
+        d
+    }
+
     #[func]
     fn start(&mut self, rates_path: GString, seed: i64) -> bool {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };

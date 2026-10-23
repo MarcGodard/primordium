@@ -24,6 +24,9 @@ var goal_bar: ProgressBar
 var goal_panel: PanelContainer
 var codex_panel: PanelContainer
 var codex_text: RichTextLabel
+var gallery: SubViewportContainer
+var gallery_caption: RichTextLabel
+var gallery_list: ItemList
 var toast_label: Label
 var toast_tw: Tween
 var card: PanelContainer
@@ -101,7 +104,14 @@ func _ready() -> void:
 				if view.has_method("ff_wait"):
 					view.ff_wait(float(kv[1]))
 			"levers":
-				# garden: open the lever panel; "waves:0.25" also sets one
+				# open the view's lever panel; "key:mult" also sets one
+				var kv3: PackedStringArray = kv[1].split(":")
+				if view.get("levers") is Control:
+					view.levers_open = true
+					view.levers.visible = true
+					if kv3.size() == 2:
+						view.sim.set_lever(kv3[0], float(kv3[1]))
+					view.levers.refresh()
 				if view.get("lever_panel") != null:
 					view.lever_panel.visible = true
 					var kv2: PackedStringArray = kv[1].split(":")
@@ -369,21 +379,48 @@ func _build_campaign_ui() -> void:
 	goal_bar.add_theme_stylebox_override("background", bg)
 	box.add_child(goal_bar)
 	codex_panel = PanelContainer.new()
-	codex_panel.add_theme_stylebox_override("panel", _panel_style(0.95))
+	codex_panel.add_theme_stylebox_override("panel", _panel_style(0.98))
 	codex_panel.anchor_left = 0.5
 	codex_panel.anchor_right = 0.5
 	codex_panel.anchor_top = 0.5
 	codex_panel.anchor_bottom = 0.5
-	codex_panel.offset_left = -400
-	codex_panel.offset_right = 400
-	codex_panel.offset_top = -330
-	codex_panel.offset_bottom = 330
+	codex_panel.offset_left = -620
+	codex_panel.offset_right = 620
+	codex_panel.offset_top = -340
+	codex_panel.offset_bottom = 340
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 18)
+	codex_panel.add_child(cols)
 	codex_text = RichTextLabel.new()
 	codex_text.bbcode_enabled = true
 	codex_text.scroll_active = true
+	codex_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	codex_text.add_theme_font_size_override("normal_font_size", 15)
 	codex_text.add_theme_font_size_override("bold_font_size", 16)
-	codex_panel.add_child(codex_text)
+	cols.add_child(codex_text)
+	# the collection: kept creatures, the selected one in 3D
+	var right := VBoxContainer.new()
+	right.custom_minimum_size = Vector2(420, 0)
+	cols.add_child(right)
+	var head := Label.new()
+	head.text = "Your creatures"
+	head.add_theme_font_size_override("font_size", 18)
+	head.add_theme_color_override("font_color", Color(0.75, 1.0, 0.55))
+	right.add_child(head)
+	gallery = load("res://scripts/gallery.gd").new()
+	gallery.custom_minimum_size = Vector2(420, 330)
+	right.add_child(gallery)
+	gallery_caption = RichTextLabel.new()
+	gallery_caption.bbcode_enabled = true
+	gallery_caption.fit_content = true
+	gallery_caption.scroll_active = false
+	gallery_caption.add_theme_font_size_override("normal_font_size", 14)
+	right.add_child(gallery_caption)
+	gallery_list = ItemList.new()
+	gallery_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	gallery_list.focus_mode = Control.FOCUS_NONE
+	gallery_list.item_selected.connect(_show_creature)
+	right.add_child(gallery_list)
 	codex_panel.visible = false
 	layer.add_child(codex_panel)
 	toast_label = Label.new()
@@ -507,11 +544,27 @@ func _fill_codex() -> void:
 		t += "[color=#9ab]Empty. Each goal you reach writes a page here, and so does each creature you keep.[/color]\n"
 	for c in st.codex:
 		t += c.text + "\n\n"
-	if not st.kept.is_empty():
-		t += "[b]Kept creatures[/b] (they live in your world)\n"
-		for c in st.kept:
-			t += "  %s   from %s   %d cells, %d jobs%s\n" % [c.name, c.get("from", "reef run %d" % c.get("run", 1)), c.cells, c.jobs, "   [color=#ffd36b]creature[/color]" if c.creature else ""]
 	codex_text.text = t
+	var keep_pick: int = gallery_list.get_selected_items()[0] if gallery_list.is_anything_selected() else -1
+	gallery_list.clear()
+	for c in st.kept:
+		var label := "%s%s   %d cells, %d jobs" % ["* " if c.creature else "", c.name, c.cells, c.jobs]
+		gallery_list.add_item(label.replace(", 1 jobs", ", 1 job"))
+	if st.kept.is_empty():
+		gallery.show_shape([])
+		gallery_caption.text = "[color=#9ab]Nothing kept yet. At the reef, click a body and press K: it joins your collection and your world.[/color]"
+	else:
+		# keep the player's pick across refreshes; otherwise show the newest
+		var i: int = keep_pick if keep_pick >= 0 and keep_pick < st.kept.size() else st.kept.size() - 1
+		gallery_list.select(i)
+		_show_creature(i)
+
+func _show_creature(i: int) -> void:
+	var c: Dictionary = campaign.state.kept[i]
+	gallery.show_shape(c.get("shape", []))
+	var fate := "lives in your world" if c.get("released", false) else "waiting to be released in your world"
+	gallery_caption.text = "[b]%s[/b]%s\nfrom %s: %d cells doing %d jobs. %s.%s" % [c.name, "   [color=#ffd36b]creature[/color]" if c.creature else "", c.get("from", "a reef run"), c.cells, c.jobs, fate.capitalize().substr(0, 1) + fate.substr(1),
+		"\n[color=#9ab]Colour: what a cell does more than the rest of its body: [color=#40ccd9]copying[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color][/color]" if not c.get("shape", []).is_empty() else "\n[color=#9ab](no body shape recorded for this one)[/color]"]
 
 func _update_goal(delta: float) -> void:
 	var k := -1 if in_hub else views.find(view)

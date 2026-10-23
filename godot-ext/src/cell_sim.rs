@@ -51,6 +51,34 @@ impl CellSim {
 
 #[godot_api]
 impl CellSim {
+    /// Levers (see lever_panel.gd), x1/4..x4 of default: "mutation" (UV and cosmic-ray
+    /// mutations per copied letter), "uv" (UV wear on membranes). False when unknown.
+    #[func]
+    fn set_lever(&mut self, name: GString, mult: f64) -> bool {
+        let Some(w) = self.world.as_mut() else { return false };
+        let d = CellParams::default();
+        let m = mult.clamp(0.25, 4.0);
+        match name.to_string().as_str() {
+            "mutation" => {
+                w.cp.uv_mutation = d.uv_mutation * m;
+                w.cp.cosmic_mutation = d.cosmic_mutation * m;
+            }
+            "uv" => w.cp.uv_membrane = d.uv_membrane * m,
+            _ => return false,
+        }
+        true
+    }
+
+    #[func]
+    fn levers(&self) -> VarDictionary {
+        let mut out = VarDictionary::new();
+        let Some(w) = self.world.as_ref() else { return out };
+        let d = CellParams::default();
+        out.set("mutation", w.cp.uv_mutation / d.uv_mutation);
+        out.set("uv", w.cp.uv_membrane / d.uv_membrane);
+        out
+    }
+
     #[func]
     fn start(&mut self, rates_path: GString, seed: i64, auto: bool) -> bool {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
