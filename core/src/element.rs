@@ -8,9 +8,126 @@
 
 use serde::Serialize;
 
+/// Shell capacities: the one number set that defines the periodic table. Adding a shell (say
+/// `[2, 6, 6]`) grows the table; element count, bondable set, backbone atom and side-group
+/// letters below all follow from it at compile time. `primordium elements --shells=2,6,6`
+/// previews a table before switching. Scales 1+ still assume the 5-letter alphabet this
+/// table gives (see the check in `polymer.rs`).
 pub const SHELLS: [u8; 2] = [2, 6];
-pub const N_ELEMENTS: usize = 8;
-pub const NAMES: [&str; N_ELEMENTS] = ["Hy", "Ne", "Li", "Bo", "Ka", "Ox", "Fl", "Ar"];
+pub const N_ELEMENTS: usize = shell_total(&SHELLS);
+pub const NAMES: [&str; N_ELEMENTS] = names();
+
+/// Invented symbols in table order. The first 8 are this universe's; the rest wait for bigger shells.
+pub const NAME_POOL: [&str; 40] = [
+    "Hy", "Ne", "Li", "Bo", "Ka", "Ox", "Fl", "Ar", "Sa", "Mu", "Ti", "Ze", "Pa", "Qu", "Vo", "Ry", "Dn", "Ec", "Gu", "Ib", "Jo", "Lu", "Mi", "Nu", "Or", "Pe",
+    "Ro", "Sy", "Ta", "Ul", "Vi", "Wa", "Xa", "Yo", "Zu", "Ax", "Br", "Cy", "Dr", "Ev",
+];
+
+const fn names() -> [&'static str; N_ELEMENTS] {
+    assert!(N_ELEMENTS <= NAME_POOL.len(), "add symbols to NAME_POOL for the bigger table");
+    let mut out = [""; N_ELEMENTS];
+    let mut i = 0;
+    while i < N_ELEMENTS {
+        out[i] = NAME_POOL[i];
+        i += 1;
+    }
+    out
+}
+
+pub const fn shell_total(shells: &[u8]) -> usize {
+    let mut s = 0;
+    let mut i = 0;
+    while i < shells.len() {
+        s += shells[i] as usize;
+        i += 1;
+    }
+    s
+}
+
+/// (1-based shell, electrons in it, its capacity, electrons in closed shells below) for `z`.
+pub const fn shell_of(shells: &[u8], z: u8) -> (u8, u8, u8, u8) {
+    let mut left = z;
+    let mut inner = 0u8;
+    let mut i = 0;
+    while i < shells.len() {
+        if left <= shells[i] {
+            return (i as u8 + 1, left, shells[i], inner);
+        }
+        left -= shells[i];
+        inner += shells[i];
+        i += 1;
+    }
+    panic!("z beyond the last shell")
+}
+
+/// Free bonding slots: distance to the nearer closed shell.
+pub const fn valence_in(shells: &[u8], z: u8) -> u8 {
+    let (_, outer, cap, _) = shell_of(shells, z);
+    if outer < cap - outer { outer } else { cap - outer }
+}
+
+const fn count_bondable() -> usize {
+    let mut n = 0;
+    let mut z = 1;
+    while z <= N_ELEMENTS {
+        if valence_in(&SHELLS, z as u8) > 0 {
+            n += 1;
+        }
+        z += 1;
+    }
+    n
+}
+
+/// Elements that bond (nobles excluded), as Z.
+pub const N_BONDABLE: usize = count_bondable();
+pub const BONDABLE_Z: [u8; N_BONDABLE] = bondable();
+
+const fn bondable() -> [u8; N_BONDABLE] {
+    let mut out = [0u8; N_BONDABLE];
+    let (mut k, mut z) = (0, 1);
+    while z <= N_ELEMENTS {
+        if valence_in(&SHELLS, z as u8) > 0 {
+            out[k] = z as u8;
+            k += 1;
+        }
+        z += 1;
+    }
+    out
+}
+
+/// Backbone atom: the most-bonded element (lowest Z on a tie). Trivalent under [2, 6]: two
+/// bonds for the chain and one for a side group, which is what makes a sequence readable.
+pub const BACKBONE: u8 = backbone();
+
+const fn backbone() -> u8 {
+    let (mut best, mut v) = (0u8, 0u8);
+    let mut k = 0;
+    while k < N_BONDABLE {
+        let val = valence_in(&SHELLS, BONDABLE_Z[k]);
+        if val > v {
+            v = val;
+            best = BONDABLE_Z[k];
+        }
+        k += 1;
+    }
+    best
+}
+
+/// Side-group letters: every bondable element but the backbone (as a side group it would branch).
+pub const SIDE_GROUPS: [u8; N_BONDABLE - 1] = side_groups();
+
+const fn side_groups() -> [u8; N_BONDABLE - 1] {
+    let mut out = [0u8; N_BONDABLE - 1];
+    let (mut k, mut i) = (0, 0);
+    while i < N_BONDABLE {
+        if BONDABLE_Z[i] != BACKBONE {
+            out[k] = BONDABLE_Z[i];
+            k += 1;
+        }
+        i += 1;
+    }
+    out
+}
 
 /// Energy unit: 1000 = kT at 300 K.
 pub type Energy = i64;
@@ -38,20 +155,13 @@ pub struct Element {
 
 pub fn element(z: u8) -> Element {
     assert!((1..=N_ELEMENTS as u8).contains(&z));
-    let mut left = z;
-    let mut inner = 0u8;
-    let mut shell = 1u8;
-    for (i, &cap) in SHELLS.iter().enumerate() {
-        if left <= cap {
-            shell = i as u8 + 1;
-            break;
-        }
-        left -= cap;
-        inner += cap;
-    }
-    let capacity = SHELLS[shell as usize - 1];
-    let outer = left;
-    let valence = outer.min(capacity - outer);
+    element_in(&SHELLS, z)
+}
+
+/// An element under any shell capacities (for previewing bigger tables).
+pub fn element_in(shells: &[u8], z: u8) -> Element {
+    let (shell, outer, capacity, inner) = shell_of(shells, z);
+    let valence = valence_in(shells, z);
     let z_eff = (z - inner) as f64;
     // sublinear in z_eff, n^1.5 radius penalty: avoids the Hy == Ox tie a plain z_eff/n^2 gives
     let chi = z_eff.powf(0.8) / (shell as f64).powf(1.5);
@@ -60,7 +170,18 @@ pub fn element(z: u8) -> Element {
     // polarity against the backbone-like pull: Ka/Hy are oily, Li/Fl/Bo/Ox like water
     let hydropathy = if noble { 0.0 } else { 2.0 * (chi - CHI_NONPOLAR).abs() - 0.3 };
     let absorb = if valence >= 2 { 0.4 + 0.3 * valence as f64 } else { 0.05 };
-    Element { z, name: NAMES[z as usize - 1], shell, outer, capacity, valence, chi, radius, hydropathy, absorb }
+    let name = NAME_POOL.get(z as usize - 1).copied().unwrap_or("??");
+    Element { z, name, shell, outer, capacity, valence, chi, radius, hydropathy, absorb }
+}
+
+/// Covalent and weak bond energies between two elements, milli-units (0 if either is noble).
+pub fn bond_energies(a: &Element, b: &Element) -> (Energy, Energy) {
+    if a.valence == 0 || b.valence == 0 {
+        return (0, 0);
+    }
+    let e = BOND_SHARED * (a.chi * b.chi).sqrt() + BOND_IONIC * (a.chi - b.chi).powi(2);
+    let w = WEAK_SCALE * (a.chi - b.chi).powi(2).min(1.0);
+    ((e * KT).round() as Energy, (w * KT).round() as Energy)
 }
 
 /// Electronegativity of a perfectly nonpolar partner; sits between Ka and Hy.
@@ -83,22 +204,12 @@ pub const WEAK_SCALE: f64 = 2.4;
 
 impl Table {
     pub fn new() -> Self {
-        let mut el = vec![element(1)];
-        el.clear();
-        for z in 1..=N_ELEMENTS as u8 {
-            el.push(element(z));
-        }
+        let el: Vec<Element> = (1..=N_ELEMENTS as u8).map(element).collect();
         let mut bond = [[0; N_ELEMENTS + 1]; N_ELEMENTS + 1];
         let mut weak = [[0; N_ELEMENTS + 1]; N_ELEMENTS + 1];
         for a in &el {
             for b in &el {
-                if a.valence == 0 || b.valence == 0 {
-                    continue;
-                }
-                let e = BOND_SHARED * (a.chi * b.chi).sqrt() + BOND_IONIC * (a.chi - b.chi).powi(2);
-                bond[a.z as usize][b.z as usize] = (e * KT).round() as Energy;
-                let w = WEAK_SCALE * (a.chi - b.chi).powi(2).min(1.0);
-                weak[a.z as usize][b.z as usize] = (w * KT).round() as Energy;
+                (bond[a.z as usize][b.z as usize], weak[a.z as usize][b.z as usize]) = bond_energies(a, b);
             }
         }
         Self { el, bond, weak }
@@ -124,6 +235,18 @@ mod tests {
     fn shell_rule_gives_expected_valences() {
         let v: Vec<u8> = (1..=8).map(|z| element(z).valence).collect();
         assert_eq!(v, vec![1, 0, 1, 2, 3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn derived_constants_match_the_shell_rule() {
+        assert_eq!(N_ELEMENTS, 8);
+        assert_eq!(NAMES, ["Hy", "Ne", "Li", "Bo", "Ka", "Ox", "Fl", "Ar"]);
+        assert_eq!(BONDABLE_Z, [1, 3, 4, 5, 6, 7]);
+        assert_eq!(BACKBONE, 5);
+        assert_eq!(SIDE_GROUPS, [1, 3, 4, 6, 7]);
+        // a third shell of 6 repeats the pattern one row down
+        let v: Vec<u8> = (9..=14).map(|z| element_in(&[2, 6, 6], z).valence).collect();
+        assert_eq!(v, vec![1, 2, 3, 2, 1, 0]);
     }
 
     #[test]

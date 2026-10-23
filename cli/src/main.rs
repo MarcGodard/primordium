@@ -30,6 +30,7 @@ fn main() {
         "coast-shadow" => coast_shadow(&args),
         "reef-seed" => reef_seed(&args),
         "reef" => reef(&args),
+        "elements" => elements(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -1166,4 +1167,65 @@ fn reef(args: &[String]) {
     for d in r.discoveries.entries.iter().take(5) {
         println!("  discovery day {:.1}: {}", d.t_days, d.note);
     }
+}
+
+/// Preview a periodic table under other shell capacities: elements, the backbone atom the
+/// rule picks, side-group letters, each letter's pairing partner and which letters survive
+/// copying twice (the heritable alphabet a genome in that universe would be written in).
+fn elements(args: &[String]) {
+    use primordium_core::element::{bond_energies, element_in, shell_total};
+    let Ok(shells) = arg(args, "shells", "2,6".to_string()).split(',').map(|v| v.trim().parse::<u8>()).collect::<Result<Vec<u8>, _>>() else {
+        println!("--shells takes capacities like 2,6,6");
+        return;
+    };
+    let n = shell_total(&shells);
+    if n > primordium_core::element::NAME_POOL.len() {
+        println!("{n} elements: more than NAME_POOL holds");
+        return;
+    }
+    let el: Vec<_> = (1..=n as u8).map(|z| element_in(&shells, z)).collect();
+    println!("shells {shells:?}: {n} elements");
+    println!("  Z  name shell valence   chi   hydropathy");
+    for e in &el {
+        println!("{:3}  {:4} {:5} {:7} {:6.2} {:8.2}{}", e.z, e.name, e.shell, e.valence, e.chi, e.hydropathy, if e.valence == 0 { "  noble" } else { "" });
+    }
+    let bondable: Vec<_> = el.iter().filter(|e| e.valence > 0).collect();
+    if bondable.is_empty() {
+        println!("no element bonds: no chemistry");
+        return;
+    }
+    let top = bondable.iter().map(|e| e.valence).max().unwrap_or(0);
+    let backbone = bondable.iter().find(|e| e.valence == top).unwrap();
+    let rivals: Vec<&str> = bondable.iter().filter(|e| e.valence == top && e.z != backbone.z).map(|e| e.name).collect();
+    println!("backbone: {} (valence {top}){}", backbone.name, if rivals.is_empty() { String::new() } else { format!(", rivals {rivals:?}") });
+    if top < 3 {
+        println!("  no atom can hold a chain plus a side group: no readable polymers");
+        return;
+    } else if top > 3 {
+        println!("  valence {top}: chains carry {} side groups per link, sequences branch", top - 2);
+    }
+    let letters: Vec<_> = bondable.iter().filter(|e| e.z != backbone.z).collect();
+    if letters.is_empty() {
+        println!("no side groups: chains carry no sequence");
+        return;
+    }
+    println!("side-group letters: {}", letters.iter().map(|e| e.name).collect::<Vec<_>>().join(" "));
+    // copying picks each template letter's strongest weak-bond partner
+    let comp: Vec<usize> = (0..letters.len()).map(|i| (0..letters.len()).max_by_key(|&j| bond_energies(letters[i], letters[j]).1).unwrap()).collect();
+    for (i, l) in letters.iter().enumerate() {
+        println!("  {} pairs with {}", l.name, letters[comp[i]].name);
+    }
+    // letters that come back after any number of double copies
+    let mut alive: Vec<usize> = (0..letters.len()).collect();
+    loop {
+        let mut next: Vec<usize> = alive.iter().map(|&i| comp[comp[i]]).collect();
+        next.sort_unstable();
+        next.dedup();
+        if next == alive {
+            break;
+        }
+        alive = next;
+    }
+    let names: Vec<&str> = alive.iter().map(|&i| letters[i].name).collect();
+    println!("heritable alphabet (letters that survive repeated double copies): {} ({} letters, {:.1} bits each)", names.join(" "), names.len(), (names.len() as f64).log2());
 }

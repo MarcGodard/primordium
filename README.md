@@ -39,7 +39,15 @@ Each scale's surrogate is measured against a "twin": the same detailed model wit
 
 ## Growing the world
 
-Everything is sized to run on one machine, and the knobs that make it bigger are parameters, not rewrites: reef size and cell cap (`ReefParams`), coast sites and cells per site (`CoastParams`), lattice size (`ChemParams`), and the fold ensemble size (`polymer::ENSEMBLE`). Each scale above chemistry runs on learned tables from the scale below, so a bigger world costs table lookups, not more chemistry. The periodic table falls out of a shell rule (`element.rs`); growing it past 8 elements is a planned step.
+Everything is sized to run on one machine, and the knobs that make it bigger are parameters, not rewrites: reef size and cell cap (`ReefParams`), coast sites and cells per site (`CoastParams`), lattice size (`ChemParams`), the fold ensemble size (`polymer::ENSEMBLE`). Each scale above chemistry runs on learned tables from the scale below, so a bigger world costs table lookups, not more chemistry. The planet is Earth-sized (`CosmosParams::planet_radius_km`), so distances between coast sites are real.
+
+The periodic table is one line: `element::SHELLS`. Element count, names, bond energies, which elements bond, the backbone atom and the side-group letters are all derived from it at compile time. Preview a bigger table before switching:
+
+```sh
+cargo run --release -p primordium -- elements --shells=2,6,6
+```
+
+What a third shell of 6 would do (from the explorer): 14 elements, Ka keeps the backbone (Ti is a trivalent rival), 10 side-group letters, and the heritable alphabet that survives copying becomes Fl/Sa instead of Li/Fl. With `[2, 8, 8]` (our universe's octets) the backbone turns tetravalent and chains branch. Chemistry (scale 0) runs on any table; scales 1+ are written for 5 letters and a binary genome (genetic code `cell::CODE`, the Li/Fl roles), and a compile-time check in `polymer.rs` says so. Generalising those is the next step to a bigger table; after any change, retrain `data/rates0.json` (`primordium train`) and `data/reef_seed.json` (`primordium reef-seed`).
 
 ## Environment: change drives evolution
 

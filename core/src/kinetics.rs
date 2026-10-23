@@ -11,8 +11,8 @@ use crate::rng::Rng;
 use crate::surrogate::{Axis, RateTable};
 use serde::{Deserialize, Serialize};
 
-/// Bondable elements (nobles excluded), as Z.
-pub const BONDABLE: [u8; 6] = [1, 3, 4, 5, 6, 7];
+/// Bondable elements (nobles excluded), as Z: derived from the shell rule.
+pub const BONDABLE: [u8; crate::element::N_BONDABLE] = crate::element::BONDABLE_Z;
 pub const NB: usize = BONDABLE.len();
 pub const N_PAIRS: usize = NB * (NB + 1) / 2;
 

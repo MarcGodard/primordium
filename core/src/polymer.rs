@@ -21,9 +21,24 @@ use crate::rng::Rng;
 use serde::{Deserialize, Serialize};
 
 /// Letter alphabet as side-group Z. Nobles cannot bond; Ka as side group is a branch (excluded).
-pub const LETTERS: [u8; 5] = [1, 3, 4, 6, 7];
-pub const LETTER_NAMES: [&str; 5] = ["Hy", "Li", "Bo", "Ox", "Fl"];
+pub const LETTERS: [u8; crate::element::N_BONDABLE - 1] = crate::element::SIDE_GROUPS;
 pub const N_LETTERS: usize = LETTERS.len();
+pub const LETTER_NAMES: [&str; N_LETTERS] = letter_names();
+
+const fn letter_names() -> [&'static str; N_LETTERS] {
+    let mut out = [""; N_LETTERS];
+    let mut i = 0;
+    while i < N_LETTERS {
+        out[i] = crate::element::NAMES[LETTERS[i] as usize - 1];
+        i += 1;
+    }
+    out
+}
+
+// Scales 1-5 are written for this table's 5 letters: the genetic code (`cell::CODE`, 3-bit
+// codons onto 5 letters), the Li/Fl heritable pair (`cell.rs`, `lineage.rs`) and per-letter
+// tables. A bigger table compiles up to here; generalising those is the next step.
+const _: () = assert!(N_LETTERS == 5, "scales 1+ assume 5 side-group letters: generalise cell::CODE and the Li/Fl roles first");
 
 pub type Seq = Vec<u8>;
 

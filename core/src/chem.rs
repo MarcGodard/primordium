@@ -88,7 +88,7 @@ impl Default for ChemParams {
             height: 128,
             density: 0.33,
             //            Hy    Ne    Li    Bo    Ka    Ox    Fl    Ar
-            composition: [0.30, 0.02, 0.05, 0.12, 0.22, 0.17, 0.10, 0.02],
+            composition: default_composition(),
             sweeps_per_day: 400.0,
             barrier_form: 3.0,
             barrier_exchange: 1.5,
@@ -708,6 +708,20 @@ impl ChemWorld {
             element_totals,
         }
     }
+}
+
+/// Starting mix by element. The first 8 are this world's; heavier elements of a bigger table
+/// get a share that falls with Z (heavier nuclei are rarer), nobles a tenth of that.
+pub fn default_composition() -> [f64; N_ELEMENTS] {
+    const FIRST: [f64; 8] = [0.30, 0.02, 0.05, 0.12, 0.22, 0.17, 0.10, 0.02];
+    std::array::from_fn(|i| {
+        if i < FIRST.len() {
+            return FIRST[i];
+        }
+        let z = i as u8 + 1;
+        let share = 0.08 * 0.75f64.powi((i - FIRST.len()) as i32);
+        if crate::element::element(z).valence == 0 { share * 0.1 } else { share }
+    })
 }
 
 pub fn formula(counts: &[u32; N_ELEMENTS]) -> String {

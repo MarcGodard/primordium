@@ -225,7 +225,8 @@ impl PoolStats {
     }
 }
 
-pub const KA: u8 = 5;
+/// Backbone atom (derived from the shell rule).
+pub const KA: u8 = crate::element::BACKBONE;
 /// Weak pairing in the dry is this much stronger: no water competing for the bond.
 pub const DRY_PAIR_GAIN: f64 = 2.0;
 /// Extra pairing discrimination per kT of backbone catalysis: a polymerase pocket
