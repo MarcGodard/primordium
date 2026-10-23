@@ -113,6 +113,9 @@ pub struct ReefParams {
     pub graze_span: f64,
     pub graze_rate: f64,
     pub graze_size: f64,
+    /// Smallest body a grazer can bite, cells: a bite needs something to hold, so a freshly
+    /// settled spore slips through (a size refuge for recruits).
+    pub graze_min: usize,
     /// Body size at which the mates signal saturates.
     pub mates_full: f64,
 }
@@ -155,6 +158,7 @@ impl Default for ReefParams {
             graze_span: cp.eat_span,
             graze_rate: 6.0,
             graze_size: 0.6,
+            graze_min: 2,
             mates_full: (cp.colony_max - 1) as f64,
         }
     }
@@ -947,7 +951,7 @@ impl Reef {
                 for _ in 0..bites {
                     let j = ks[rng.below(ks.len())];
                     let (big, small) = (self.organisms[k].cells.len() as f64, self.organisms[j].cells.len() as f64);
-                    if j == k || small == 0.0 || small >= big * self.rp.graze_size {
+                    if j == k || small < self.rp.graze_min.max(1) as f64 || small >= big * self.rp.graze_size {
                         continue;
                     }
                     // a bite takes a skin cell

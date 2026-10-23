@@ -1134,7 +1134,8 @@ fn reef(args: &[String]) {
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
     let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
     let start = Instant::now();
-    let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
+    let rp = ReefParams { graze_min: arg(args, "graze-min", ReefParams::default().graze_min), ..Default::default() };
+    let mut r = Reef::new(rp, CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
     println!("built in {:.1}s: {} founders", start.elapsed().as_secs_f64(), r.organisms.len());
     let mut sig = std::collections::BTreeMap::new();
     for o in &r.organisms {
