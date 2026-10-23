@@ -224,6 +224,26 @@ impl CellSim {
         d
     }
 
+    /// Engulfings of the last `days`: patch, predator y, prey y, age in days, predator id.
+    #[func]
+    fn meals(&self, days: f64) -> VarArray {
+        let mut arr = VarArray::new();
+        let Some(w) = self.world.as_ref() else { return arr };
+        for &(t, patch, py, qy, id) in w.meals.iter().rev() {
+            if w.t_days - t > days {
+                break;
+            }
+            let mut d = VarDictionary::new();
+            d.set("patch", patch as i64);
+            d.set("y", py);
+            d.set("prey_y", qy);
+            d.set("age", w.t_days - t);
+            d.set("id", id as i64);
+            arr.push(&d.to_variant());
+        }
+        arr
+    }
+
     #[func]
     fn follow(&self, id: i64) -> i64 {
         let Some(w) = self.world.as_ref() else { return -1 };

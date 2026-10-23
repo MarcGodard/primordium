@@ -33,6 +33,7 @@ var inset: Control
 var ok := false
 var auto := true
 var history := PackedFloat32Array()
+var meals: Array = []
 
 func _ready() -> void:
 	sim = CellSim.new()
@@ -121,6 +122,7 @@ func _process(delta: float) -> void:
 	env = sim.env()
 	cells = sim.cells()
 	patches = sim.patches()
+	meals = sim.meals(0.5)
 	var light: float = clamp(env.visible * 1.6 + 0.12, 0.0, 1.0)
 	var bm: ShaderMaterial = beach.material
 	bm.set_shader_parameter("tide_level", env.tide_level)
@@ -184,6 +186,13 @@ func _draw_cells() -> void:
 			art.draw_string(font, pos + Vector2(-r, r + 1.2), "g%d" % c.generation, HORIZONTAL_ALIGNMENT_LEFT, -1, 1, Color(1, 1, 1, 0.6))
 	# colonies on top: overlapping membranes would hide the bridges
 	_draw_colonies(cells, func(c): return cell_pos(c), 1.0)
+	# engulfings of the last half day: a red flash fading where the prey was taken
+	for m in meals:
+		var fade: float = 1.0 - m.age / 0.5
+		var jitter: float = fmod(float(m.id) * 0.618, 1.0)
+		var p := Vector2((float(m.patch) + 0.15 + 0.7 * jitter) * BAND, float(m.prey_y) * HEIGHT)
+		art.draw_arc(p, 2.0 + 4.0 * (1.0 - fade), 0, TAU, 20, Color(1.0, 0.3, 0.25, 0.85 * fade), 0.5)
+		art.draw_circle(p, 0.8, Color(1.0, 0.3, 0.25, 0.7 * fade))
 
 ## Colonies: members stuck together by adhesive products, joined by soft bridges.
 func _draw_colonies(list: Array, pos_of: Callable, scale_r: float) -> void:
@@ -226,7 +235,7 @@ func hud_text() -> String:
 	for c in cells:
 		if c.colony >= 0:
 			colonial += 1
-	var t := "[b]Beach[/b] sea left, dune right\ncells %d (surrogate %d)   generation %d   in colonies %d\ndivisions %d   deaths %d (engulfed %d)   genomes seen %d\nreplication error %.1f%%   radiation mutations %d\n" % [
+	var t := "[b]Beach[/b] sea left, dune right\ncells %d (surrogate %d)   generation %d   in colonies %d\ndivisions %d   deaths %d (engulfed %d, red flashes)   genomes seen %d\nreplication error %.1f%%   radiation mutations %d\n" % [
 		s.cells, s.surrogate, s.max_generation, colonial, s.divisions, s.deaths, s.eaten, s.genomes, s.copy_error * 100.0, s.radiation_mutations]
 	t += "[b]Resolution[/b] %s   lifts %d\n" % ["auto (A)" if s.auto else "detail (A)", s.lifts]
 	t += "[b]Discoveries[/b]\n"

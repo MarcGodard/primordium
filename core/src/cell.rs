@@ -480,6 +480,8 @@ pub struct World {
     /// Set while the world steps as lineages (`step_lineage`): expression then follows the
     /// genes, not frozen product stocks.
     pub lineage_mode: bool,
+    /// Engulfings for display: (day, patch, predator y, prey y, predator id), last ~200.
+    pub meals: std::collections::VecDeque<(f64, usize, f64, f64, u64)>,
     /// When set, detailed steps log each cell's lineage features and fate (scale-4 training).
     pub lineage_log: Option<Vec<crate::lineage::LineageSample>>,
 }
@@ -603,6 +605,7 @@ impl World {
             sel_prior: vec![0.0; COPY_CHANNELS],
             lineage_log: None,
             lineage_mode: false,
+            meals: Default::default(),
             daylight: 0.0,
         };
         w.seed_founders(founders);
@@ -1380,6 +1383,10 @@ impl World {
             return;
         }
         for &(i, j) in &meals {
+            self.meals.push_back((self.t_days, cells[i].patch, cells[i].y, cells[j].y, cells[i].id));
+            if self.meals.len() > 200 {
+                self.meals.pop_front();
+            }
             let prey = cells[j].clone();
             let pinfo = self.info(&prey.genome);
             let p = &mut cells[i];
