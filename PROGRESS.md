@@ -33,6 +33,8 @@
 
 ## Log
 
+- 2026-10-23 Earth-sized planet: `CosmosParams::planet_radius_km` = 6371. Coast sites sit 1274 km apart along the meridian, and migration now comes from an along-shore current in m/s over that distance (0.3 m/s, a typical coastal current: 2.04% of flooded cells a day, vs the 2% that was set by hand). The globe draws its cloud deck and air rim at Earth heights (x2 so they show); the moons' orbits are compressed (true distances ~20 and ~46 radii would leave the frame).
+
 - 2026-10-23 M12/M13 reef and globe. Reef from 240 coast founders (seed 1): 300 days, 8.9k cells in ~630 bodies, ~370 multicellular, biggest ~240 cells, tallest 9, 31k divisions, 11k spores, ~10k bites, spore bit error 0.7% per letter, matter exact, ~11 s. The two new promoter signals touch scales 3-4 too (beach cells read height 0, exposure 1; those codes were constitutive): re-measured coast shadow five-window mean 96.7% of ceiling (was 96.4%), cell shadow 99.3% (unchanged). Review: grazing iterated a HashMap, so same-seed reefs differed and the growth test failed ~1 run in 6 (now ordered); founders could debit the ocean with nowhere to land when no tile sat low enough.
 
 - 2026-10-23 M11 mates signal: over 800 days (lineage from day 200) 6-11% of genes follow it, near the 1-in-8 a random promoter gives, so no strong selection either way yet; colonies stay at 75-90% (mean size up to ~9). Coast lineage shadow five-window mean 96.4% (was 95.2% with the 4-bit layout), cells 99.3%.

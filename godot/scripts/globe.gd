@@ -1,7 +1,10 @@
 ## The coast's planet in 3D: one continent whose west coast runs north to south along longitude
 ## 0, the 12 sites as beads just offshore (tint = the trait a site leads in, size = population),
 ## lit by the sun at this instant of day and season, with both moons in their phases.
-## Click a bead to select its site.
+## Click a bead to select its site. Earth-sized: the planet is 6371 km across its radius, the air
+## rim and cloud deck sit at Earth heights (exaggerated ~2x so they show). The moons' true orbits
+## (~20 and ~46 radii for their periods) would leave the frame, so their distances are compressed;
+## their directions and phases are real.
 extends SubViewportContainer
 
 signal site_clicked(k: int)
@@ -64,8 +67,9 @@ func _ready() -> void:
 	vp.add_child(planet)
 	var cl := MeshInstance3D.new()
 	var cm := SphereMesh.new()
-	cm.radius = 1.012
-	cm.height = 2.024
+	# cloud deck ~12 km up, x2
+	cm.radius = 1.004
+	cm.height = 2.008
 	cm.radial_segments = 64
 	cm.rings = 32
 	cl.mesh = cm
@@ -75,8 +79,9 @@ func _ready() -> void:
 	vp.add_child(cl)
 	var at := MeshInstance3D.new()
 	var am := SphereMesh.new()
-	am.radius = 1.07
-	am.height = 2.14
+	# visible air ~100 km, x2
+	am.radius = 1.03
+	am.height = 2.06
 	am.radial_segments = 64
 	am.rings = 32
 	at.mesh = am

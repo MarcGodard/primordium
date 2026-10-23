@@ -269,8 +269,8 @@ func hud_text() -> String:
 		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"
 	if stats.is_empty():
 		return ""
-	var t := "[b]Coast[/b] %d sites, north at top\ncells %d   migrations %d\n[b]Resolution[/b] %s   lineage sites %d   lifts %d\n" % [
-		n_sites, stats.cells, stats.migrations, "auto (A)" if stats.auto else "detail (A)", stats.lineage_sites, stats.lifts]
+	var t := "[b]Coast[/b] %d sites, north at top\n" % n_sites + "[color=#9ab]Earth-sized planet (radius %.0f km): sites %.0f km apart, current %.1f m/s[/color]\n" % [stats.radius_km, stats.spacing_km, stats.current_m_s] + "cells %d   migrations %d\n[b]Resolution[/b] %s   lineage sites %d   lifts %d\n" % [
+		stats.cells, stats.migrations, "auto (A)" if stats.auto else "detail (A)", stats.lineage_sites, stats.lifts]
 	t += "[color=#cbf]purple frame: site runs as lineages (learned division rates)[/color]\n"
 	t += "[color=#9ab]thin bar under traits: what genes listen to: grey always on, [color=#ffe65a]light[/color], [color=#73bfff]cold[/color], [color=#d973e6]Li short[/color], [color=#ff9959]mates[/color][/color]\n"
 	if selected >= 0 and selected < sites.size():

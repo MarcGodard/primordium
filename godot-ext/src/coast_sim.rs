@@ -194,6 +194,9 @@ impl CoastSim {
         let Some(c) = self.coast.as_ref() else { return d };
         d.set("cells", c.cells() as i64);
         d.set("migrations", c.stats.migrations as i64);
+        d.set("spacing_km", c.spacing_km);
+        d.set("radius_km", c.sites.first().map_or(0.0, |s| s.world.cosmos.p.planet_radius_km));
+        d.set("current_m_s", c.cp.current_m_s);
         d.set("lineage_sites", c.sites.iter().filter(|s| s.mode == Mode::Surrogate).count() as i64);
         d.set("lifts", c.stats.lifts as i64);
         d.set("auto", c.cp.auto);

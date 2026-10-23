@@ -35,6 +35,22 @@ pub struct CosmosParams {
     pub binary_period_days: f64,
     /// Galactic-arm crossing period for cosmic-ray background, days.
     pub galactic_period_days: f64,
+    /// Planet radius: Earth's. Sets distances between latitudes (coast site spacing).
+    #[serde(default = "earth_radius")]
+    pub planet_radius_km: f64,
+}
+
+fn earth_radius() -> f64 {
+    EARTH_RADIUS_KM
+}
+
+pub const EARTH_RADIUS_KM: f64 = 6371.0;
+
+impl CosmosParams {
+    /// Ground distance between two latitudes on one meridian, km.
+    pub fn meridian_km(&self, lat_a: f64, lat_b: f64) -> f64 {
+        self.planet_radius_km * (lat_a - lat_b).abs()
+    }
 }
 
 impl Default for CosmosParams {
@@ -54,6 +70,7 @@ impl Default for CosmosParams {
             pulsar_period_days: 0.0137,
             binary_period_days: 41.0,
             galactic_period_days: 2400.0,
+            planet_radius_km: EARTH_RADIUS_KM,
         }
     }
 }

@@ -19,8 +19,9 @@ pub struct CoastParams {
     pub lat_hi: f64,
     /// Tidal range multiplier at the ends vs the middle of the coast (funnelled bays).
     pub tide_spread: f64,
-    /// Chance per day a cell on a flooded patch rides the current to a neighbouring site.
-    pub current: f64,
+    /// Along-shore current, m/s. A flooded cell reaches the next site at this speed over the
+    /// ground distance between sites on an Earth-sized planet (~1270 km for 12 sites).
+    pub current_m_s: f64,
     pub cells_per_site: usize,
     pub founders_per_site: usize,
     /// Sites switch between detail and lineage mode on their own (by lineage-table confidence).
@@ -40,7 +41,8 @@ impl Default for CoastParams {
             lat_lo: -1.1,
             lat_hi: 1.1,
             tide_spread: 1.8,
-            current: 0.02,
+            // a typical coastal current; at Earth's size it carries ~2% of flooded cells a day
+            current_m_s: 0.3,
             cells_per_site: 200,
             founders_per_site: 40,
             auto: false,
@@ -81,6 +83,8 @@ pub struct Coast {
     pub model: LineageModel,
     pub learn: bool,
     pub discoveries: crate::surrogate::DiscoveryLog,
+    /// Ground distance between neighbouring sites, km.
+    pub spacing_km: f64,
     steps: u64,
     rng: Rng,
 }
@@ -88,6 +92,7 @@ pub struct Coast {
 impl Coast {
     pub fn new(cp: CoastParams, cosmos: CosmosParams, rates: RateTable, seed: u64) -> Self {
         let n = cp.sites;
+        let spacing_km = if n > 1 { cosmos.meridian_km(cp.lat_hi, cp.lat_lo) / (n - 1) as f64 } else { f64::INFINITY };
         let sites = (0..n)
             .map(|k| {
                 let f = if n > 1 { k as f64 / (n - 1) as f64 } else { 0.5 };
@@ -117,6 +122,7 @@ impl Coast {
             model: LineageModel::default(),
             learn: true,
             discoveries: Default::default(),
+            spacing_km,
             steps: 0,
             rng: Rng::new(seed ^ 0xC0A5),
         }
@@ -207,7 +213,8 @@ impl Coast {
 
     /// Cells on flooded patches drift along shore to the same patch of a neighbouring site.
     fn migrate(&mut self, dt: f64) {
-        let p = (self.cp.current * dt).min(1.0);
+        // km travelled in dt over the distance to the next site
+        let p = (self.cp.current_m_s * 86.4 * dt / self.spacing_km).min(1.0);
         let n = self.sites.len();
         if n < 2 {
             return;
@@ -282,7 +289,7 @@ mod tests {
 
     #[test]
     fn coast_matter_closed_and_cells_migrate() {
-        let cp = CoastParams { sites: 4, cells_per_site: 80, founders_per_site: 20, current: 0.5, ..Default::default() };
+        let cp = CoastParams { sites: 4, cells_per_site: 80, founders_per_site: 20, current_m_s: 10.0, ..Default::default() };
         let mut c = Coast::new(cp, CosmosParams::default(), rates(), 3);
         let start = c.matter();
         for _ in 0..300 {
