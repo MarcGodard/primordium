@@ -17,6 +17,10 @@ pub const L_CHANNELS: usize = 2;
 
 const AGE_MAX: f64 = 20.0;
 const RAW_MAX: f64 = 0.8;
+/// Li's index among the letters (Hy, Li, Bo, Ox, Fl), and a scale putting its patch
+/// concentration on the food axis.
+const LI: usize = 1;
+const LI_SCALE: f64 = 4.0;
 /// kT span of the coast: polar winters reach ~0.80 (cells at 0.85 left the table every year).
 const KT_LO: f64 = 0.78;
 const KT_HI: f64 = 1.15;
@@ -35,7 +39,7 @@ pub struct LineageSample {
 }
 
 /// What a lineage-mode cell needs, factored so every table stays densely trained: a base
-/// fate rate from conditions (kT, flooding, food, cycle age), times a relative fitness from
+/// fate rate from conditions (kT, flooding, Li supply, cycle age, daylight), times a relative fitness from
 /// heritable traits (polymerase, metabolism, membrane), plus copy fidelity over (kT,
 /// polymerase). One 7-axis table had ~18k bins; cells kept landing in empty ones and sites
 /// flipped back to detail daily. The price: trait effects cannot depend on climate.
@@ -55,7 +59,7 @@ impl Default for LineageModel {
             vec![
                 Axis::new("kT", KT_LO, KT_HI, 8),
                 Axis::new("wet", 0.0, 1.0, 2),
-                Axis::new("raw_conc", 0.0, RAW_MAX, 4),
+                Axis::new("li_supply", 0.0, RAW_MAX, 4),
                 Axis::new("age", 0.0, AGE_MAX, 8),
                 Axis::new("daylight", 0.0, DAYLIGHT_MAX, 4),
             ],
@@ -154,7 +158,10 @@ impl World {
     /// Food and age saturate at the table edge (more of either changes little); temperature
     /// does not: an unseen climate is a discovery.
     pub fn lineage_features(&self, c: &Cell, info: &crate::cell::GenomeInfo, site: &Site) -> [f64; 8] {
-        let raw = self.patches[c.patch].raw_ka as f64 / self.cp.patch_cells;
+        // food is the scarce genome partner, not raw Ka: division waits on Li for the second
+        // strand (shadow agreement 94.9% -> 98.2% of ceiling with this one change)
+        let p = &self.patches[c.patch];
+        let raw = (p.raw[LI] + p.free[LI]) as f64 / self.cp.patch_cells * LI_SCALE;
         [
             site.env.kt,
             if site.wet { 1.0 } else { 0.0 },
