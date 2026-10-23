@@ -38,6 +38,9 @@ var atom_root: Node3D
 var nucleus: Node3D
 var electrons: Array = []
 var selected := 0
+## Campaign: roles inspected in this world's table, and whether another table was tried.
+var seen := {}
+var tried_other := false
 var layer: CanvasLayer
 var bars: Control
 var title: Label
@@ -86,7 +89,7 @@ func _build_overlay() -> void:
 	row.anchor_right = 0.5
 	row.offset_left = -330
 	row.offset_right = 330
-	row.offset_top = 40
+	row.offset_top = 104
 	row.add_theme_constant_override("separation", 10)
 	layer.add_child(row)
 	for u in UNIVERSES:
@@ -101,7 +104,7 @@ func _build_overlay() -> void:
 	title.anchor_right = 0.5
 	title.offset_left = -300
 	title.offset_right = 300
-	title.offset_top = 78
+	title.offset_top = 142
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	title.add_theme_font_size_override("font_size", 14)
@@ -126,6 +129,8 @@ func load_universe(shells: Array) -> void:
 	summary = sim.summary()
 	# start on the backbone: the atom life here is built on
 	selected = summary.backbone - 1 if summary.backbone > 0 else 0
+	if not summary.get("this_world", true):
+		tried_other = true
 	_build_table()
 	_build_atom()
 	var names := func(zs: PackedByteArray) -> String:
@@ -375,8 +380,26 @@ func _unhandled_input(ev: InputEvent) -> void:
 
 func select(i: int) -> void:
 	selected = i
+	_saw()
 	_build_atom()
 	bars.queue_redraw()
+
+func _saw() -> void:
+	if summary.get("this_world", false) and selected < elements.size():
+		seen[elements[selected].role] = true
+
+## Campaign goal: backbone, a letter and a noble gas inspected, plus another table tried.
+func goal_progress() -> Dictionary:
+	var got := 0
+	for r in ["backbone", "letter", "noble"]:
+		if seen.has(r):
+			got += 1
+	got += 1 if tried_other else 0
+	var parts := []
+	for r in ["backbone", "letter", "noble"]:
+		parts.append(("[x] " if seen.has(r) else "[ ] ") + r)
+	parts.append(("[x] " if tried_other else "[ ] ") + "other table")
+	return {"value": got, "p": got / 4.0, "done": got == 4, "args": [], "now": "  ".join(PackedStringArray(parts))}
 
 func hud_text() -> String:
 	if elements.is_empty():

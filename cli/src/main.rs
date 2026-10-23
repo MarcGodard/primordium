@@ -33,6 +33,7 @@ fn main() {
         "elements" => elements(&args),
         "reef-shadow" => reef_shadow(&args),
         "reef-goal" => reef_goal(&args),
+        "garden" => garden(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -1300,20 +1301,111 @@ fn reef_goal(args: &[String]) {
     let goal = CreatureGoal::default();
     let mut tr = Tracker::default();
     let mut next = 99.5;
+    let mut noon = 0.5;
+    // days each lineage qualified in the current 100-day window
+    let mut qd: std::collections::BTreeMap<u32, u32> = Default::default();
     while r.t_days < days {
         r.step(0.02);
+        if r.t_days >= noon {
+            noon += 1.0;
+            for c in tr.sample(&goal, &r) {
+                *qd.entry(c).or_default() += 1;
+            }
+        }
         if r.t_days >= next {
             next += 100.0;
-            tr.sample(&goal, &r);
             let multi: Vec<_> = r.organisms.iter().filter(|o| o.settled() && o.cells.len() > 1).collect();
             let big = |n: usize| multi.iter().filter(|o| o.cells.len() >= n).count();
-            let jobs_of = |min: usize| multi.iter().filter(|o| o.cells.len() >= min).map(|o| jobs(o)).max().unwrap_or(0);
+            let sp = goal.split;
+            let jobs_of = |min: usize, sp: f32| multi.iter().filter(|o| o.cells.len() >= min).map(|o| jobs(o, sp)).max().unwrap_or(0);
+            let jobs_n = |min: usize, j: usize| multi.iter().filter(|o| o.cells.len() >= min && jobs(o, sp) >= j).count();
             let mob = |min: usize| multi.iter().filter(|o| o.cells.len() >= min && o.speed > 0.0).count();
-            let ok = |n: usize, j: usize| multi.iter().filter(|o| o.cells.len() >= n && jobs(o) >= j && o.speed > 0.0).count();
+            let ok = |n: usize, j: usize| multi.iter().filter(|o| o.cells.len() >= n && jobs(o, sp) >= j && o.speed > 0.0).count();
             println!(
-                "t={:5.0} bodies>=10 {:3} >=20 {:3} >=40 {:3} | max jobs (>=10) {} (>=20) {} | mobile >=10 {:3} >=20 {:3} | goal(20,2) {:3} (20,3) {:3} (10,3) {:3} | best run {:4.0} won {:?}",
-                r.t_days, big(10), big(20), big(40), jobs_of(10), jobs_of(20), mob(10), mob(20), ok(20, 2), ok(20, 3), ok(10, 3), tr.best_run(r.t_days), tr.won
+                "t={:5.0} bodies>=10 {:3} >=20 {:3} >=40 {:3} | max jobs@0.1 {} @0.15 {} @0.2 {} (>=20 cells) | >=20 with 2 jobs {:3} 3 jobs {:3} | mobile >=10 {:3} >=20 {:3} | goal(20,2) {:3} (20,3) {:3} (10,3) {:3} | best window {:?} won {:?}",
+                r.t_days, big(10), big(20), big(40), jobs_of(20, 0.1), jobs_of(20, 0.15), jobs_of(20, 0.2), jobs_n(20, 2), jobs_n(20, 3), mob(10), mob(20), ok(20, 2), ok(20, 3), ok(10, 3), tr.best(), tr.won
             );
+            let mut top: Vec<(u32, u32)> = qd.iter().map(|(&c, &n)| (c, n)).collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1));
+            println!("        qualifying days in window, top lineages: {:?}", &top[..top.len().min(5)]);
+            qd.clear();
+            if args.iter().any(|a| a == "--quantiles") {
+                for k in 0..5 {
+                    let mut v: Vec<f32> = multi.iter().flat_map(|o| o.cells.iter()).map(|c| c.expr[k]).collect();
+                    v.sort_by(|a, b| a.total_cmp(b));
+                    let q = |f: f64| v.get(((v.len() as f64 - 1.0) * f) as usize).copied().unwrap_or(0.0);
+                    // spread inside bodies: mean (max - min) per body
+                    let spread = multi.iter().map(|o| {
+                        let (lo, hi) = o.cells.iter().fold((f32::MAX, f32::MIN), |a, c| (a.0.min(c.expr[k]), a.1.max(c.expr[k])));
+                        hi - lo
+                    }).sum::<f32>() / multi.len().max(1) as f32;
+                    println!("        trait {k}: p10 {:.3} p50 {:.3} p90 {:.3} max {:.3} | mean in-body range {spread:.3}", q(0.1), q(0.5), q(0.9), q(1.0));
+                }
+            }
+        }
+    }
+}
+
+/// Breeding test: run a reef until bodies meet the creature goal's size and jobs, keep up to
+/// `--keep` of them (distinct lineages first), release each as a lineage into an empty reef and
+/// track the goal there. Says whether the player's lever (keep, release) can win the game.
+fn garden(args: &[String]) {
+    use primordium_core::goal::{CreatureGoal, Tracker, jobs};
+    use primordium_core::reef::{Reef, ReefParams, ReefSeed};
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 1000.0);
+    let seed: u64 = arg(args, "seed", 3);
+    let keep: usize = arg(args, "keep", 6);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let goal = CreatureGoal::default();
+    let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates.clone(), &rs, seed);
+    let mut kept: Vec<(u32, Vec<u8>, [i64; 5], usize, usize)> = Vec::new();
+    let mut noon = 0.5;
+    while kept.len() < keep && r.t_days < 3000.0 {
+        r.step(0.02);
+        if r.t_days < noon {
+            continue;
+        }
+        noon += 1.0;
+        for o in r.organisms.iter().filter(|o| o.settled() && o.cells.len() >= goal.min_cells && jobs(o, goal.split) >= goal.min_jobs) {
+            if kept.len() < keep && !kept.iter().any(|k| k.0 == o.clade && k.1 == o.genome) {
+                println!("day {:.0}: kept lineage {} body of {} cells, {} jobs, {}", r.t_days, o.clade, o.cells.len(), jobs(o, goal.split), if o.speed > 0.0 { "crawling" } else { "anchored" });
+                kept.push((o.clade, o.genome.clone(), o.cells[0].mass, o.cells.len(), jobs(o, goal.split)));
+            }
+        }
+    }
+    let mut g = Reef::new(ReefParams { founders: 0, ..Default::default() }, CosmosParams { seed: seed + 100, ..Default::default() }, rates, &rs, seed + 100);
+    let m0 = g.matter();
+    for k in &kept {
+        let got = g.release(&k.1, k.2, (0.0, 0.5), 12);
+        println!("released lineage {} as {:?}", k.0, got.map(|x| x.0));
+    }
+    let mut tr = Tracker::default();
+    let mut noon = g.t_days.floor() + 0.5;
+    let mut next = 99.5;
+    // qualifying days per lineage in the current 100-day window, and with 20+ cells and 2 jobs
+    let mut qd: std::collections::BTreeMap<u32, (u32, u32)> = Default::default();
+    while g.t_days < days {
+        g.step(0.02);
+        if g.t_days >= noon {
+            noon += 1.0;
+            let now = tr.sample(&goal, &g);
+            for c in now {
+                qd.entry(c).or_default().0 += 1;
+            }
+            let two: std::collections::BTreeSet<u32> = g.organisms.iter().filter(|o| o.settled() && o.speed > 0.0 && o.cells.len() >= goal.min_cells && jobs(o, goal.split) >= 2).map(|o| o.clade).collect();
+            for c in two {
+                qd.entry(c).or_default().1 += 1;
+            }
+        }
+        if g.t_days >= next {
+            next += 100.0;
+            let ok = g.organisms.iter().filter(|o| goal.body_ok(o)).count();
+            let big3 = g.organisms.iter().filter(|o| o.settled() && o.cells.len() >= goal.min_cells && jobs(o, goal.split) >= goal.min_jobs).count();
+            println!("t={:5.0} cells {:5} lineages {:?} | 20+ cells & 3 jobs {big3} (crawling {ok}) | best window {:?} won {:?} ledger {}", g.t_days, g.cells(), g.clades(), tr.best(), tr.won, if g.matter() == m0 { "exact" } else { "DRIFT" });
+            println!("        days qualifying in window (3 jobs, 2 jobs) by lineage: {:?}", qd);
+            qd.clear();
         }
     }
 }

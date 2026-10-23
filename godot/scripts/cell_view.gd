@@ -263,6 +263,12 @@ func _draw_colonies(list: Array, pos_of: Callable, scale_r: float) -> void:
 			art.draw_circle(p, 0.45 * scale_r, Color(1.0, 0.85, 0.45, 0.9))
 		art.draw_circle(centre, 0.8 * scale_r, Color(1.0, 0.85, 0.45, 0.95))
 
+## Campaign goal: cell generations.
+const GOAL_GEN := 20
+func goal_progress() -> Dictionary:
+	var v: int = stats.get("max_generation", 0)
+	return {"value": v, "p": clamp(float(v) / GOAL_GEN, 0.0, 1.0), "done": v >= GOAL_GEN, "args": [GOAL_GEN], "now": "generation %d" % v}
+
 func hud_text() -> String:
 	if not ok:
 		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"

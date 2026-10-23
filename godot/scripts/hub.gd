@@ -1,5 +1,7 @@
 ## The hub: the planet in space with the seven scales orbiting it as small worlds, smallest to
-## largest, numbered as the views number them (-1 elements .. 5 reef). Hover a world for what it is, click to dive in. `chosen(k)` asks main to travel.
+## largest, numbered as the views number them (-1 elements .. 5 reef), plus the player's own
+## world (the garden). Locked worlds sit dark until the campaign opens them. Hover a world for
+## what it is, click to dive in. `chosen(k)` asks main to travel.
 extends Node3D
 
 signal chosen(k: int)
@@ -12,7 +14,13 @@ const SCALES := [
 	["Cells", "Genomes, a genetic code, mutation and the first predators.", Color(0.55, 0.95, 0.5)],
 	["Coast", "Twelve beaches along an Earth-sized planet adapt to their climate.", Color(0.4, 0.7, 1.0)],
 	["Reef", "Many-celled bodies in 3D: plants, crawlers, lineages, evolution.", Color(1.0, 0.5, 0.65)],
+	["Your world", "Your own reef: the creatures you kept live, compete and keep evolving.", Color(0.75, 1.0, 0.55)],
 ]
+const GARDEN := 7
+
+## Number shown before a world's name; the garden is not a scale.
+static func label(k: int) -> String:
+	return SCALES[k][0] if k == GARDEN else "%d  %s" % [k - 1, SCALES[k][0]]
 const RING := 8.5
 
 var cam: Camera3D
@@ -28,6 +36,8 @@ var t := 0.0
 var sun_dir := Vector3(0.6, 0.3, 0.75).normalized()
 ## Off in captures: the mouse over the window would otherwise pop a hover card.
 var hover_enabled := true
+var campaign: Node
+var foot: Label
 
 func _ready() -> void:
 	environment = Environment.new()
@@ -204,6 +214,15 @@ func _emblem(k: int) -> Node3D:
 				var a := i * 2.4
 				var rr := 0.55 - h * 0.09
 				_ball(body, Vector3(cos(a) * rr, -0.5 + h * 0.27, sin(a) * rr), 0.15, _mat(cols[i % 5], 0.5))
+		7:
+			# a few bodies of different lineages on one small rock
+			_ball(body, Vector3(0, -0.55, 0), 0.6, _mat(Color(0.35, 0.3, 0.28), 0.1))
+			for j in 4:
+				var base := Vector3(cos(j * 1.57) * 0.4, -0.1, sin(j * 1.57) * 0.4)
+				var col := Color.from_hsv(0.12 + j * 0.22, 0.6, 1.0)
+				for i in 3 + j:
+					_ball(body, base + Vector3(0, i * 0.17, 0), 0.11, _mat(col, 0.8))
+			_torus(body, 0.95, 0.02, _mat(c, 2.0), Vector3(1.4, 0, 0))
 	var halo := MeshInstance3D.new()
 	var hs := SphereMesh.new()
 	hs.radius = 1.35
@@ -220,7 +239,8 @@ func _emblem(k: int) -> Node3D:
 	halo.name = "Halo"
 	root.add_child(halo)
 	var lbl := Label3D.new()
-	lbl.text = "%d  %s" % [k - 1, SCALES[k][0]]
+	lbl.text = label(k)
+	lbl.name = "Label"
 	lbl.font_size = 64
 	lbl.pixel_size = 0.009
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -280,8 +300,7 @@ func _build_overlay() -> void:
 	card_sub.offset_top = -108
 	card_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(card_sub)
-	var foot := Label.new()
-	foot.text = "click a world to enter (or keys 1-7, smallest to largest)   ·   in any scale: M back here, Tab / Shift+Tab up and down a scale, H guide"
+	foot = Label.new()
 	foot.add_theme_font_size_override("font_size", 14)
 	foot.add_theme_color_override("font_color", Color(0.5, 0.6, 0.72))
 	foot.anchor_left = 0.5
@@ -290,6 +309,8 @@ func _build_overlay() -> void:
 	foot.anchor_bottom = 1.0
 	foot.offset_left = -500
 	foot.offset_right = 500
+	foot.offset_left = -600
+	foot.offset_right = 600
 	foot.offset_top = -48
 	foot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(foot)
@@ -321,7 +342,12 @@ func _process(delta: float) -> void:
 		var target_s := 1.35 if k == hovered else 1.0
 		orbs[k].scale = orbs[k].scale.lerp(Vector3.ONE * target_s, min(1.0, delta * 8.0))
 		var hm: StandardMaterial3D = orbs[k].get_node("Halo").material_override
-		hm.albedo_color.a = 0.2 if k == hovered else 0.07
+		var open: bool = campaign == null or campaign.is_open(k)
+		hm.albedo_color.a = (0.2 if k == hovered else 0.07) if open else 0.02
+		body.visible = open or fmod(t + k, 3.0) < 0.12
+		var lbl: Label3D = orbs[k].get_node("Label")
+		lbl.modulate = Color(SCALES[k][2], 0.95) if open else Color(0.5, 0.52, 0.58, 0.7)
+		lbl.text = label(k) if open else label(k) + "  (locked)"
 	get_node("Planet").rotate_y(delta * 0.05)
 	get_node("Clouds").rotate_y(delta * 0.065)
 	var cp := Vector3(sin(t * 0.05) * 3.0, 9.0, 23.0)
@@ -341,18 +367,33 @@ func _hover(mp: Vector2) -> void:
 			bd = d
 			best = k
 	hovered = best
+	var explore: bool = campaign != null and campaign.state.explore
+	var done: int = campaign.state.done.size() if campaign else 0
+	foot.text = "click a world (keys 1-8)   ·   J codex   ·   E %s   ·   in any scale: M back here, Tab / Shift+Tab next scale, H guide" % ("explore mode: all worlds open" if explore else "campaign: %d of %d goals" % [done, campaign.GOALS.size()])
 	if best >= 0:
-		card.text = "Scale %d  ·  %s" % [best - 1, SCALES[best][0]]
-		card.add_theme_color_override("font_color", SCALES[best][2])
-		card_sub.text = SCALES[best][1] + "   Click to dive in."
+		var open: bool = campaign == null or campaign.is_open(best)
+		card.text = ("Scale %d  ·  %s" % [best - 1, SCALES[best][0]]) if best != GARDEN else SCALES[best][0]
+		card.add_theme_color_override("font_color", SCALES[best][2] if open else Color(0.6, 0.62, 0.7))
+		if open:
+			var g := ""
+			if campaign and best < campaign.GOALS.size():
+				g = "   Goal: " + campaign.goal_title(best) + (" (done)" if campaign.is_done(best) else "")
+			card_sub.text = SCALES[best][1] + g
+		elif best == GARDEN:
+			card_sub.text = "Locked. Keep a creature at the reef (K) and it opens here."
+		else:
+			card_sub.text = "Locked. Reach the %s goal first: %s." % [SCALES[best - 1][0], campaign.goal_title(best - 1)]
 	else:
 		card.text = ""
-		card_sub.text = "Seven scales of one world, from the atom to the reef."
+		card_sub.text = "Seven scales of one world, from the atom to the reef, and a world of your own."
 
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT and hovered >= 0:
 		chosen.emit(hovered)
 		get_viewport().set_input_as_handled()
-	elif e is InputEventKey and e.pressed and e.keycode >= KEY_1 and e.keycode <= KEY_7:
+	elif e is InputEventKey and e.pressed and e.keycode >= KEY_1 and e.keycode <= KEY_8:
 		chosen.emit(e.keycode - KEY_1)
+		get_viewport().set_input_as_handled()
+	elif e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_E and campaign:
+		campaign.set_explore(not campaign.state.explore)
 		get_viewport().set_input_as_handled()

@@ -22,6 +22,7 @@ The chemistry is invented, not ours: elements come from a shell rule with capaci
 | 3-4 Colonies | Adhesive products keep daughters attached: anchored, monomer-sharing, shade-sharing colonies | done (first step to multicellularity) |
 | 3-4 Ecology | Sticky cells engulf smaller ones; colonies resist | done (predation drives multicellularity) |
 | 5 Reef | Multicellular bodies in 3D on a rocky shore: each cell a scale-4 lineage cell, its genes switched by its height and exposure; light through water and canopy, food through open faces, waves that tear, grazing, spores and fragments | detail done, 3D viewer; organism surrogate next |
+| Your world | An empty reef the player stocks with creatures kept from reef runs | done (saved between sessions) |
 
 Each scale's surrogate is measured against a "twin": the same detailed model with different dice. Agreement as a share of that ceiling (latest runs): scale 0 ~99% (10-day mean over 6 seeds), scale 1 95-104% (blend of cached relatives), scale 2 ~99-100%, scale 3 ~100%, scale 4 ~95% with engulfing (lineage mode, mean of five windows, 2.2x faster). A mean-field surrogate can sit at or above the ceiling because it carries less noise than a second detailed run.
 
@@ -47,7 +48,11 @@ The periodic table is one line: `element::SHELLS`. Element count, names, bond en
 cargo run --release -p primordium -- elements --shells=2,6,6
 ```
 
-What a third shell of 6 would do (from the explorer): 14 elements, Ka keeps the backbone (Ti is a trivalent rival), 10 side-group letters, and the heritable alphabet that survives copying becomes Fl/Sa instead of Li/Fl. With `[2, 8, 8]` (our universe's octets) the backbone turns tetravalent and chains branch. Chemistry (scale 0) runs on any table; scales 1+ are written for 5 letters and a binary genome (genetic code `cell::CODE`, the Li/Fl roles), and a compile-time check in `polymer.rs` says so. Generalising those is the next step to a bigger table; after any change, retrain `data/rates0.json` (`primordium train`) and `data/reef_seed.json` (`primordium reef-seed`).
+What a third shell of 6 would do (from the explorer): 14 elements, Ka keeps the backbone (Ti is a trivalent rival), 10 side-group letters, and the heritable alphabet that survives copying becomes Fl/Sa instead of Li/Fl. With `[2, 8, 8]` (our universe's octets) the backbone turns tetravalent and chains branch. Chemistry (scale 0) runs on any table; scales 1+ are written for 5 letters and a binary genome (genetic code `cell::CODE`, the Li/Fl roles), and a compile-time check in `polymer.rs` says so. Generalising those is the next step to a bigger table (plan: `docs/bigger-table.md`); after any change, retrain `data/rates0.json` (`primordium train`) and `data/reef_seed.json` (`primordium reef-seed`).
+
+## Play
+
+The viewer opens on a hub: the planet with each scale orbiting it as a small world, plus your own world. It is a campaign: each scale has a goal measured by its own simulation (build a 12-atom molecule, a chain that copies itself, a bubble that divides, ...), and reaching it opens the next world and writes a codex page (J). At the reef the goal is to find a creature, a crawling body of 20+ cells whose cells do 3+ different jobs (gold rings mark them, G jumps to one) and keep it (K). Kept creatures are released into your world, an empty reef where they compete and keep evolving, saved between sessions; N starts a new reef run to find more. The last goal is a creature that breeds true: one lineage in your world producing creatures on 15 of the last 100 days. E in the hub opens every world for free exploring.
 
 ## Environment: change drives evolution
 

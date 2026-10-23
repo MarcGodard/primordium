@@ -228,6 +228,12 @@ func focus(cell: Vector2, zoom: float) -> void:
 	cam.zoom = Vector2(zoom, zoom)
 	cam.position = cell * CELL
 
+## Campaign goal: a molecule this many atoms big.
+const GOAL_ATOMS := 12
+func goal_progress() -> Dictionary:
+	var v: int = census.get("largest", 0)
+	return {"value": v, "p": clamp(float(v) / GOAL_ATOMS, 0.0, 1.0), "done": v >= GOAL_ATOMS, "args": [GOAL_ATOMS], "now": "largest molecule %d atoms" % v}
+
 func selected_info() -> Dictionary:
 	if selected.x < 0:
 		return {}

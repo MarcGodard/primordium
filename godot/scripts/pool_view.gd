@@ -166,6 +166,12 @@ func pick_longest() -> void:
 	inset.visible = not info.is_empty()
 	inset.residue = 2 if best_len > 2 else -1
 
+## Campaign goal: a chain lineage this many copies deep.
+const GOAL_GEN := 5
+func goal_progress() -> Dictionary:
+	var v: int = stats.get("max_generation", 0)
+	return {"value": v, "p": clamp(float(v) / GOAL_GEN, 0.0, 1.0), "done": v >= GOAL_GEN, "args": [GOAL_GEN], "now": "deepest copy lineage %d" % v}
+
 func hud_text() -> String:
 	if not ok:
 		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"

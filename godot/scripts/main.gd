@@ -1,5 +1,5 @@
-## Root: the hub, one scale view at a time, the HUD, a scale bar and warp transitions.
-## Starts in the hub unless --scale=K is given.
+## Root: the hub, one scale view at a time, the HUD, a scale bar, warp transitions and the
+## campaign (goals, codex, kept creatures). Starts in the hub unless --scale=K is given.
 ## Capture mode (no interaction, exits): godot --path godot -- --shot=out.png [--scale=K] [--warm=SWEEPS] [--zoom=Z] [--focus=X,Y] [--frames=N]
 extends Node
 
@@ -18,10 +18,25 @@ var warp_sub: Label
 var travelling := false
 ## Captures normally skip the warp; --warp=K plays it so a frame mid-transition can be checked.
 var show_warp := false
+var campaign: Node
+var goal_label: RichTextLabel
+var goal_bar: ProgressBar
+var goal_panel: PanelContainer
+var codex_panel: PanelContainer
+var codex_text: RichTextLabel
+var toast_label: Label
+var toast_tw: Tween
 
 func _ready() -> void:
-	for path in ["res://scripts/periodic_view.gd", "res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd", "res://scripts/cell_view.gd", "res://scripts/coast_view.gd", "res://scripts/reef_view.gd"]:
+	campaign = load("res://scripts/campaign.gd").new()
+	add_child(campaign)
+	# the garden is a second reef, empty until the player releases kept creatures into it
+	for path in ["res://scripts/periodic_view.gd", "res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd", "res://scripts/cell_view.gd", "res://scripts/coast_view.gd", "res://scripts/reef_view.gd", "res://scripts/reef_view.gd"]:
 		var v: Node = load(path).new()
+		if views.size() == 7:
+			v.garden = true
+		if "campaign" in v:
+			v.campaign = campaign
 		add_child(v)
 		views.append(v)
 	view = views[0]
@@ -31,10 +46,13 @@ func _ready() -> void:
 	hud.view = view
 	add_child(hud)
 	hub = load("res://scripts/hub.gd").new()
+	hub.campaign = campaign
 	add_child(hub)
 	hub.chosen.connect(travel)
 	_build_bar()
 	_build_warp()
+	_build_campaign_ui()
+	campaign.toast.connect(show_toast)
 	enter_hub()
 	for a in OS.get_cmdline_user_args():
 		var kv: PackedStringArray = a.trim_prefix("--").split("=")
@@ -49,8 +67,24 @@ func _ready() -> void:
 				hub.set_process_unhandled_input(false)
 				hub.hover_enabled = false
 			"frames": frames = int(kv[1])
+			"explore": campaign.state.explore = kv[1] == "1"
+			"codex":
+				codex_panel.visible = kv[1] == "1"
+				_fill_codex()
 			"scale": switch_to(int(kv[1]))
 			"pick": view.pick_longest()
+			"run":
+				# reef: restart as run N (seed N)
+				if view.has_method("new_run"):
+					campaign.state.run = int(kv[1]) - 1
+					view.new_run()
+			"hunt":
+				# reef: run on (up to N steps) until a creature exists, then select it
+				if view.has_method("hunt"):
+					view.hunt(int(kv[1]))
+			"keep":
+				if view.has_method("keep_selected"):
+					view.keep_selected()
 			"explain": hud.explaining = kv[1] == "1"
 			"warp":
 				show_warp = true
@@ -113,6 +147,10 @@ func travel(k: int) -> void:
 	var from := -1 if in_hub else views.find(view)
 	if k == from:
 		return
+	if k >= 0 and not campaign.is_open(k) and shot == "":
+		var why: String = "Keep a creature at the reef (K) to open your world." if k == 7 else "Reach the goal of %s first: %s." % [hub.SCALES[k - 1][0], campaign.goal_title(k - 1)]
+		show_toast("Locked: " + hub.SCALES[k][0], why, Color(0.7, 0.75, 0.85))
+		return
 	if shot != "" and not show_warp:
 		if k < 0:
 			enter_hub()
@@ -124,7 +162,7 @@ func travel(k: int) -> void:
 	var m: ShaderMaterial = warp.material
 	m.set_shader_parameter("dir", 1.0 if outward else -1.0)
 	m.set_shader_parameter("tint", hub.SCALES[k][2] if k >= 0 else Color(0.6, 0.7, 1.0))
-	warp_title.text = ("Scale %d  ·  %s" % [k - 1, hub.SCALES[k][0]]) if k >= 0 else "The hub"
+	warp_title.text = "The hub" if k < 0 else (hub.SCALES[k][0] if k == hub.GARDEN else "Scale %d  ·  %s" % [k - 1, hub.SCALES[k][0]])
 	warp_title.add_theme_color_override("font_color", hub.SCALES[k][2] if k >= 0 else Color(0.8, 0.9, 1.0))
 	warp_sub.text = hub.SCALES[k][1] if k >= 0 else "Seven scales of one world."
 	warp.visible = true
@@ -167,7 +205,7 @@ func _build_bar() -> void:
 	bar.add_child(home)
 	for k in hub.SCALES.size():
 		var b := Button.new()
-		b.text = ("· " if k > 0 else "") + "%d %s" % [k - 1, hub.SCALES[k][0]]
+		b.text = ("· " if k > 0 else "") + hub.label(k).replace("  ", " ")
 		b.flat = true
 		b.focus_mode = Control.FOCUS_NONE
 		b.pressed.connect(func() -> void: travel(k))
@@ -209,20 +247,164 @@ func _build_warp() -> void:
 func _unhandled_input(e: InputEvent) -> void:
 	if not (e is InputEventKey and e.pressed):
 		return
-	if e.keycode == KEY_M:
+	if e.keycode == KEY_J:
+		codex_panel.visible = not codex_panel.visible
+		if codex_panel.visible:
+			_fill_codex()
+	elif e.keycode == KEY_ESCAPE and codex_panel.visible:
+		codex_panel.visible = false
+	elif e.keycode == KEY_M:
 		travel(-1)
 	elif e.keycode == KEY_TAB:
 		if in_hub:
 			travel(views.size() - 1 if e.shift_pressed else 0)
 		else:
-			travel(posmod(views.find(view) + (-1 if e.shift_pressed else 1), views.size()))
+			# step past locked worlds
+			var step := -1 if e.shift_pressed else 1
+			var k := posmod(views.find(view) + step, views.size())
+			while not campaign.is_open(k) and k != views.find(view):
+				k = posmod(k + step, views.size())
+			travel(k)
 
-func _process(_d: float) -> void:
+func _process(d: float) -> void:
+	_update_goal(d)
 	if shot == "":
 		return
 	frames -= 1
 	if frames == 0:
+		if not in_hub:
+			print("goal: ", campaign.progress)
+		for v in views:
+			if v.has_method("save_garden"):
+				v.save_garden()
 		var img := get_viewport().get_texture().get_image()
 		img.save_png(shot)
 		print("shot: ", shot)
 		get_tree().quit()
+
+func _panel_style(alpha: float) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.02, 0.04, 0.07, alpha)
+	sb.border_color = Color(0.95, 0.8, 0.4, 0.45)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(8)
+	sb.content_margin_left = 18
+	sb.content_margin_right = 18
+	sb.content_margin_top = 12
+	sb.content_margin_bottom = 12
+	return sb
+
+## Goal banner under the scale bar, codex page (J) and toasts.
+func _build_campaign_ui() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 11
+	add_child(layer)
+	var gp := PanelContainer.new()
+	var gsb := _panel_style(0.78)
+	gsb.border_color = Color(1, 1, 1, 0.08)
+	gsb.content_margin_top = 6
+	gsb.content_margin_bottom = 8
+	gp.add_theme_stylebox_override("panel", gsb)
+	gp.anchor_left = 0.5
+	gp.anchor_right = 0.5
+	gp.offset_left = -350
+	gp.offset_right = 350
+	gp.offset_top = 32
+	gp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(gp)
+	goal_panel = gp
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gp.add_child(box)
+	goal_label = RichTextLabel.new()
+	goal_label.bbcode_enabled = true
+	goal_label.fit_content = true
+	goal_label.scroll_active = false
+	goal_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	goal_label.add_theme_font_size_override("normal_font_size", 13)
+	goal_label.add_theme_font_size_override("bold_font_size", 14)
+	box.add_child(goal_label)
+	goal_bar = ProgressBar.new()
+	goal_bar.custom_minimum_size = Vector2(660, 5)
+	goal_bar.show_percentage = false
+	goal_bar.max_value = 1.0
+	goal_bar.step = 0.001
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(1.0, 0.8, 0.35)
+	goal_bar.add_theme_stylebox_override("fill", fill)
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(1, 1, 1, 0.08)
+	goal_bar.add_theme_stylebox_override("background", bg)
+	box.add_child(goal_bar)
+	codex_panel = PanelContainer.new()
+	codex_panel.add_theme_stylebox_override("panel", _panel_style(0.95))
+	codex_panel.anchor_left = 0.5
+	codex_panel.anchor_right = 0.5
+	codex_panel.anchor_top = 0.5
+	codex_panel.anchor_bottom = 0.5
+	codex_panel.offset_left = -400
+	codex_panel.offset_right = 400
+	codex_panel.offset_top = -330
+	codex_panel.offset_bottom = 330
+	codex_text = RichTextLabel.new()
+	codex_text.bbcode_enabled = true
+	codex_text.scroll_active = true
+	codex_text.add_theme_font_size_override("normal_font_size", 15)
+	codex_text.add_theme_font_size_override("bold_font_size", 16)
+	codex_panel.add_child(codex_text)
+	codex_panel.visible = false
+	layer.add_child(codex_panel)
+	toast_label = Label.new()
+	toast_label.anchor_left = 0.5
+	toast_label.anchor_right = 0.5
+	toast_label.anchor_top = 1.0
+	toast_label.anchor_bottom = 1.0
+	toast_label.offset_left = -450
+	toast_label.offset_right = 450
+	toast_label.offset_top = -230
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	toast_label.add_theme_font_size_override("font_size", 20)
+	toast_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	toast_label.add_theme_constant_override("outline_size", 6)
+	toast_label.modulate.a = 0.0
+	layer.add_child(toast_label)
+	campaign.changed.connect(func() -> void:
+		if codex_panel.visible:
+			_fill_codex())
+
+func show_toast(title: String, body: String, color: Color) -> void:
+	toast_label.text = title + "\n" + body
+	toast_label.add_theme_color_override("font_color", color)
+	if toast_tw:
+		toast_tw.kill()
+	toast_label.modulate.a = 1.0
+	toast_tw = create_tween()
+	toast_tw.tween_interval(3.5)
+	toast_tw.tween_property(toast_label, "modulate:a", 0.0, 1.0)
+
+func _fill_codex() -> void:
+	var st: Dictionary = campaign.state
+	var t := "[b]Codex[/b]   [color=#9ab]run %d   goals %d of %d   J or Esc to close[/color]\n\n" % [st.run, st.done.size(), campaign.GOALS.size()]
+	if st.codex.is_empty():
+		t += "[color=#9ab]Empty. Each goal you reach writes a page here, and so does each creature you keep.[/color]\n"
+	for c in st.codex:
+		t += c.text + "\n\n"
+	if not st.kept.is_empty():
+		t += "[b]Kept creatures[/b] (they live in your world)\n"
+		for c in st.kept:
+			t += "  %s   from %s   %d cells, %d jobs%s\n" % [c.name, c.get("from", "reef run %d" % c.get("run", 1)), c.cells, c.jobs, "   [color=#ffd36b]creature[/color]" if c.creature else ""]
+	codex_text.text = t
+
+func _update_goal(delta: float) -> void:
+	var k := -1 if in_hub else views.find(view)
+	goal_panel.visible = k >= 0
+	if k < 0:
+		return
+	if not travelling:
+		campaign.tick(delta, k, view)
+	var p: Dictionary = campaign.progress.get(k, {})
+	var done: bool = campaign.is_done(k)
+	var head := "[color=#7f7]done[/color]" if done else "[color=#ffd36b]goal[/color]"
+	goal_label.text = "[center]%s  [b]%s[/b]  [color=#cde]%s[/color]\n[color=#9ab]%s[/color][/center]" % [head, campaign.goal_title(k), campaign.goal_text(k), p.get("now", "")]
+	goal_bar.value = 1.0 if done else p.get("p", 0.0)

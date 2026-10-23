@@ -167,6 +167,12 @@ func _draw_pond() -> void:
 		if v.id == selected:
 			art.draw_arc(c, r + 1.2, 0, TAU, 48, Color(1, 1, 0.4, 0.9), 0.25)
 
+## Campaign goal: protocell lineage this many divisions deep.
+const GOAL_GEN := 4
+func goal_progress() -> Dictionary:
+	var v: int = stats.get("max_generation", 0)
+	return {"value": v, "p": clamp(float(v) / GOAL_GEN, 0.0, 1.0), "done": v >= GOAL_GEN, "args": [GOAL_GEN], "now": "deepest protocell lineage %d" % v}
+
 func hud_text() -> String:
 	if not ok:
 		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"

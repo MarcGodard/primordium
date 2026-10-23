@@ -118,7 +118,7 @@ func _process(_d: float) -> void:
 		return
 	explain_panel.visible = explaining
 	if explaining:
-		var txt: String = view.get("EXPLAIN") if view.get("EXPLAIN") != null else "No guide for this screen yet."
+		var txt: String = view.explain_text() if view.has_method("explain_text") else (view.get("EXPLAIN") if view.get("EXPLAIN") != null else "No guide for this screen yet.")
 		if explain.text != txt:
 			explain.text = txt
 	var e: Dictionary = view.env

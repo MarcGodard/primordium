@@ -269,6 +269,8 @@ pub struct Reef {
     occ: HashMap<[i32; 3], u64>,
     canon: [u8; 2],
     next_id: u64,
+    /// Clade the next released creature gets; founders hold 0..founders.
+    pub next_clade: u32,
     steps: u64,
     seed: u64,
     rng: Rng,
@@ -400,6 +402,7 @@ impl Reef {
             occ: HashMap::new(),
             canon,
             next_id: 1,
+            next_clade: 0,
             steps: 0,
             seed,
             rng: Rng::new(seed ^ 0x5EEF),
@@ -426,46 +429,80 @@ impl Reef {
             // big coast cells start as average reef cells: the founder is a spore, not a whole cell
             let raw_mass = f.mass.map(|m| m.max(0));
             let scale = (FOUNDER_MASS / raw_mass.iter().sum::<i64>().max(1) as f64).min(1.0);
-            let mut mass = raw_mass.map(|m| (m as f64 * scale).round() as i64);
-            let store = [0i64; N_LETTERS];
-            // the ocean pays: genome copy plus body
-            let need = counts(&genome);
-            for l in 0..N_LETTERS {
-                mass[l] = mass[l].min(self.ocean[l] - need[l]).max(0);
-                self.ocean[l] -= need[l] + mass[l];
-            }
-            let total: i64 = need.iter().sum::<i64>() + mass.iter().sum::<i64>();
-            self.ocean_ka -= total;
+            let mass = raw_mass.map(|m| (m as f64 * scale).round() as i64);
             let tile = low[rng.below(low.len())];
-            let spot = self.free_spot(tile, &mut rng);
-            let Some(pos) = spot else {
-                // no room: the matter stays loose on the tile
-                let t = &mut self.tiles[tile];
-                for l in 0..N_LETTERS {
-                    t.free[l] += need[l] + mass[l];
-                }
-                continue;
-            };
-            let info = self.info_now(&genome);
-            let id = self.id();
-            let cell = BodyCell { pos, birth_mass: mass.iter().sum::<i64>().max(1), mass, born: self.t_days, ready: false, expr: [0.0; 5], light: 0.0, open: 5, x: [0.0; 8] };
-            self.occ.insert(pos, id);
-            self.organisms.push(Organism {
-                id,
-                parent: None,
-                genome,
-                info,
-                generation: 0,
-                born: self.t_days,
-                cells: vec![cell],
-                store,
-                adrift: 0.0,
-                drift_tile: usize::MAX,
-                speed: 0.0,
-                clade: k as u32,
-            });
+            self.plant(genome, mass, tile, k as u32, &mut rng);
+        }
+        self.next_clade = self.rp.founders as u32;
+        self.rng = rng;
+    }
+
+    /// One spore onto `tile`, paid by the ocean: genome copy plus body (cut to what the ocean
+    /// holds). No room: the matter lands loose on the tile. Returns the new body's id.
+    fn plant(&mut self, genome: Seq, mut mass: [i64; N_LETTERS], tile: usize, clade: u32, rng: &mut Rng) -> Option<u64> {
+        let need = counts(&genome);
+        for l in 0..N_LETTERS {
+            mass[l] = mass[l].min(self.ocean[l] - need[l]).max(0);
+            self.ocean[l] -= need[l] + mass[l];
+        }
+        let total: i64 = need.iter().sum::<i64>() + mass.iter().sum::<i64>();
+        self.ocean_ka -= total;
+        let Some(pos) = self.free_spot(tile, rng) else {
+            let t = &mut self.tiles[tile];
+            for l in 0..N_LETTERS {
+                t.free[l] += need[l] + mass[l];
+            }
+            return None;
+        };
+        let info = self.info_now(&genome);
+        let id = self.id();
+        let cell = BodyCell { pos, birth_mass: mass.iter().sum::<i64>().max(1), mass, born: self.t_days, ready: false, expr: [0.0; 5], light: 0.0, open: 5, x: [0.0; 8] };
+        self.occ.insert(pos, id);
+        self.organisms.push(Organism {
+            id,
+            parent: None,
+            genome,
+            info,
+            generation: 0,
+            born: self.t_days,
+            cells: vec![cell],
+            store: [0; N_LETTERS],
+            adrift: 0.0,
+            drift_tile: usize::MAX,
+            speed: 0.0,
+            clade,
+        });
+        Some(id)
+    }
+
+    /// Release a kept creature as a new lineage: `n` spores of `genome` (reef letters), each with
+    /// `mass` as its body, on random tiles within `elev` (lo, hi). One spore usually dies young.
+    /// Returns (clade, spores placed); None when the genome holds letters this reef cannot read,
+    /// the ocean cannot pay, no tile fits or no spot was free.
+    pub fn release(&mut self, genome: &[u8], mass: [i64; N_LETTERS], elev: (f64, f64), n: usize) -> Option<(u32, usize)> {
+        if genome.is_empty() || genome.iter().any(|&l| l as usize >= N_LETTERS) {
+            return None;
+        }
+        let need = counts(genome);
+        if (0..N_LETTERS).any(|l| self.ocean[l] < need[l] * n as i64) {
+            return None;
+        }
+        let fit: Vec<usize> = (0..self.tiles.len()).filter(|&k| (elev.0..=elev.1).contains(&self.tiles[k].elevation)).collect();
+        if fit.is_empty() {
+            return None;
+        }
+        let mut rng = std::mem::replace(&mut self.rng, Rng::new(0));
+        let clade = self.next_clade;
+        let mut placed = 0;
+        for _ in 0..n {
+            let tile = fit[rng.below(fit.len())];
+            placed += self.plant(genome.to_vec(), mass.map(|m| m.max(0)), tile, clade, &mut rng).is_some() as usize;
         }
         self.rng = rng;
+        (placed > 0).then(|| {
+            self.next_clade += 1;
+            (clade, placed)
+        })
     }
 
     fn id(&mut self) -> u64 {
@@ -1278,6 +1315,32 @@ mod tests {
         let biggest = r.organisms.iter().map(|o| o.cells.len()).max().unwrap_or(0);
         assert!(biggest > 1, "no body grew past one cell: test would pass vacuously");
         assert!(r.stats.divisions > 0 && r.stats.spores > 0, "no divisions or spores");
+    }
+
+    /// A creature kept from one reef and released into an empty one (the garden): the ocean pays
+    /// for it, its lineage grows, and a garbled genome is refused.
+    #[test]
+    fn released_creature_founds_a_lineage() {
+        let (rates, seed) = load();
+        let rp = ReefParams { width: 10, depth: 10, founders: 60, ..Default::default() };
+        let mut donor = Reef::new(rp.clone(), CosmosParams::default(), rates.clone(), &seed, 2);
+        for _ in 0..2000 {
+            donor.step(0.02);
+        }
+        let o = donor.organisms.iter().filter(|o| o.settled()).max_by_key(|o| o.cells.len()).unwrap();
+        let (genome, mass) = (o.genome.clone(), o.cells[0].mass);
+        let mut g = Reef::new(ReefParams { founders: 0, ..rp }, CosmosParams::default(), rates, &seed, 3);
+        assert!(g.organisms.is_empty());
+        let start = g.matter();
+        assert!(g.release(&[N_LETTERS as u8], mass, (0.0, 1.0), 4).is_none(), "unreadable letter accepted");
+        let (clade, placed) = g.release(&genome, mass, (0.0, 0.5), 12).expect("release refused");
+        assert_eq!(g.matter(), start, "release created or lost matter");
+        for _ in 0..2000 {
+            g.step(0.02);
+        }
+        assert_eq!(g.matter(), start);
+        let cells: usize = g.organisms.iter().filter(|o| o.clade == clade).map(|o| o.cells.len()).sum();
+        assert!(cells > placed, "released lineage never grew: {cells} cells from {placed} spores");
     }
 }
 

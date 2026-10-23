@@ -20,7 +20,16 @@ const EXPLAIN := """[b]Scale 5: a reef of many-celled bodies[/b]
 [b]Evolution you can see.[/b] Press C to colour bodies by [b]lineage[/b] (which founder they descend from). Over a few hundred days most lineages die out and the survivors split the shore: tall bodies in calm deep water, low crusts where waves break.
 
 [b]Try.[/b] Click a body to see its layers and genes, B for the biggest, right-drag to orbit, dive under the surface."""
-const SCALE_NAME := "scale 5: reef"
+var SCALE_NAME := "scale 5: reef"
+const GARDEN_EXPLAIN := """[b]Your world[/b]
+
+[b]What this is.[/b] The same kind of reef as scale 5, but it starts empty. Every body you keep at the reef (select it, press K) arrives here as a handful of spores, as a lineage of its own, named.
+
+[b]What happens.[/b] Your creatures share one shore, one ocean of food and one sky. They grow, shed spores, mutate and compete. Lineages that fit spread, the others fade. What you see here a few hundred days later is no longer what you kept: it kept evolving.
+
+[b]It lasts.[/b] When you leave, the surviving lineages are saved and come back next time. Keep creatures from several runs of the reef (N starts a new run) and watch which ones win.
+
+[b]Try.[/b] C colours bodies by lineage. Click a body to see whose descendant it is, K to keep it again."""
 const ROLE_COLORS := [Color(0.25, 0.8, 0.85), Color(0.35, 0.8, 0.3), Color(0.95, 0.88, 0.72), Color(0.75, 0.22, 0.32), Color(0.6, 0.6, 0.65), Color(1.0, 0.75, 0.2)]
 const ROLE_NAMES := ["polymerase", "metabolism", "membrane", "pigment", "no clear role", "glue"]
 
@@ -34,6 +43,9 @@ var rock_mat: ShaderMaterial
 var cells_mm: MultiMesh
 var cell_mat: ShaderMaterial
 var bites_mm: MultiMesh
+var rings_mm: MultiMesh
+var creatures := PackedInt64Array()
+var creature_at := 0
 var speed_idx := 2
 var env := {}
 var stats := {}
@@ -56,11 +68,32 @@ var profile: Control
 var chart: Control
 var active := false
 var by_lineage := false
+## Garden: the player's own reef, no founders; kept creatures are released into it.
+var garden := false
+var campaign: Node
+## Garden lineage number -> creature name.
+var names := {}
+## Garden lineages that are the player's creatures (kept, not wild offshoots): always saved.
+var mine := {}
+## Saved lineages that could not be released this session: carried over to the next save.
+var unplaced := []
+var save_timer := 0.0
+var restored := false
+const RATES := "res://../data/rates0.json"
+const SEED := "res://../data/reef_seed.json"
+## Spores per release: one alone usually dies young.
+const RELEASE_SPORES := 12
+## Unnamed lineages a garden save keeps (biggest first); named ones are always kept.
+const GARDEN_KEEP := 32
 
 func _ready() -> void:
 	sim = ReefSim.new()
 	add_child(sim)
-	ok = sim.start(ProjectSettings.globalize_path("res://../data/rates0.json"), ProjectSettings.globalize_path("res://../data/reef_seed.json"), 1)
+	if garden:
+		SCALE_NAME = "your world"
+		ok = sim.start_garden(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), 7)
+	else:
+		ok = sim.start(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), campaign.state.run if campaign else 1)
 	extent = sim.extent()
 	target = Vector3(extent.x * 0.5, 30.0, -extent.y * 0.35)
 	_build_environment()
@@ -183,6 +216,17 @@ func _build_cells() -> void:
 	bi.material_override = sm
 	bi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(bi)
+	var quad := QuadMesh.new()
+	var rm := ShaderMaterial.new()
+	rm.shader = load("res://shaders/ring.gdshader")
+	rings_mm = MultiMesh.new()
+	rings_mm.transform_format = MultiMesh.TRANSFORM_3D
+	rings_mm.mesh = quad
+	var ri := MultiMeshInstance3D.new()
+	ri.multimesh = rings_mm
+	ri.material_override = rm
+	ri.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(ri)
 
 func _build_overlay() -> void:
 	layer = CanvasLayer.new()
@@ -219,6 +263,94 @@ func activate(on: bool) -> void:
 		cam.make_current()
 	else:
 		cam.clear_current(false)
+	if garden and ok and campaign:
+		if on:
+			_populate()
+		else:
+			save_garden()
+
+## Garden: bring back what lived here last session, then release creatures kept since.
+func _populate() -> void:
+	if not restored:
+		restored = true
+		for g in campaign.state.garden:
+			var n: int = clamp(int(g.cells) / 10, 4, 24)
+			var c: int = sim.release(PackedByteArray(g.genome), PackedInt64Array(g.mass), n)
+			if c >= 0:
+				names[c] = g.name
+				if not str(g.name).begins_with("Wild-"):
+					mine[c] = true
+			elif not str(g.name).begins_with("Wild-"):
+				unplaced.append(g)
+	var arrived := []
+	for k in campaign.state.kept:
+		if k.get("released", false):
+			continue
+		var c: int = sim.release(PackedByteArray(k.genome), PackedInt64Array(k.mass), RELEASE_SPORES)
+		if c >= 0:
+			k.released = true
+			names[c] = k.name
+			mine[c] = true
+			arrived.append(k.name)
+		else:
+			campaign.toast.emit("Could not release " + k.name, "No room on the lower shore right now; it waits for your next visit.", Color(0.95, 0.6, 0.5))
+	if not arrived.is_empty():
+		# one write: the released flags and the lineages they became
+		save_garden()
+		campaign.toast.emit("Released into your world", ", ".join(PackedStringArray(arrived)), Color(0.75, 1.0, 0.55))
+
+## Garden: the surviving lineages, one representative each, to come back next session.
+func save_garden() -> void:
+	# before the first visit the sim is empty: saving would wipe last session's garden
+	if not garden or not ok or campaign == null or not restored:
+		return
+	# the player's own lineages (`mine`) survive a save however small, and so do ones that
+	# could not be placed this session; wild offshoots only the biggest few
+	var out := []
+	var wild := 0
+	for l in sim.lineages(100000):
+		if not mine.has(int(l.lineage)):
+			wild += 1
+			if wild > GARDEN_KEEP:
+				continue
+			# lineage numbers restart each session: wild names come from a saved counter
+			if not names.has(int(l.lineage)):
+				campaign.state.wild = int(campaign.state.get("wild", 0)) + 1
+				names[int(l.lineage)] = "Wild-%d" % campaign.state.wild
+		out.append({"name": names[int(l.lineage)], "genome": Array(l.genome), "mass": Array(l.mass), "cells": l.cells})
+	out.append_array(unplaced)
+	campaign.state.garden = out
+	campaign.save()
+
+## Keep the selected body: its genome goes to the player's world.
+func keep_selected() -> void:
+	if campaign == null or organism.is_empty():
+		return
+	var name: String = campaign.keep(organism, "your world" if garden else "reef run %d" % campaign.state.run)
+	if name == "":
+		return
+	var what := "a creature" if organism.creature else "%d cells, %d jobs" % [organism.cells, organism.jobs]
+	campaign.toast.emit("Kept " + name + " (" + what + ")", "It will be released in your world (8 in the hub). Keep several and see who survives.", Color(0.75, 1.0, 0.55))
+
+## A fresh reef from the same founders with new dice: another try at a creature.
+func new_run() -> void:
+	if campaign == null or garden:
+		return
+	var run: int = campaign.new_run()
+	ok = sim.start(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), run)
+	selected = -1
+	organism = {}
+	history = PackedFloat32Array()
+	if ok:
+		sim.step(1, DT)
+	campaign.toast.emit("Run %d" % run, "A new reef from the same founders. Different dice, different history.", Color(1.0, 0.5, 0.65))
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and active:
+		save_garden()
+
+func explain_text() -> String:
+	return GARDEN_EXPLAIN if garden else EXPLAIN
 
 func speed() -> int:
 	return SPEEDS[speed_idx]
@@ -272,6 +404,11 @@ func _process(delta: float) -> void:
 	timer -= delta
 	if timer <= 0.0:
 		timer = 0.5
+		if garden:
+			save_timer -= 0.5
+			if save_timer <= 0.0:
+				save_timer = 30.0
+				save_garden()
 		stats = sim.stats()
 		history = sim.history()
 		var rows := history.size() / 11
@@ -283,8 +420,42 @@ func _process(delta: float) -> void:
 			organism = sim.organism(selected)
 			if organism.is_empty():
 				selected = -1
+		_update_rings()
 		profile.queue_redraw()
 		chart.queue_redraw()
+
+## Gold rings over bodies that meet the creature goal right now.
+func _update_rings() -> void:
+	creatures = sim.creatures()
+	rings_mm.instance_count = creatures.size()
+	for i in creatures.size():
+		var c: Vector3 = sim.organism_center(creatures[i])
+		rings_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 9.0), c + Vector3(0, 4.0, 0)))
+
+## Step until a creature exists (at most `max_steps`), then fly to it. Captures only.
+func hunt(max_steps: int) -> void:
+	# creatures show around midday (jobs come from light-switched genes): check at noon
+	var t: float = sim.t_days()
+	var n := int(round((ceil(t - 0.5) + 0.5 - t) / DT))
+	sim.step(n, DT)
+	while n < max_steps and sim.creatures().is_empty():
+		sim.step(50, DT)
+		n += 50
+	_update_rings()
+	next_creature()
+
+## Fly to the next creature and select it.
+func next_creature() -> void:
+	if creatures.is_empty():
+		if campaign:
+			campaign.toast.emit("No creature right now", "They come and go, mostly around midday when light switches cells' jobs. Speed up time (4, 5) and watch for gold rings.", Color(0.8, 0.85, 0.95))
+		return
+	creature_at = (creature_at + 1) % creatures.size()
+	selected = creatures[creature_at]
+	organism = sim.organism(selected)
+	target = sim.organism_center(selected)
+	dist = 45.0
+	profile.queue_redraw()
 
 func _update_bites() -> void:
 	var b: PackedFloat32Array = sim.bites(0.6)
@@ -343,24 +514,55 @@ func _unhandled_input(e: InputEvent) -> void:
 				set_lineage(not by_lineage)
 			KEY_B:
 				pick_longest()
+			KEY_K:
+				if not e.echo:
+					keep_selected()
+			KEY_N:
+				if not e.echo:
+					new_run()
+			KEY_G:
+				if not e.echo:
+					next_creature()
 			KEY_ESCAPE:
 				selected = -1
 				organism = {}
+
+## Campaign goals (core goal.rs). Reef: find and keep a creature (the keep completes it).
+## Garden: one lineage makes creatures on enough days of the window.
+func goal_progress() -> Dictionary:
+	var g: Dictionary = sim.goal() if ok else {}
+	if g.is_empty():
+		return {}
+	var near_c: int = g.get("near_cells", 0)
+	var near_j: int = g.get("near_jobs", 0)
+	if garden:
+		var who: String = names.get(int(g.won_lineage), "lineage %d" % g.won_lineage)
+		var lead: String = names.get(int(g.best_lineage), "none yet")
+		return {"p": min(1.0, float(g.best_days) / g.need_days), "done": g.won_lineage >= 0, "args": [g.need_days, int(g.window_days)],
+			"now": "best: %s, creatures on %d of the last %d days" % [lead, g.best_days, int(g.window_days)], "who": who + " in your world"}
+	var body: float = 0.5 * min(1.0, float(near_c) / g.min_cells) + 0.5 * min(1.0, float(near_j) / g.min_jobs)
+	var now := "best crawler %d cells, %d jobs" % [near_c, near_j]
+	if g.qualifying > 0:
+		now = "%d creature(s) on the reef now: G to find one, K to keep it" % g.qualifying
+	return {"p": 0.9 * body, "done": false, "args": [g.min_cells, g.min_jobs], "now": now}
 
 func hud_text() -> String:
 	if not ok:
 		return "[color=#f88]data/reef_seed.json or rates0.json missing: run primordium reef-seed[/color]"
 	if stats.is_empty():
 		return ""
-	var t := "[b]Reef[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\ncrawling: %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
-		env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
+	var t := "[b]%s[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\ncrawling: %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
+		"Your world" if garden else "Reef, run %d" % (campaign.state.run if campaign else 1), env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
 		stats.adrift, stats.spores, stats.tears, stats.bites, stats.bit_error * 100.0]
 	if not by_lineage:
 		t += "[color=#9ab]tint (C for lineage): [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nshimmering with a green rim: a crawling body\nred flash: a bite[/color]\n"
-	t += "lineages alive %d of %d founders; largest: " % [stats.lineages, stats.founders]
+	if garden:
+		t += "lineages alive %d; largest: " % stats.lineages
+	else:
+		t += "lineages alive %d of %d founders; largest: " % [stats.lineages, stats.founders]
 	var parts := []
 	for v in stats.top_lineages:
-		parts.append("#%d %.0f%%" % [int(v.x), v.y * 100.0])
+		parts.append("%s %.0f%%" % [names.get(int(v.x), "#%d" % int(v.x)), v.y * 100.0])
 	t += ", ".join(PackedStringArray(parts)) + "\n"
 	if by_lineage:
 		t += "[color=#9ab]tint: lineage (C for jobs)[/color]\n"
@@ -369,7 +571,9 @@ func hud_text() -> String:
 	t += "[b]Discoveries[/b]\n"
 	for d in stats.discoveries:
 		t += "[color=#cbf]" + d + "[/color]\n"
-	t += "\n[color=#789]Tab: switch scale\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]"
+	if garden and stats.cells == 0:
+		t += "[color=#f9c]Nothing alive here. Keep creatures at the reef (K) to release them.[/color]\n"
+	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ("" if garden else ", N new run")
 	return t
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.
@@ -381,7 +585,9 @@ func _draw_profile() -> void:
 	profile.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.05, 0.08, 0.82))
 	profile.draw_string(font, Vector2(10, 18), "Body #%d  lineage %d  %d cells, %d tall  gen %d  %s" % [
 		organism.id, organism.lineage, organism.cells, organism.height, organism.generation, "adrift" if organism.adrift else "age %.0f d" % organism.age], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.9))
-	profile.draw_string(font, Vector2(10, 34), "depth %.2f   waves %.2f   store %d   %s" % [organism.depth, organism.waves, organism.store, "crawls %.1f cells/day" % organism.speed if organism.speed > 0.0 else "anchored"], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.8))
+	if organism.get("creature", false):
+		profile.draw_string(font, Vector2(sz.x - 84, 54), "CREATURE", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.83, 0.42))
+	profile.draw_string(font, Vector2(10, 34), "jobs %d   " % organism.get("jobs", 0) + "depth %.2f   waves %.2f   store %d   %s" % [organism.depth, organism.waves, organism.store, "crawls %.1f cells/day" % organism.speed if organism.speed > 0.0 else "anchored"], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.8))
 	var layers: PackedFloat32Array = organism.layers
 	var nl := layers.size() / 6
 	var top := 46.0

@@ -73,10 +73,10 @@ func _ready() -> void:
 	add_child(cam)
 	var total_h := n_sites * (TILE_H + GAP)
 	var vs := get_viewport_rect().size
-	var fit: float = min(vs.x / ((TILE_W + 140.0) * CELL), (vs.y - 170.0) / (total_h * CELL)) * 0.95
+	var fit: float = min(vs.x / ((TILE_W + 140.0) * CELL), (vs.y - 255.0) / (total_h * CELL)) * 0.95
 	cam.zoom = Vector2(fit, fit)
-	# keep the strips clear of the evolution chart along the bottom
-	cam.position = Vector2(TILE_W * 0.5 + 20.0, total_h * 0.5) * CELL + Vector2(0, 75.0 / fit)
+	# strips between the goal banner (top ~105 px) and the evolution chart (bottom ~150 px)
+	cam.position = Vector2(TILE_W * 0.5 + 20.0, total_h * 0.5) * CELL + Vector2(0, 22.0 / fit)
 	var layer := CanvasLayer.new()
 	layer.layer = 2
 	add_child(layer)
@@ -274,6 +274,12 @@ func _draw_colonies(list: Array, pos_of: Callable) -> void:
 		for q in pts:
 			art.draw_line(q, centre, Color(0.95, 0.8, 0.5, 0.55), 0.12)
 		art.draw_circle(centre, 0.25, Color(0.95, 0.8, 0.5, 0.8))
+
+## Campaign goal: cells carried by the current to another beach.
+const GOAL_MIGRANTS := 300
+func goal_progress() -> Dictionary:
+	var v: int = stats.get("migrations", 0)
+	return {"value": v, "p": clamp(float(v) / GOAL_MIGRANTS, 0.0, 1.0), "done": v >= GOAL_MIGRANTS, "args": [GOAL_MIGRANTS], "now": "%d cells have crossed so far" % v}
 
 func hud_text() -> String:
 	if not ok:

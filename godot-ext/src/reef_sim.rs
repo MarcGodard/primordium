@@ -5,6 +5,7 @@ use crate::cell_sim::role;
 use godot::prelude::*;
 use primordium_core::cell::Signal;
 use primordium_core::cosmos::CosmosParams;
+use primordium_core::goal::{CreatureGoal, Tracker, jobs};
 use primordium_core::polymer::{N_LETTERS, seq_string};
 use primordium_core::reef::{CELL_RISE, Organism, Reef, ReefParams, ReefSeed, TILE};
 use primordium_core::surrogate::RateTable;
@@ -22,6 +23,10 @@ pub struct ReefSim {
     /// Sampled each day: t, cells, bodies, mean body size of multicellular bodies, tallest, then
     /// mean expressed polymerase, metabolism, membrane, shade, adhesion, then living lineages.
     history: VecDeque<[f32; 11]>,
+    goal: CreatureGoal,
+    tracker: Tracker,
+    /// Next noon the tracker samples (light-switched genes are off at night).
+    next_noon: f64,
     base: Base<Node>,
 }
 
@@ -74,21 +79,109 @@ impl ReefSim {
             self.history.pop_front();
         }
     }
+
+    fn sample_goal(&mut self) {
+        let Some(r) = self.reef.as_ref() else { return };
+        if r.t_days >= self.next_noon {
+            self.next_noon = r.t_days.floor() + 1.5;
+            self.tracker.sample(&self.goal, r);
+        }
+    }
+
+    fn begin(&mut self, rates_path: GString, seed_path: GString, seed: i64, founders: Option<usize>) -> bool {
+        let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
+        let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
+        let Ok(text) = std::fs::read_to_string(seed_path.to_string()) else { return false };
+        let Ok(rs) = serde_json::from_str::<ReefSeed>(&text) else { return false };
+        let d = ReefParams::default();
+        let rp = ReefParams { founders: founders.unwrap_or(d.founders), ..d };
+        let r = Reef::new(rp, CosmosParams { seed: seed as u64, ..Default::default() }, rates, &rs, seed as u64);
+        self.start = r.matter();
+        self.reef = Some(r);
+        self.history.clear();
+        self.tracker = Tracker::default();
+        self.next_noon = 0.5;
+        true
+    }
 }
 
 #[godot_api]
 impl ReefSim {
     #[func]
     fn start(&mut self, rates_path: GString, seed_path: GString, seed: i64) -> bool {
-        let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
-        let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
-        let Ok(text) = std::fs::read_to_string(seed_path.to_string()) else { return false };
-        let Ok(rs) = serde_json::from_str::<ReefSeed>(&text) else { return false };
-        let r = Reef::new(ReefParams::default(), CosmosParams { seed: seed as u64, ..Default::default() }, rates, &rs, seed as u64);
-        self.start = r.matter();
-        self.reef = Some(r);
-        self.history.clear();
-        true
+        self.begin(rates_path, seed_path, seed, None)
+    }
+
+    /// An empty reef (no founders) for the player's own creatures: see `release`.
+    #[func]
+    fn start_garden(&mut self, rates_path: GString, seed_path: GString, seed: i64) -> bool {
+        self.begin(rates_path, seed_path, seed, Some(0))
+    }
+
+    /// Release a kept creature (`genome` and one cell's `mass` as `organism` gave them) as `n`
+    /// spores on the lower shore. Returns its new lineage number, or -1 when refused.
+    #[func]
+    fn release(&mut self, genome: PackedByteArray, mass: PackedInt64Array, n: i64) -> i64 {
+        let Some(r) = self.reef.as_mut() else { return -1 };
+        let mut m = [0i64; N_LETTERS];
+        for (k, v) in mass.as_slice().iter().take(N_LETTERS).enumerate() {
+            m[k] = *v;
+        }
+        // the ocean pays, so the ledger's baseline holds
+        r.release(genome.as_slice(), m, (0.0, 0.5), n.max(1) as usize).map_or(-1, |(c, _)| c as i64)
+    }
+
+    /// The creature goal and how close the reef is: lineages qualifying now, the lineage with
+    /// the most qualifying days in the window and that count, and the lineage and day that first
+    /// bred true (-1 before). `near_*`: the best crawler by size then jobs, for progress.
+    #[func]
+    fn goal(&self) -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let g = &self.goal;
+        d.set("min_cells", g.min_cells as i64);
+        d.set("min_jobs", g.min_jobs as i64);
+        d.set("window_days", g.window_days);
+        d.set("need_days", g.need_days as i64);
+        let Some(r) = self.reef.as_ref() else { return d };
+        d.set("qualifying", r.organisms.iter().filter(|o| g.body_ok(o)).count() as i64);
+        let (bl, bd) = self.tracker.best().map_or((-1, 0), |(c, n)| (c as i64, n as i64));
+        d.set("best_lineage", bl);
+        d.set("best_days", bd);
+        let (wc, wd) = self.tracker.won.map_or((-1, -1.0), |(c, t)| (c as i64, t));
+        d.set("won_lineage", wc);
+        d.set("won_day", wd);
+        let score = |o: &&Organism| (o.cells.len().min(g.min_cells) * 10 + jobs(o, g.split).min(g.min_jobs) * 1000, o.cells.len());
+        if let Some(o) = r.organisms.iter().filter(|o| o.settled() && (!g.mobile || o.speed > 0.0)).max_by_key(score) {
+            d.set("near_cells", o.cells.len() as i64);
+            d.set("near_jobs", jobs(o, g.split) as i64);
+        }
+        d
+    }
+
+    /// Bodies meeting the creature goal right now, as ids (markers and "next creature").
+    #[func]
+    fn creatures(&self) -> PackedInt64Array {
+        let Some(r) = self.reef.as_ref() else { return PackedInt64Array::new() };
+        r.organisms.iter().filter(|o| self.goal.body_ok(o)).map(|o| o.id as i64).collect()
+    }
+
+    /// One representative per living lineage, biggest lineage first: the garden saves these and
+    /// releases them again on load. Each: lineage, cells, genome, mass of one cell.
+    #[func]
+    fn lineages(&self, max: i64) -> VarArray {
+        let mut arr = VarArray::new();
+        let Some(r) = self.reef.as_ref() else { return arr };
+        for (clade, n) in r.clades().into_iter().take(max.max(0) as usize) {
+            // a lineage alive only as drifting spores still counts
+            let Some(o) = r.organisms.iter().filter(|o| o.clade == clade && !o.cells.is_empty()).max_by_key(|o| (o.settled(), o.cells.len())) else { continue };
+            let mut d = VarDictionary::new();
+            d.set("lineage", clade as i64);
+            d.set("cells", n as i64);
+            d.set("genome", &PackedByteArray::from(o.genome.as_slice()));
+            d.set("mass", &PackedInt64Array::from(o.cells[0].mass.as_slice()));
+            arr.push(&d.to_variant());
+        }
+        arr
     }
 
     #[func]
@@ -97,6 +190,7 @@ impl ReefSim {
             let Some(r) = self.reef.as_mut() else { return };
             r.step(dt);
             self.sample();
+            self.sample_goal();
         }
     }
 
@@ -228,6 +322,10 @@ impl ReefSim {
         d.set("speed", o.speed);
         d.set("genome_len", o.genome.len() as i64);
         d.set("genome_text", seq_string(&o.genome));
+        d.set("genome", &PackedByteArray::from(o.genome.as_slice()));
+        d.set("mass", &PackedInt64Array::from(o.cells.first().map_or(&[0; N_LETTERS], |c| &c.mass).as_slice()));
+        d.set("jobs", jobs(o, self.goal.split) as i64);
+        d.set("creature", self.goal.body_ok(o));
         d.set("store", o.store.iter().sum::<i64>());
         let tile = if o.settled() { r.tile_index(o.cells[0].pos[0] / TILE, o.cells[0].pos[1] / TILE).unwrap_or(0) } else { o.drift_tile };
         d.set("elevation", r.tiles[tile].elevation);
