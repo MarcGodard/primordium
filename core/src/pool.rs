@@ -239,7 +239,8 @@ impl Pool {
         r
     }
 
-    fn spawn(&mut self, seq: Seq, parent: Option<u64>, generation: u32) {
+    /// `paired`: born annealed to a partner strand (a fresh copy, or a piece of a duplex).
+    fn spawn(&mut self, seq: Seq, parent: Option<u64>, generation: u32, paired: bool) {
         let kt = self.env.kt;
         let (func, conf, folded) = self.model.get(&seq, kt, &self.ph, self.p.fold_below);
         if folded {
@@ -262,7 +263,7 @@ impl Pool {
         }
         let id = self.next_id;
         self.next_id += 1;
-        self.chains.push(Chain { id, seq, parent, born: self.t_days, paired: false, func, conf, generation });
+        self.chains.push(Chain { id, seq, parent, born: self.t_days, paired, func, conf, generation });
     }
 
     /// Advance `dt` days. Order: hydrolysis, melting, copying, ligation.
@@ -296,7 +297,7 @@ impl Pool {
                 if piece.len() == 1 {
                     self.free[piece[0] as usize] += 1;
                 } else {
-                    self.spawn(piece, Some(c.id), c.generation);
+                    self.spawn(piece, Some(c.id), c.generation, c.paired);
                 }
             }
         }
@@ -338,7 +339,8 @@ impl Pool {
                         break;
                     }
                     let mut r = self.rng.f64() * sum;
-                    let mut pick = 0;
+                    // fallback: last available letter, in case rounding walks r past the end
+                    let mut pick = (0..N_LETTERS).rev().find(|&l| w[l] > 0.0).unwrap();
                     for (l, &wl) in w.iter().enumerate() {
                         if r < wl {
                             pick = l;
@@ -364,7 +366,8 @@ impl Pool {
                     self.stats.copies += 1;
                     self.stats.mutations += mutations;
                     let (pid, gen_) = (self.chains[ci].id, self.chains[ci].generation);
-                    self.spawn(copy, Some(pid), gen_ + 1);
+                    // the copy is the other strand of the same duplex: both must melt first
+                    self.spawn(copy, Some(pid), gen_ + 1, true);
                 } else {
                     for l in copy {
                         self.free[l as usize] += 1;
@@ -381,9 +384,15 @@ impl Pool {
             let expected = k_form * conc * ends * sweeps;
             let k = self.rng.poisson(expected);
             for _ in 0..k {
+                let free_now: i64 = self.free.iter().sum();
                 let Some(l) = self.draw_free() else { break };
-                let target = self.rng.below(self.chains.len() + total_free.max(1) as usize);
-                if target < self.chains.len() && self.chains[target].seq.len() < self.p.max_len {
+                let target = self.rng.below(self.chains.len() + free_now.max(1) as usize);
+                if target < self.chains.len() && self.chains[target].seq.len() >= self.p.max_len {
+                    // full-length chain cannot take another letter: no event
+                    self.free[l as usize] += 1;
+                    continue;
+                }
+                if target < self.chains.len() {
                     let c = self.chains.swap_remove(target);
                     let mut seq = c.seq.clone();
                     if self.rng.chance(0.5) {
@@ -391,9 +400,9 @@ impl Pool {
                     } else {
                         seq.insert(0, l);
                     }
-                    self.spawn(seq, Some(c.id), c.generation);
+                    self.spawn(seq, Some(c.id), c.generation, c.paired);
                 } else if let Some(m) = self.draw_free() {
-                    self.spawn(vec![l, m], None, 0);
+                    self.spawn(vec![l, m], None, 0, false);
                 } else {
                     self.free[l as usize] += 1;
                     break;
@@ -422,7 +431,7 @@ impl Pool {
                 let b = self.chains.swap_remove(lo);
                 let mut seq = a.seq.clone();
                 seq.extend_from_slice(&b.seq);
-                self.spawn(seq, Some(a.id), a.generation.max(b.generation));
+                self.spawn(seq, Some(a.id), a.generation.max(b.generation), a.paired || b.paired);
                 self.stats.ligations += 1;
             }
         }
@@ -501,6 +510,20 @@ mod tests {
             }
         }
         assert!(p.stats.ligations > 0 && p.stats.copies > 0, "{:?}", p.stats);
+    }
+
+    #[test]
+    fn copying_waits_for_melting() {
+        // pin the pool dry: without a wet phase nothing melts, so each template copies once
+        let mut p = Pool::new(PoolParams { elevation: 2.0, ..Default::default() }, Cosmos::new(CosmosParams::default()), toy_rates(), 4);
+        for _ in 0..300 {
+            p.step(0.02);
+        }
+        assert_eq!(p.stats.melts, 0);
+        assert!(p.stats.copies > 0);
+        // copies are born paired, so a copy never templates before a melt: no generation 2
+        let max_gen = p.chains.iter().map(|c| c.generation).max().unwrap_or(0);
+        assert!(max_gen <= 1, "copy of a copy without melting: generation {max_gen}");
     }
 
     #[test]
