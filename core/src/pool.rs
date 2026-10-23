@@ -191,6 +191,9 @@ pub struct PoolStats {
     pub melts: u64,
     pub synthesized: u64,
     pub decayed: u64,
+    /// Chain-chain ligations (subset of `ligations`): their own mass action, n^2.
+    #[serde(default)]
+    pub joins: u64,
 }
 
 impl PoolStats {
@@ -203,6 +206,7 @@ impl PoolStats {
         self.melts += o.melts;
         self.synthesized += o.synthesized;
         self.decayed += o.decayed;
+        self.joins += o.joins;
     }
 }
 
@@ -602,6 +606,7 @@ impl Contents {
                 seq.extend_from_slice(&b.seq);
                 self.spawn(ctx, site, seq, Some(a.id), a.generation.max(b.generation), a.paired || b.paired);
                 self.stats.ligations += 1;
+                self.stats.joins += 1;
             }
         }
 

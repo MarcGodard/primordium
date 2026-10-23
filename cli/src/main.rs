@@ -22,6 +22,9 @@ fn main() {
         "pond-probe" => pond_probe(&args),
         "selection" => selection(&args),
         "pond-shadow" => pond_shadow(&args),
+        "cells" => cells(&args),
+        "cell-selection" => cell_selection(&args),
+        "cell-shadow" => cell_shadow(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -407,4 +410,154 @@ fn pond_shadow(args: &[String]) {
         }
     }
     println!("mean agreement {:.1}% vs twin ceiling {:.1}% = {:.1}% of ceiling | time detail {:.1}s surrogate {:.1}s", 100.0 * acc / n, 100.0 * ceil / n, 100.0 * acc / ceil, ta, tb);
+}
+
+/// Scale-3 world of cells on the beach.
+fn cells(args: &[String]) {
+    use primordium_core::cell::{CellParams, World};
+    use primordium_core::cosmos::Cosmos;
+    use primordium_core::hybrid::Mode;
+    use primordium_core::pool::PoolParams;
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 60.0);
+    let seed: u64 = arg(args, "seed", 1);
+    let dt: f64 = arg(args, "dt", 0.02);
+    let every: f64 = arg(args, "every", 5.0);
+    let auto: bool = arg(args, "auto", true);
+    let founders: usize = arg(args, "founders", 200);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let mut w = World::new(PoolParams::default(), CellParams { auto, ..Default::default() }, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed, founders);
+    let start = Instant::now();
+    let per = (every / dt).round() as u64;
+    for s in 1..=(days / dt) as u64 {
+        w.step(dt);
+        if s % per == 0 {
+            let n = w.cells.len().max(1) as f64;
+            let ph = w.phenotype_means();
+            let sur = w.cells.iter().filter(|c| c.mode == Mode::Surrogate).count();
+            let area = w.cells.iter().map(|c| c.area()).sum::<i64>() as f64 / n;
+            let prods = w.cells.iter().map(|c| c.products.iter().sum::<i64>()).sum::<i64>() as f64 / n;
+            let free = w.cells.iter().map(|c| c.free.iter().sum::<i64>()).sum::<i64>() as f64 / n;
+            let raw = w.cells.iter().map(|c| c.raw_ka).sum::<i64>() as f64 / n;
+            let forks = w.cells.iter().filter(|c| c.fork.is_some()).count();
+            let maxgen = w.cells.iter().map(|c| c.generation).max().unwrap_or(0);
+            let st = &w.stats;
+            println!(
+                "t={:6.1} T={:5.1}K | cells {} (sur {}) gen {} div {} death {} | area {:.0} prods {:.1} free {:.0} rawka {:.0} forks {} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:.0} genes {:.1} | err {:.3} radmut {} | {:.1}s",
+                w.t_days, w.env.temperature_k, w.cells.len(), sur, maxgen, st.divisions, st.deaths, area, prods, free, raw, forks, ph[0], ph[1], ph[2], ph[3], ph[4], ph[5],
+                st.copy_mutations as f64 / st.copied_letters.max(1) as f64, st.radiation_mutations, start.elapsed().as_secs_f64()
+            );
+        }
+    }
+    for d in w.ctx.discoveries.entries.iter().rev().take(5) {
+        println!("discovery day {:.1} scale {}: {}", d.t_days, d.scale, d.note);
+    }    let st = &w.stats;
+    println!("transcripts ok {} junk {} short {} | products decayed {} inserted {}", st.tx_ok, st.tx_junk, st.tx_short, st.products_decayed, st.products_inserted);
+}
+
+/// Selection gradient at scale 3: does genome phenotype predict lineage growth (descendant count)?
+fn cell_selection(args: &[String]) {
+    use primordium_core::cell::{CellParams, World};
+    use primordium_core::cosmos::Cosmos;
+    use primordium_core::pool::PoolParams;
+    use primordium_core::surrogate::RateTable;
+    use std::collections::HashMap;
+    let warm: f64 = arg(args, "warm", 60.0);
+    let window: f64 = arg(args, "window", 10.0);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let mut w = World::new(PoolParams::default(), CellParams { auto: false, ..Default::default() }, Cosmos::new(CosmosParams::default()), rates, 1, 200);
+    while w.t_days < warm {
+        w.step(0.02);
+    }
+    let snap: Vec<(u64, [f64; 5])> = w.cells.iter().map(|c| c.genome.clone()).zip(w.cells.iter().map(|c| c.id)).collect::<Vec<_>>().into_iter()
+        .map(|(g, id)| { let i = w.info(&g); (id, [i.poly_cut, i.synth_cut, i.amph, i.pigment, i.genes.len() as f64]) }).collect();
+    let mut root: HashMap<u64, u64> = snap.iter().map(|(id, _)| (*id, *id)).collect();
+    let end = w.t_days + window;
+    while w.t_days < end {
+        w.step(0.02);
+        for c in &w.cells {
+            if !root.contains_key(&c.id) {
+                if let Some(r) = c.parent.and_then(|p| root.get(&p).copied()) {
+                    root.insert(c.id, r);
+                }
+            }
+        }
+    }
+    let mut kids: HashMap<u64, f64> = HashMap::new();
+    for c in &w.cells {
+        if let Some(&r) = root.get(&c.id) {
+            *kids.entry(r).or_default() += 1.0;
+        }
+    }
+    let rows: Vec<([f64; 5], f64)> = snap.iter().map(|(id, t)| (*t, kids.get(id).copied().unwrap_or(0.0))).collect();
+    let n = rows.len() as f64;
+    let names = ["polymerase", "synthesis", "amphiphile", "pigment", "gene count"];
+    println!("{} cells at day {warm}, lineages tracked {window} days", rows.len());
+    for k in 0..5 {
+        let mx = rows.iter().map(|r| r.0[k]).sum::<f64>() / n;
+        let my = rows.iter().map(|r| r.1).sum::<f64>() / n;
+        let cov: f64 = rows.iter().map(|r| (r.0[k] - mx) * (r.1 - my)).sum();
+        let vx: f64 = rows.iter().map(|r| (r.0[k] - mx).powi(2)).sum();
+        let vy: f64 = rows.iter().map(|r| (r.1 - my).powi(2)).sum();
+        println!("r({:<11}, descendants) = {:+.3}", names[k], cov / (vx * vy).sqrt().max(1e-12));
+    }
+}
+
+/// Scale-3 shadow: detail vs auto-surrogate vs reseeded detail twin, on population statistics.
+fn cell_shadow(args: &[String]) {
+    use primordium_core::cell::{CellParams, World};
+    use primordium_core::cosmos::Cosmos;
+    use primordium_core::hybrid::Mode;
+    use primordium_core::pool::PoolParams;
+    use primordium_core::surrogate::{RateTable, agreement};
+    let warm: f64 = arg(args, "warm", 40.0);
+    let days: f64 = arg(args, "days", 30.0);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let mut a = World::new(PoolParams::default(), CellParams { auto: false, ..Default::default() }, Cosmos::new(CosmosParams::default()), rates, 1, 200);
+    while a.t_days < warm {
+        a.step(0.02);
+    }
+    let mut b = a.clone();
+    b.cp.auto = true;
+    let mut twin = a.clone();
+    twin.reseed(0xD1CE);
+    let d0 = a.stats.divisions;
+    let summary = |w: &mut World| -> Vec<f64> {
+        let n = w.cells.len().max(1) as f64;
+        let ph = w.phenotype_means();
+        vec![
+            w.cells.len() as f64,
+            (w.stats.divisions - d0) as f64,
+            w.cells.iter().map(|c| c.area()).sum::<i64>() as f64 / n,
+            ph[0] * 100.0,
+            ph[2] * 100.0,
+            ph[5] * 10.0,
+            ph[4],
+        ]
+    };
+    let (mut acc, mut ceil, mut k) = (0.0, 0.0, 0.0);
+    let (mut ta, mut tb) = (0.0, 0.0);
+    let end = a.t_days + days;
+    let mut next = a.t_days + 3.0;
+    while a.t_days < end {
+        let t = Instant::now();
+        a.step(0.02);
+        ta += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        b.step(0.02);
+        tb += t.elapsed().as_secs_f64();
+        twin.step(0.02);
+        if a.t_days >= next {
+            next += 3.0;
+            let (sa, sb, st) = (summary(&mut a), summary(&mut b), summary(&mut twin));
+            let (x, y) = (agreement(&sa, &sb), agreement(&sa, &st));
+            acc += x;
+            ceil += y;
+            k += 1.0;
+            let sur = b.cells.iter().filter(|c| c.mode == Mode::Surrogate).count();
+            println!("t={:6.1} surrogate {:.1}% twin {:.1}% | surrogate cells {sur}/{} | detail {:?} surrogate {:?}", a.t_days, x * 100.0, y * 100.0, b.cells.len(),
+                sa.iter().map(|v| v.round()).collect::<Vec<_>>(), sb.iter().map(|v| v.round()).collect::<Vec<_>>());
+        }
+    }
+    println!("mean agreement {:.1}% vs twin ceiling {:.1}% = {:.1}% of ceiling | time detail {:.1}s surrogate {:.1}s", 100.0 * acc / k, 100.0 * ceil / k, 100.0 * acc / ceil, ta, tb);
 }

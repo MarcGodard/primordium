@@ -146,6 +146,8 @@ pub struct PondStats {
     pub max_generation: u32,
     pub lifts: u64,
     pub restricts: u64,
+    /// Events run by surrogate interiors (synthesis, decay, ligation, join, break, copy).
+    pub surrogate_events: u64,
 }
 
 /// Vesicle surrogate channels.
@@ -155,7 +157,9 @@ pub const V_SYNTH: usize = 2;
 pub const V_BREAK: usize = 3;
 pub const V_LIG: usize = 4;
 pub const V_DECAY: usize = 5;
-pub const V_CHANNELS: usize = 6;
+/// Chain-chain joins: exposure ~ n(n-1)/cells, unlike monomer ligation.
+pub const V_JOIN: usize = 6;
+pub const V_CHANNELS: usize = 7;
 
 pub fn vesicle_table() -> RateTable {
     RateTable::new(
@@ -275,7 +279,12 @@ impl Pond {
                         record(&mut self.model, &x, &before, &v.interior.stats, &expo, dt);
                     }
                 }
-                Mode::Surrogate => surrogate_step(&mut v.interior, &self.model, &x, &mut self.ctx, dt, &mut rng),
+                Mode::Surrogate => {
+                    let before = v.interior.stats.clone();
+                    surrogate_step(&mut v.interior, &self.model, &x, &mut self.ctx, dt, &mut rng);
+                    let a = &v.interior.stats;
+                    self.stats.surrogate_events += (a.synthesized - before.synthesized) + (a.decayed - before.decayed) + (a.ligations - before.ligations) + (a.breaks - before.breaks) + (a.copies - before.copies);
+                }
             }
             self.membrane_and_permeation(v, &vsite, dt, &mut rng);
         }
@@ -642,7 +651,9 @@ fn surrogate_exposures(c: &Contents) -> [f64; V_CHANNELS] {
     let free: i64 = c.free.iter().sum();
     let synth = c.raw_ka as f64 * c.raw.iter().sum::<i64>() as f64 / cells;
     let lig = free as f64 * (2.0 * c.chains.len() as f64 + free as f64) / cells;
-    [c.chains.len() as f64, 0.0, synth, residues as f64, lig, free as f64]
+    let n = c.chains.len() as f64;
+    let join = 2.0 * n * (n - 1.0).max(0.0) / cells;
+    [c.chains.len() as f64, 0.0, synth, residues as f64, lig, free as f64, join]
 }
 
 fn record(t: &mut RateTable, x: &[f64], before: &PoolStats, after: &PoolStats, expo: &[f64; V_CHANNELS], dt: f64) {
@@ -653,7 +664,9 @@ fn record(t: &mut RateTable, x: &[f64], before: &PoolStats, after: &PoolStats, e
     t.record(x, V_SYNTH, (after.synthesized - before.synthesized) as f64, expo[V_SYNTH] * dt);
     t.record(x, V_DECAY, (after.decayed - before.decayed) as f64, expo[V_DECAY] * dt);
     t.record(x, V_BREAK, (after.breaks - before.breaks) as f64, expo[V_BREAK] * dt);
-    t.record(x, V_LIG, (after.ligations - before.ligations) as f64, expo[V_LIG] * dt);
+    let joins = (after.joins - before.joins) as f64;
+    t.record(x, V_LIG, (after.ligations - before.ligations) as f64 - joins, expo[V_LIG] * dt);
+    t.record(x, V_JOIN, joins, expo[V_JOIN] * dt);
 }
 
 /// Learned interior: copies with learned fidelity, net synthesis, breakage. Matter closed.
@@ -670,6 +683,7 @@ fn surrogate_step(c: &mut Contents, t: &RateTable, x: &[f64], ctx: &mut Ctx, dt:
         c.raw[l] -= 1;
         c.raw_ka -= 1;
         c.free[l] += 1;
+        c.stats.synthesized += 1;
     }
     // decay: monomers fall apart into raw atoms
     let lose = round_flux(rate(V_DECAY) * expo[V_DECAY] * dt, rng).max(0);
@@ -681,6 +695,7 @@ fn surrogate_step(c: &mut Contents, t: &RateTable, x: &[f64], ctx: &mut Ctx, dt:
         c.free[l] -= 1;
         c.raw[l] += 1;
         c.raw_ka += 1;
+        c.stats.decayed += 1;
     }
     // ligation: a monomer joins a chain end, or two monomers make a dimer
     let joins = round_flux(rate(V_LIG) * expo[V_LIG] * dt, rng).max(0);
@@ -692,13 +707,19 @@ fn surrogate_step(c: &mut Contents, t: &RateTable, x: &[f64], ctx: &mut Ctx, dt:
         let l = pick_weighted(&c.free, rng);
         c.free[l] -= 1;
         let target = rng.below(c.chains.len() + free as usize);
-        if target < c.chains.len() && c.chains[target].seq.len() < ctx.p.max_len {
+        if target < c.chains.len() && c.chains[target].seq.len() >= ctx.p.max_len {
+            // full-length chain cannot take a letter: no event, as in detail
+            c.free[l] += 1;
+            continue;
+        }
+        if target < c.chains.len() {
             let old = c.chains.swap_remove(target);
             let mut seq = old.seq.clone();
             seq.push(l as u8);
             let (func, conf, pending) = ctx.function_for(&seq, x[0]);
             let id = ctx.next_id();
             c.chains.push(Chain { id, seq, parent: Some(old.id), born: old.born, paired: false, func, conf, generation: old.generation, pending });
+            c.stats.ligations += 1;
         } else if c.free.iter().sum::<i64>() > 0 {
             let m = pick_weighted(&c.free, rng);
             c.free[m] -= 1;
@@ -706,9 +727,31 @@ fn surrogate_step(c: &mut Contents, t: &RateTable, x: &[f64], ctx: &mut Ctx, dt:
             let (func, conf, pending) = ctx.function_for(&seq, x[0]);
             let id = ctx.next_id();
             c.chains.push(Chain { id, seq, parent: None, born: 0.0, paired: false, func, conf, generation: 0, pending });
+            c.stats.ligations += 1;
         } else {
             c.free[l] += 1;
         }
+    }
+    // chain-chain joins
+    for _ in 0..round_flux(rate(V_JOIN) * expo[V_JOIN] * dt, rng).max(0) {
+        let len = c.chains.len();
+        if len < 2 {
+            break;
+        }
+        let (i, j) = (rng.below(len), rng.below(len));
+        if i == j || c.chains[i].seq.len() + c.chains[j].seq.len() > ctx.p.max_len {
+            continue;
+        }
+        let (hi, lo) = (i.max(j), i.min(j));
+        let a = c.chains.swap_remove(hi);
+        let b = c.chains.swap_remove(lo);
+        let mut seq = a.seq.clone();
+        seq.extend_from_slice(&b.seq);
+        let (func, conf, pending) = ctx.function_for(&seq, x[0]);
+        let id = ctx.next_id();
+        c.chains.push(Chain { id, seq, parent: Some(a.id), born: a.born, paired: false, func, conf, generation: a.generation.max(b.generation), pending });
+        c.stats.ligations += 1;
+        c.stats.joins += 1;
     }
     // breakage: random backbone bonds; pieces of one letter become monomers
     let residues: i64 = c.chains.iter().map(|ch| ch.seq.len() as i64).sum();
@@ -723,13 +766,15 @@ fn surrogate_step(c: &mut Contents, t: &RateTable, x: &[f64], ctx: &mut Ctx, dt:
         }
         let ch = c.chains.swap_remove(k);
         let cut = 1 + rng.below(ch.seq.len() - 1);
+        c.stats.breaks += 1;
         for piece in [ch.seq[..cut].to_vec(), ch.seq[cut..].to_vec()] {
             if piece.len() == 1 {
                 c.free[piece[0] as usize] += 1;
             } else {
-                let func = ch.func.clone();
+                // a fragment has its own fold: never the parent's function
+                let (func, conf, pending) = ctx.function_for(&piece, x[0]);
                 let id = ctx.next_id();
-                c.chains.push(Chain { id, seq: piece, parent: Some(ch.id), born: ch.born, paired: false, func, conf: 0.0, generation: ch.generation, pending: None });
+                c.chains.push(Chain { id, seq: piece, parent: Some(ch.id), born: ch.born, paired: false, func, conf, generation: ch.generation, pending });
             }
         }
     }
@@ -794,12 +839,10 @@ mod tests {
     fn surrogate_mode_keeps_matter() {
         let mut pond = Pond::new(PoolParams::default(), PondParams { auto: true, ..Default::default() }, Cosmos::new(CosmosParams::default()), rates(), 3);
         let start = pond.matter();
-        let mut surrogate_steps = 0;
         for _ in 0..900 {
             pond.step(0.01);
-            surrogate_steps += pond.vesicles.iter().filter(|v| v.mode == Mode::Surrogate).count();
         }
         assert_eq!(pond.matter(), start);
-        assert!(surrogate_steps > 0, "surrogate never engaged: test would pass vacuously");
+        assert!(pond.stats.surrogate_events > 0, "surrogate never ran an event: test would pass vacuously");
     }
 }

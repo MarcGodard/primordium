@@ -1,3 +1,4 @@
+pub mod cell;
 pub mod chem;
 pub mod cosmos;
 pub mod element;

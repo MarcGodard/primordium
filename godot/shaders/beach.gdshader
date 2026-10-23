@@ -5,6 +5,8 @@ uniform float tide_level = 0.5;
 uniform float light = 1.0;
 uniform float uv_glow = 0.0;
 uniform vec2 grid = vec2(192.0, 128.0);
+// elevation range spanned left to right (the cell view shows only the tidal zone)
+uniform vec2 elev_range = vec2(0.0, 1.0);
 
 // Hoskins hash: sin-based hashes lose precision at large cell coords and tile visibly
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -16,7 +18,7 @@ float noise(vec2 p) {
 
 void fragment() {
 	vec2 cell = UV * grid;
-	float elev = UV.x;
+	float elev = mix(elev_range.x, elev_range.y, UV.x);
 	float depth = tide_level - elev;
 	vec3 sand = mix(vec3(0.42, 0.36, 0.26), vec3(0.62, 0.55, 0.40), noise(cell * 0.35));
 	sand *= 0.92 + 0.08 * noise(cell * 2.0);

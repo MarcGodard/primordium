@@ -9,7 +9,7 @@ var shot := ""
 var frames := 20
 
 func _ready() -> void:
-	for path in ["res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd"]:
+	for path in ["res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd", "res://scripts/cell_view.gd"]:
 		var v: Node = load(path).new()
 		add_child(v)
 		views.append(v)

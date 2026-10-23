@@ -15,9 +15,18 @@ The chemistry is invented, not ours: elements come from a shell rule with capaci
 |---|---|---|
 | -1 Subatomic | Shell rule generates the periodic table | done (rule + viewer zoom) |
 | 0 Chemistry | Lattice Monte-Carlo: bonds, exchange, weak pairing, photons, hydration | done |
-| 1 Polymers | Sequence-defined chains, folding, catalysis, templating | planned |
-| 2 Metabolism | Reaction networks inside amphiphile compartments | planned |
-| 3 Cell | Genome polymer, translation, membrane, division | planned |
+| 1 Polymers | Sequence-defined chains, lattice folding, pocket catalysis, templated copying | done |
+| 2 Protocells | Amphiphile vesicles with interior metabolism, growth, division | done |
+| 3 Cells | Binary genome, genetic code, expression, gated division, radiation mutation | done |
+
+Each scale's surrogate is measured against a "twin": the same detailed model with different dice. Agreement as a share of that ceiling: scale 0 98.9%, scale 2 95.4%, scale 3 93.2%. Scale 1's function surrogate predicts one-mutation neighbours at ~88-96% of its ceiling.
+
+## Findings so far
+
+- A single fold of a long chain is mostly chance; function is only a property of a sequence as a fold-ensemble average, which makes reliable folding itself selectable.
+- Eigen's error threshold appears unprompted: catalysts cannot be inherited until a polymerase pocket raises copy fidelity.
+- Compartments alone do not select catalysts; division gated on genome copying does.
+- The pairing chemistry forces a binary heritable alphabet, so cells need a genetic code to reach the 5-letter working alphabet.
 
 ## Environment: change drives evolution
 
@@ -32,4 +41,6 @@ cargo build --release -p primordium-godot
 godot --path godot          # Godot 4.7
 ```
 
-Viewer: mouse wheel zooms (zoom far in to see nuclei, shells and electrons), right-drag pans, left-click inspects an atom, space pauses, 1-5 sets speed, R reseeds.
+Viewer: Tab cycles scales (chemistry, polymers, protocells, cells). Mouse wheel zooms, right-drag pans, left-click inspects and drills down (cell -> gene -> fold -> residue atoms), space pauses, 1-5 sets speed, A toggles automatic resolution.
+
+Headless experiments: `train`, `shadow`, `pool`, `fold-shadow`, `pond`, `pond-shadow`, `selection`, `cells`, `cell-shadow`, `cell-selection` (see `cli/src/main.rs`).
