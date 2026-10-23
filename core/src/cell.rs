@@ -285,23 +285,35 @@ pub struct CellStats {
     pub products_inserted: u64,
 }
 
-/// Cell surrogate channels: membrane residues gained per day, genome letters copied per day,
-/// copy errors per letter, product residues made per day.
-pub const C_GROW: usize = 0;
-pub const C_REP: usize = 1;
-pub const C_ERR: usize = 2;
-pub const C_CHANNELS: usize = 3;
+/// Detail copying tallies for learning selectivity, per (template, partner): wrong picks, and
+/// the summed supply ratio free[partner] / free[right] over right picks. Their ratio estimates
+/// 1 / selectivity exactly in expectation.
+#[derive(Clone, Debug, Default)]
+pub struct PairTally {
+    pub picks: [[f64; N_LETTERS]; N_LETTERS],
+    pub odds: [[f64; N_LETTERS]; N_LETTERS],
+}
+
+/// Cell surrogate channels: inverse selectivity of templated copying per (template letter,
+/// wrong partner): odds of that partner over the right one, relative to their supply ratio.
+/// Supply is applied at copy time, so the table holds only what pairing chemistry decides.
+pub const C_CHANNELS: usize = N_LETTERS * N_LETTERS;
+
+fn c_sel(template: usize, partner: usize) -> usize {
+    template * N_LETTERS + partner
+}
+
+/// How a strand is copied: Boltzmann pairing (detail) or a learned selectivity (surrogate).
+#[derive(Clone, Copy)]
+enum Copier {
+    Pairing { gain: f64, kt: f64 },
+    Learned { inv_sel: [[f64; N_LETTERS]; N_LETTERS] },
+}
 
 pub fn cell_table() -> RateTable {
     RateTable::new(
-        vec![
-            Axis::new("kT", 0.85, 1.15, 4),
-            Axis::new("wet", 0.0, 1.0, 2),
-            Axis::new("poly_cut", 0.0, 1.0, 4),
-            Axis::new("synth_cut", 0.0, 1.0, 4),
-            Axis::new("amph", 0.0, 1.0, 4),
-            Axis::new("raw_conc", 0.0, 0.1, 4),
-        ],
+        // selectivity is pairing chemistry: temperature and the polymerase actually present
+        vec![Axis::new("kT", 0.85, 1.15, 12), Axis::new("poly", 0.0, 1.0, 10)],
         C_CHANNELS,
     )
 }
@@ -327,6 +339,8 @@ pub struct World {
     pub best_poly: f64,
     /// Re-deriving phenotypes after folds land: not new genomes.
     refreshing: bool,
+    /// Pooled selectivity per channel, refreshed each step: the prior for thin bins.
+    sel_prior: Vec<f64>,
 }
 
 fn round_flux(expected: f64, rng: &mut Rng) -> i64 {
@@ -377,6 +391,12 @@ fn remap_products(old: &GenomeInfo, counts: &[i64], new: &GenomeInfo, free: &mut
         }
     }
     out
+}
+
+/// Polymerase catalysis actually present: best expressed product, full strength from 3 copies.
+fn present_poly(c: &Cell, info: &GenomeInfo) -> f64 {
+    let ka = bidx(KA).unwrap();
+    info.genes.iter().zip(&c.products).map(|(g, &n)| g.func.catalysis[pair(ka, ka)] * (n as f64 / 3.0).min(1.0)).fold(0.0, f64::max)
 }
 
 /// Swap mismatched letters of `got` for `want` via the monomer pool. All or nothing.
@@ -433,6 +453,7 @@ impl World {
             learn: true,
             best_poly: 0.0,
             refreshing: false,
+            sel_prior: vec![0.0; C_CHANNELS],
         };
         w.seed_founders(founders);
         w
@@ -565,13 +586,13 @@ impl World {
         Site::at(self.env, self.patches[k].elevation, shade)
     }
 
-    fn features(&self, info: &GenomeInfo, site: &Site, patch: &Patch) -> [f64; 6] {
-        let raw_conc = patch.raw_ka as f64 / self.cp.patch_cells;
-        [site.env.kt, if site.wet { 1.0 } else { 0.0 }, info.poly_cut, info.synth_cut, info.amph, raw_conc]
+    fn features(c: &Cell, info: &GenomeInfo, kt: f64) -> [f64; 2] {
+        [kt, present_poly(c, info)]
     }
 
     pub fn step(&mut self, dt: f64) {
         self.env = self.cosmos.sample(self.t_days);
+        self.sel_prior = (0..C_CHANNELS).map(|ch| self.model.global_rate(ch)).collect();
         let mut rng = std::mem::replace(&mut self.ctx.rng, Rng::new(0));
         self.tides(dt, &mut rng);
 
@@ -583,29 +604,24 @@ impl World {
             debug_assert_eq!(c.products.len(), info.genes.len());
             let shade = self.cp.max_shade * info.pigment * self.expressed_fraction(c, &info, |g| g.func.pigment > 0.0);
             let site = self.patch_site(c.patch, shade);
-            let x = self.features(&info, &site, &self.patches[c.patch]);
+            let x = Self::features(c, &info, site.env.kt);
             c.conf = self.model.confidence(&x);
             self.resolve_mode(c, &x, &site);
             // shared membrane physics (permeation, turnover, abiotic assembly) runs in both modes;
             // the surrogate learns only what the detailed interior adds on top of it
             self.exchange(c, &site, dt, &mut rng);
-            let area0 = c.area();
-            let copied0 = c.fork.as_ref().map_or(0, |f| f.len());
-            let (err0, let0) = (self.stats.copy_mutations, self.stats.copied_letters);
-            match c.mode {
-                Mode::Detail => self.detail_step(c, &info, &site, dt, &mut rng),
-                Mode::Surrogate => self.surrogate_step(c, &info, &x, dt, &mut rng),
-            }
+            let mut tally = PairTally::default();
+            self.interior_step(c, &info, &site, &x, dt, &mut tally, &mut rng);
             self.radiation(c, &site, dt, &mut rng);
             if c.mode == Mode::Detail && self.learn {
-                let copied = c.fork.as_ref().map_or(c.genome.len(), |f| f.len()).saturating_sub(copied0) as f64;
                 self.model.record_sample(&x);
-                self.model.record(&x, C_GROW, (c.area() - area0).max(0) as f64, dt);
-                // only while letters remain: a finished fork waiting on membrane is not copying slowly
-                if c.fork.is_some() && copied0 < c.genome.len() {
-                    self.model.record(&x, C_REP, copied, dt);
+                for t in 0..N_LETTERS {
+                    for l in 0..N_LETTERS {
+                        if tally.odds[t][l] > 0.0 || tally.picks[t][l] > 0.0 {
+                            self.model.record(&x, c_sel(t, l), tally.picks[t][l], tally.odds[t][l]);
+                        }
+                    }
                 }
-                self.model.record(&x, C_ERR, (self.stats.copy_mutations - err0) as f64, (self.stats.copied_letters - let0) as f64);
             }
             if c.area() < self.cp.burst_area {
                 dead.push(ci);
@@ -678,12 +694,8 @@ impl World {
         }
     }
 
-    /// Fraction of the cell's expressed product copies whose gene satisfies `f` (detail),
-    /// or 1 for surrogate cells (phenotype assumed expressed at steady state).
+    /// Fraction of the cell's expressed product copies whose gene satisfies `f`.
     fn expressed_fraction(&self, c: &Cell, info: &GenomeInfo, f: impl Fn(&Gene) -> bool) -> f64 {
-        if c.mode == Mode::Surrogate {
-            return 1.0;
-        }
         let total: i64 = c.products.iter().sum();
         if total == 0 {
             return 0.0;
@@ -705,13 +717,11 @@ impl World {
                         region: c.patch,
                         confidence: c.conf,
                         features: x.to_vec(),
-                        note: format!("cell lineage in untrained state (poly {:.2}, synth {:.2}, amph {:.2})", x[2], x[3], x[4]),
+                        note: format!("cell copying in untrained state (kT {:.3}, polymerase {:.2})", x[0], x[1]),
                     },
                 );
             }
             Mode::Detail if self.cp.auto && c.conf >= self.cp.restrict_above => {
-                // products stay frozen in place: a later lift resumes with them, instead of
-                // restarting the cell empty-handed (no polymerase) in the junk trap
                 c.mode = Mode::Surrogate;
                 self.stats.restricts += 1;
             }
@@ -738,7 +748,9 @@ impl World {
         let shade = site.x[3];
         let lose = round_flux((self.cp.membrane_turnover + self.cp.uv_membrane * shade) * area * dt, rng).clamp(0, c.area());
         for _ in 0..lose {
-            let Some(l) = pick_weighted(&c.membrane, rng) else { break };
+            let Some(l) = pick_weighted(&c.membrane, rng) else {
+                break;
+            };
             c.membrane[l] -= 1;
             p.free[l] += 1;
         }
@@ -746,34 +758,54 @@ impl World {
         let mono_conc = c.free.iter().sum::<i64>() as f64 / cin;
         let grow = round_flux(self.cp.abiotic_membrane * mono_conc * dt * area.sqrt(), rng).max(0);
         for _ in 0..grow {
-            let Some(l) = pick_weighted(&c.free, rng) else { break };
+            let Some(l) = pick_weighted(&c.free, rng) else {
+                break;
+            };
             c.free[l] -= 1;
             c.membrane[l] += 1;
         }
     }
 
+    fn inv_selectivity(&self, x: &[f64]) -> [[f64; N_LETTERS]; N_LETTERS] {
+        let mut m = [[0.0; N_LETTERS]; N_LETTERS];
+        for (t, row) in m.iter_mut().enumerate() {
+            for (l, v) in row.iter_mut().enumerate() {
+                let ch = c_sel(t, l);
+                *v = self.model.rate(x, ch, self.sel_prior[ch], 1.0).max(0.0);
+            }
+        }
+        m
+    }
+
     /// Templated copy of `template` (reverse complement) using the cell's monomers.
-    /// Stops when a needed monomer is missing. Returns (copy, errors).
-    fn copy_strand(&self, template: &[u8], free: &mut [i64; N_LETTERS], gain: f64, kt: f64, max_letters: usize, rng: &mut Rng) -> (Seq, u32) {
+    /// Stops when a needed monomer is missing. Returns (copy, errors); detail copies add to `tally`.
+    fn copy_strand(&self, template: &[u8], free: &mut [i64; N_LETTERS], how: Copier, max_letters: usize, tally: &mut PairTally, rng: &mut Rng) -> (Seq, u32) {
         let mut out = Vec::new();
         let mut errors = 0;
         for &t in template.iter().rev().take(max_letters) {
+            let right = self.comp[t as usize] as usize;
             // kinetic proofreading: with the right partner absent a polymerase stalls and
             // waits rather than misincorporate; the copy resumes when supply returns
-            if free[self.comp[t as usize] as usize] <= 0 {
+            if free[right] <= 0 {
                 break;
             }
             let mut w = [0.0; N_LETTERS];
-            let mut sum = 0.0;
-            for l in 0..N_LETTERS {
-                w[l] = free[l].max(0) as f64 * (gain * self.ctx.ph.pair[t as usize][l] / kt).exp();
-                sum += w[l];
+            match how {
+                Copier::Pairing { gain, kt } => {
+                    for l in 0..N_LETTERS {
+                        w[l] = free[l].max(0) as f64 * (gain * self.ctx.ph.pair[t as usize][l] / kt).exp();
+                    }
+                }
+                Copier::Learned { inv_sel } => {
+                    for l in 0..N_LETTERS {
+                        w[l] = free[l].max(0) as f64 * inv_sel[t as usize][l];
+                    }
+                    w[right] = free[right] as f64;
+                }
             }
-            if sum <= 0.0 {
-                break;
-            }
+            let sum: f64 = w.iter().sum();
             let mut r = rng.f64() * sum;
-            let mut pick = (0..N_LETTERS).rev().find(|&l| w[l] > 0.0).unwrap();
+            let mut pick = right;
             for (l, &wl) in w.iter().enumerate() {
                 if r < wl {
                     pick = l;
@@ -781,8 +813,18 @@ impl World {
                 }
                 r -= wl;
             }
+            if let Copier::Pairing { .. } = how {
+                let t = t as usize;
+                if pick != right {
+                    tally.picks[t][pick] += 1.0;
+                } else {
+                    for l in (0..N_LETTERS).filter(|&l| l != right) {
+                        tally.odds[t][l] += free[l].max(0) as f64 / free[right] as f64;
+                    }
+                }
+            }
             free[pick] -= 1;
-            if pick as u8 != self.comp[t as usize] {
+            if pick != right {
                 errors += 1;
             }
             out.push(pick as u8);
@@ -790,19 +832,14 @@ impl World {
         (out, errors)
     }
 
-    fn detail_step(&mut self, c: &mut Cell, info: &GenomeInfo, site: &Site, dt: f64, rng: &mut Rng) {
+    /// Raw Ka + side atom -> monomer, catalysed by expressed synthesis products. Runs in both
+    /// modes: it is cheap, and its per-letter output decides which partner a polymerase lacks.
+    fn metabolism(&mut self, c: &mut Cell, info: &GenomeInfo, site: &Site, dt: f64, rng: &mut Rng) {
         let kt = site.env.kt;
         let x = site.x;
         let cells_in = c.cells(self.cp.vol_k);
         let presence = |c: &Cell, k: usize| (c.products[k] as f64 / 3.0).min(1.0);
-        // catalysis actually present: best expressed product per role
         let ka = bidx(KA).unwrap();
-        let mut poly: f64 = 0.0;
-        for (k, g) in info.genes.iter().enumerate() {
-            poly = poly.max(g.func.catalysis[pair(ka, ka)] * presence(c, k));
-        }
-
-        // metabolism: raw Ka + side atom -> monomer, catalysed by expressed synthesis products
         for (l, &z) in LETTERS.iter().enumerate() {
             let p = pair(ka, bidx(z).unwrap());
             let cut = info.genes.iter().enumerate().map(|(k, g)| g.func.catalysis[p] * presence(c, k)).fold(0.0, f64::max);
@@ -812,11 +849,26 @@ impl World {
             c.raw[l] -= make;
             c.free[l] += make;
         }
+    }
+
+    /// The cell's interior. Detail copies messengers and genome letter by letter with Boltzmann
+    /// pairing; surrogate mode keeps every count-level process (metabolism, expression, decay,
+    /// insertion, fork progress, stalls) and draws only copy fidelity from the learned table.
+    fn interior_step(&mut self, c: &mut Cell, info: &GenomeInfo, site: &Site, x_feat: &[f64], dt: f64, tally: &mut PairTally, rng: &mut Rng) {
+        let learned = c.mode == Mode::Surrogate;
+        let inv_sel = if learned { self.inv_selectivity(x_feat) } else { [[0.0; N_LETTERS]; N_LETTERS] };
+        let kt = site.env.kt;
+        let x = site.x;
+        let cells_in = c.cells(self.cp.vol_k);
+        let poly = present_poly(c, info);
+
+        self.metabolism(c, info, site, dt, rng);
 
         let supply = (c.free.iter().sum::<i64>() as f64 / cells_in / 0.3).min(1.0);
         let gain = DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly);
         // copying a long template unaided is slow; a polymerase pocket makes it practical
         let boost = UNAIDED_COPY + POLY_SPEEDUP * ((poly / kt).exp() - 1.0);
+        let how = if learned { Copier::Learned { inv_sel } } else { Copier::Pairing { gain, kt } };
 
         // transcription: each gene makes product copies; any copy error makes junk
         for (k, g) in info.genes.iter().enumerate() {
@@ -824,8 +876,8 @@ impl World {
             for _ in 0..n {
                 // messenger: antisense copy of the gene, read back in sense order, then recycled
                 let template: Seq = c.genome[g.start..g.end].to_vec();
-                let (msg, _) = self.copy_strand(&template, &mut c.free, gain, kt, usize::MAX, rng);
-                // separate counter: replication error rate (C_ERR) must not be diluted by messengers
+                let (msg, _) = self.copy_strand(&template, &mut c.free, how, usize::MAX, tally, rng);
+                // separate counter: messenger letters must not dilute the replication error rate
                 self.stats.tx_letters += msg.len() as u64;
                 for &l in &msg {
                     c.free[l as usize] += 1;
@@ -907,68 +959,10 @@ impl World {
                 // copy the next chunk: the fork reads the genome from its 3' end
                 let done = fork.len();
                 let remaining = &c.genome[..c.genome.len() - done];
-                let (chunk, errs) = self.copy_strand(remaining, &mut c.free, gain, kt, letters, rng);
+                let (chunk, errs) = self.copy_strand(remaining, &mut c.free, how, letters, tally, rng);
                 self.stats.copied_letters += chunk.len() as u64;
                 self.stats.copy_mutations += errs as u64;
                 fork.extend(chunk);
-            }
-            c.fork = Some(fork);
-        }
-    }
-
-    /// Learned cell: membrane growth, replication speed and fidelity from the rate table.
-    /// Matter: growth draws raw atoms (or monomers) from the cell; copying draws monomers.
-    fn surrogate_step(&mut self, c: &mut Cell, _info: &GenomeInfo, x: &[f64], dt: f64, rng: &mut Rng) {
-        let rate = |ch: usize| self.model.rate(x, ch, self.model.global_rate(ch), 1.0);
-        // metabolism collapsed: raw atoms become monomers as fast as the learned growth needs
-        let grow = round_flux(rate(C_GROW) * dt, rng).max(0);
-        for _ in 0..grow {
-            if let Some(l) = pick_weighted(&c.free, rng) {
-                c.free[l] -= 1;
-                c.membrane[l] += 1;
-            } else if c.raw_ka > 0 {
-                let Some(l) = pick_weighted(&c.raw, rng) else { break };
-                c.raw[l] -= 1;
-                c.raw_ka -= 1;
-                c.membrane[l] += 1;
-            } else {
-                break;
-            }
-        }
-        // keep a monomer pool: convert raw atoms at a coarse, catalysis-free pace
-        let make = (c.raw_ka.min(c.raw.iter().sum::<i64>()) as f64 * (0.5 * dt).min(1.0)) as i64;
-        for _ in 0..make {
-            let Some(l) = pick_weighted(&c.raw, rng) else { break };
-            c.raw[l] -= 1;
-            c.raw_ka -= 1;
-            c.free[l] += 1;
-        }
-        if c.fork.is_none() && c.area() as f64 >= (1.5 * c.birth_area as f64).min(0.75 * self.cp.divide_area as f64) {
-            c.fork = Some(Vec::new());
-        }
-        if let Some(mut fork) = c.fork.take() {
-            let letters = round_flux(rate(C_REP) * dt, rng).max(0) as usize;
-            let p_err = rate(C_ERR).clamp(0.0, 1.0);
-            let done = fork.len();
-            for &t in c.genome[..c.genome.len() - done].iter().rev().take(letters) {
-                // stall like the detailed polymerase when the right partner is missing
-                if c.free[self.comp[t as usize] as usize] == 0 {
-                    break;
-                }
-                let want = if rng.chance(p_err) {
-                    (self.comp[t as usize] as usize + 1 + rng.below(N_LETTERS - 1)) % N_LETTERS
-                } else {
-                    self.comp[t as usize] as usize
-                };
-                if c.free[want] == 0 {
-                    break;
-                }
-                c.free[want] -= 1;
-                fork.push(want as u8);
-                self.stats.copied_letters += 1;
-                if want as u8 != self.comp[t as usize] {
-                    self.stats.copy_mutations += 1;
-                }
             }
             c.fork = Some(fork);
         }
@@ -1006,16 +1000,14 @@ impl World {
     fn divide(&mut self, c: &mut Cell, rng: &mut Rng) -> Option<Cell> {
         let fork = c.fork.take().unwrap();
         let info = self.info(&c.genome);
-        let ka = bidx(KA).unwrap();
-        // surrogate cells carry their phenotype as expressed; detail cells use present products
-        let poly = info
-            .genes
-            .iter()
-            .enumerate()
-            .map(|(k, g)| g.func.catalysis[pair(ka, ka)] * if c.mode == Mode::Surrogate { 1.0 } else { (c.products[k] as f64 / 3.0).min(1.0) })
-            .fold(0.0, f64::max);
-        let gain = DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly);
-        let (mut genome, errs) = self.copy_strand(&fork, &mut c.free, gain, self.env.kt, usize::MAX, rng);
+        let poly = present_poly(c, &info);
+        let how = if c.mode == Mode::Surrogate {
+            let x = Self::features(c, &info, self.env.kt);
+            Copier::Learned { inv_sel: self.inv_selectivity(&x) }
+        } else {
+            Copier::Pairing { gain: DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * poly), kt: self.env.kt }
+        };
+        let (mut genome, errs) = self.copy_strand(&fork, &mut c.free, how, usize::MAX, &mut PairTally::default(), rng);
         if genome.len() < fork.len() {
             for &l in &genome {
                 c.free[l as usize] += 1;
@@ -1219,5 +1211,33 @@ mod tests {
         }
         assert_eq!(w.matter(), start);
         assert!(sur > 0, "surrogate never engaged");
+    }
+
+    #[test]
+    fn learned_copying_matches_detail_error_rate() {
+        let cp = CellParams { auto: false, ..Default::default() };
+        let mut w = World::new(PoolParams::default(), cp, Cosmos::new(CosmosParams::default()), rates(), 7, 120);
+        for _ in 0..1500 {
+            w.step(0.02);
+        }
+        let err_rate = |w: &mut World| {
+            let (e0, l0) = (w.stats.copy_mutations, w.stats.copied_letters);
+            for _ in 0..1000 {
+                w.step(0.02);
+            }
+            (w.stats.copy_mutations - e0) as f64 / (w.stats.copied_letters - l0).max(1) as f64
+        };
+        let mut sur = w.clone();
+        sur.reseed(99);
+        sur.learn = false;
+        // out-of-range moments lift cells; auto puts them back, as in the shadow run
+        sur.cp.auto = true;
+        for c in sur.cells.iter_mut() {
+            c.mode = Mode::Surrogate;
+        }
+        let (d, s) = (err_rate(&mut w), err_rate(&mut sur));
+        let n_sur = sur.cells.iter().filter(|c| c.mode == Mode::Surrogate).count();
+        assert!(n_sur * 10 >= sur.cells.len() * 9, "trained cells stayed in detail: {n_sur}/{}", sur.cells.len());
+        assert!(d > 0.01 && (s - d).abs() < 0.2 * d, "detail error {d:.4} vs learned {s:.4}");
     }
 }

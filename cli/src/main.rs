@@ -128,6 +128,8 @@ fn shadow(args: &[String]) {
     // twin: same state, different dice. Detail-vs-detail agreement is the ceiling any surrogate can reach.
     let mut twin = a.clone();
     twin.reseed(seed ^ 0xD1CE);
+    // own dice for the surrogate too: shared dice would credit it with the detail run's noise
+    b.reseed(seed ^ 0x5EED);
     b.hybrid.rates = Some(table);
     for k in 0..b.hybrid.hp.bands {
         b.restrict(k);
@@ -472,6 +474,8 @@ fn pond_shadow(args: &[String]) {
     b.pp.auto = true;
     let mut twin = a.clone();
     twin.ctx.reseed(0xD1CE);
+    // own dice for the surrogate too: shared dice would credit it with the detail run's noise
+    b.ctx.reseed(0x5EED);
     let summary = |p: &Pond, divs0: u64| -> Vec<f64> {
         let n = p.vesicles.len().max(1) as f64;
         vec![
@@ -675,6 +679,8 @@ fn cell_shadow(args: &[String]) {
     b.cp.auto = true;
     let mut twin = a.clone();
     twin.reseed(0xD1CE);
+    // own dice for the surrogate too: shared dice would credit it with the detail run's noise
+    b.reseed(0x5EED);
     let d0 = a.stats.divisions;
     let summary = |w: &mut World| -> Vec<f64> {
         let n = w.cells.len().max(1) as f64;
