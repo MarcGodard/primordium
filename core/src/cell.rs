@@ -953,6 +953,10 @@ impl World {
             let p_err = rate(C_ERR).clamp(0.0, 1.0);
             let done = fork.len();
             for &t in c.genome[..c.genome.len() - done].iter().rev().take(letters) {
+                // stall like the detailed polymerase when the right partner is missing
+                if c.free[self.comp[t as usize] as usize] == 0 {
+                    break;
+                }
                 let want = if rng.chance(p_err) { (self.comp[t as usize] as usize + 1 + rng.below(N_LETTERS - 1)) % N_LETTERS } else { self.comp[t as usize] as usize };
                 if c.free[want] == 0 {
                     break;
