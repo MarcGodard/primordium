@@ -78,6 +78,27 @@ impl RateTable {
         self.exposure[b * self.channels + ch] += exposure;
     }
 
+    /// Fade evidence by `k` (0..1): rates keep their value, but newer data outweighs older.
+    /// Sample counts (confidence) are left alone: having seen a state still counts.
+    pub fn decay(&mut self, k: f64) {
+        self.events.iter_mut().for_each(|e| *e *= k);
+        self.exposure.iter_mut().for_each(|e| *e *= k);
+    }
+
+    /// Rate per bin of axis `k`, pooled over every other axis.
+    pub fn marginal(&self, k: usize, ch: usize) -> Vec<f64> {
+        let a = &self.axes[k];
+        let stride: usize = self.axes[k + 1..].iter().map(|a| a.bins).product();
+        let mut e = vec![0.0; a.bins];
+        let mut x = vec![0.0; a.bins];
+        for b in 0..self.n_bins() {
+            let i = (b / stride) % a.bins;
+            e[i] += self.events[b * self.channels + ch];
+            x[i] += self.exposure[b * self.channels + ch];
+        }
+        e.iter().zip(&x).map(|(e, x)| if *x > 0.0 { e / x } else { f64::NAN }).collect()
+    }
+
     /// Pooled rate across all bins: prior for thin cells.
     pub fn global_rate(&self, ch: usize) -> f64 {
         let (mut e, mut x) = (0.0, 0.0);
@@ -86,6 +107,38 @@ impl RateTable {
             x += self.exposure[b * self.channels + ch];
         }
         if x > 0.0 { e / x } else { 0.0 }
+    }
+
+    /// `rate`, linearly interpolated between bin centres along `smooth` axes. A step function
+    /// is blind to changes inside a bin: selection on a trait the table bins coarsely would
+    /// see no cost in small losses, and the trait decays by mutation.
+    pub fn rate_smooth(&self, x: &[f64], ch: usize, prior: f64, prior_weight: f64, smooth: &[usize]) -> f64 {
+        let mut idx: Vec<usize> = self.axes.iter().zip(x).map(|(a, &v)| a.locate(v).0).collect();
+        let mut spans = Vec::with_capacity(smooth.len());
+        for &k in smooth {
+            let a = &self.axes[k];
+            let pos = (x[k] - a.lo) / (a.hi - a.lo) * a.bins as f64 - 0.5;
+            let i0 = pos.floor().clamp(0.0, (a.bins - 1) as f64) as usize;
+            let i1 = (i0 + 1).min(a.bins - 1);
+            spans.push((k, i0, i1, (pos - i0 as f64).clamp(0.0, 1.0)));
+        }
+        let mut total = 0.0;
+        for corner in 0..(1usize << spans.len()) {
+            let mut w = 1.0;
+            for (j, &(k, i0, i1, t)) in spans.iter().enumerate() {
+                let hi = corner >> j & 1 == 1;
+                idx[k] = if hi { i1 } else { i0 };
+                w *= if hi { t } else { 1.0 - t };
+            }
+            if w == 0.0 {
+                continue;
+            }
+            let b = idx.iter().zip(&self.axes).fold(0, |acc, (&i, a)| acc * a.bins + i);
+            let e = self.events[b * self.channels + ch];
+            let xp = self.exposure[b * self.channels + ch];
+            total += w * (e + prior * prior_weight) / (xp + prior_weight);
+        }
+        total
     }
 
     /// Shrinks toward the global rate with pseudo-exposure `prior_weight`.

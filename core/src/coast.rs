@@ -4,9 +4,11 @@
 //! takes its matter with it, so the coast's matter is closed.
 use crate::cell::{CellParams, World};
 use crate::cosmos::{Cosmos, CosmosParams};
+use crate::hybrid::Mode;
+use crate::lineage::{LineageModel, LineageSample};
 use crate::pool::PoolParams;
 use crate::rng::Rng;
-use crate::surrogate::RateTable;
+use crate::surrogate::{Discovery, RateTable};
 use rayon::prelude::*;
 
 #[derive(Clone, Debug)]
@@ -21,11 +23,29 @@ pub struct CoastParams {
     pub current: f64,
     pub cells_per_site: usize,
     pub founders_per_site: usize,
+    /// Sites switch between detail and lineage mode on their own (by lineage-table confidence).
+    pub auto: bool,
+    pub lift_below: f64,
+    pub restrict_above: f64,
+    /// Lineage-table memory, days: evolution moves the rates, old evidence fades.
+    pub memory_days: f64,
 }
 
 impl Default for CoastParams {
     fn default() -> Self {
-        Self { sites: 12, lat_lo: -1.1, lat_hi: 1.1, tide_spread: 1.8, current: 0.02, cells_per_site: 200, founders_per_site: 40 }
+        Self {
+            sites: 12,
+            lat_lo: -1.1,
+            lat_hi: 1.1,
+            tide_spread: 1.8,
+            current: 0.02,
+            cells_per_site: 200,
+            founders_per_site: 40,
+            auto: false,
+            lift_below: 0.5,
+            restrict_above: 0.85,
+            memory_days: 30.0,
+        }
     }
 }
 
@@ -34,11 +54,16 @@ pub struct Site {
     pub latitude: f64,
     pub tide_scale: f64,
     pub world: World,
+    /// Detail: cells run their chemistry. Surrogate: cells are lineages (`lineage.rs`).
+    pub mode: Mode,
+    pub conf: f64,
 }
 
 #[derive(Clone, Default, Debug)]
 pub struct CoastStats {
     pub migrations: u64,
+    pub lifts: u64,
+    pub restricts: u64,
 }
 
 #[derive(Clone)]
@@ -47,6 +72,11 @@ pub struct Coast {
     pub sites: Vec<Site>,
     pub t_days: f64,
     pub stats: CoastStats,
+    /// Lineage behaviour learned from every detailed site: one coast-wide table.
+    pub model: LineageModel,
+    pub learn: bool,
+    pub discoveries: crate::surrogate::DiscoveryLog,
+    steps: u64,
     rng: Rng,
 }
 
@@ -71,16 +101,96 @@ impl Coast {
                     seed.wrapping_mul(1000).wrapping_add(k as u64),
                     cp.founders_per_site,
                 );
-                Site { latitude, tide_scale, world }
+                Site { latitude, tide_scale, world, mode: Mode::Detail, conf: 0.0 }
             })
             .collect();
-        Self { cp, sites, t_days: 0.25, stats: CoastStats::default(), rng: Rng::new(seed ^ 0xC0A5) }
+        Self {
+            cp,
+            sites,
+            t_days: 0.25,
+            stats: CoastStats::default(),
+            model: LineageModel::default(),
+            learn: true,
+            discoveries: Default::default(),
+            steps: 0,
+            rng: Rng::new(seed ^ 0xC0A5),
+        }
     }
 
     pub fn step(&mut self, dt: f64) {
-        self.sites.par_iter_mut().for_each(|s| s.world.step(dt));
+        self.resolve_modes(dt);
+        let prior = self.model.priors();
+        let (model, learn) = (&self.model, self.learn);
+        let logs: Vec<Vec<LineageSample>> = self
+            .sites
+            .par_iter_mut()
+            .map(|s| match s.mode {
+                Mode::Detail => {
+                    s.world.lineage_log = learn.then(Vec::new);
+                    s.world.step(dt);
+                    s.world.lineage_log.take().unwrap_or_default()
+                }
+                Mode::Surrogate => {
+                    s.world.step_lineage(dt, model, &prior);
+                    Vec::new()
+                }
+            })
+            .collect();
+        // forget only while new evidence arrives: with every site in lineage mode nothing is
+        // recorded, and fading anyway would wash the table out to its prior at full confidence
+        if self.learn && logs.iter().any(|l| !l.is_empty()) {
+            self.model.forget(dt, self.cp.memory_days);
+        }
+        for log in &logs {
+            self.model.record(log, dt);
+        }
         self.migrate(dt);
         self.t_days += dt;
+    }
+
+    /// Put every site in one mode (shadow runs, experiments). Auto may move them later.
+    pub fn set_mode(&mut self, mode: Mode) {
+        for s in self.sites.iter_mut() {
+            s.mode = mode;
+        }
+    }
+
+    /// Confidence is checked about once a day: it moves slowly, and scoring every cell is not free.
+    fn resolve_modes(&mut self, dt: f64) {
+        let per_day = (1.0 / dt).round().max(1.0) as u64;
+        self.steps += 1;
+        if (self.steps - 1) % per_day != 0 {
+            return;
+        }
+        for (k, s) in self.sites.iter_mut().enumerate() {
+            s.conf = s.world.lineage_confidence(&self.model);
+            match s.mode {
+                Mode::Surrogate if s.conf < self.cp.lift_below => {
+                    s.mode = Mode::Detail;
+                    self.stats.lifts += 1;
+                    self.discoveries.log(
+                        4_000_000 + k,
+                        Discovery {
+                            t_days: self.t_days,
+                            scale: 4,
+                            region: k,
+                            confidence: s.conf,
+                            features: vec![s.latitude, s.world.env.temperature_k],
+                            note: format!(
+                                "site {:+.0} deg left known conditions ({:.1} K): back to cell chemistry",
+                                s.latitude.to_degrees(),
+                                s.world.env.temperature_k
+                            ),
+                        },
+                    );
+                }
+                Mode::Detail if self.cp.auto && s.conf >= self.cp.restrict_above => {
+                    s.mode = Mode::Surrogate;
+                    self.stats.restricts += 1;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Cells on flooded patches drift along shore to the same patch of a neighbouring site.
@@ -136,6 +246,14 @@ impl Coast {
         (m, ka)
     }
 
+    /// Fresh dice everywhere, same state: shadow runs.
+    pub fn reseed(&mut self, seed: u64) {
+        for (k, s) in self.sites.iter_mut().enumerate() {
+            s.world.reseed(seed.wrapping_mul(31).wrapping_add(k as u64));
+        }
+        self.rng = Rng::new(seed ^ 0xC0A5);
+    }
+
     pub fn cells(&self) -> usize {
         self.sites.iter().map(|s| s.world.cells.len()).sum()
     }
@@ -159,5 +277,23 @@ mod tests {
         }
         assert_eq!(c.matter(), start);
         assert!(c.stats.migrations > 0, "no cell ever migrated: test would pass vacuously");
+    }
+
+    #[test]
+    fn lineage_mode_keeps_matter_and_breeds() {
+        let cp = CoastParams { sites: 3, cells_per_site: 60, founders_per_site: 20, lift_below: 0.0, ..Default::default() };
+        let mut c = Coast::new(cp, CosmosParams::default(), rates(), 5);
+        for _ in 0..1500 {
+            c.step(0.02);
+        }
+        c.set_mode(Mode::Surrogate);
+        let start = c.matter();
+        let d0: u64 = c.sites.iter().map(|s| s.world.stats.divisions).sum();
+        for _ in 0..500 {
+            c.step(0.02);
+        }
+        let d1: u64 = c.sites.iter().map(|s| s.world.stats.divisions).sum();
+        assert!(d1 > d0, "no lineage division: test would pass vacuously");
+        assert_eq!(c.matter(), start);
     }
 }

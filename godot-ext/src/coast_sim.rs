@@ -21,7 +21,8 @@ impl CoastSim {
     fn start(&mut self, rates_path: GString, seed: i64) -> bool {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
-        self.coast = Some(Coast::new(CoastParams::default(), CosmosParams { seed: seed as u64, ..Default::default() }, rates, seed as u64));
+        self.coast =
+            Some(Coast::new(CoastParams { auto: true, ..Default::default() }, CosmosParams { seed: seed as u64, ..Default::default() }, rates, seed as u64));
         self.history.clear();
         true
     }
@@ -29,8 +30,12 @@ impl CoastSim {
     #[func]
     fn set_auto(&mut self, on: bool) {
         if let Some(c) = self.coast.as_mut() {
+            c.cp.auto = on;
             for s in c.sites.iter_mut() {
                 s.world.cp.auto = on;
+                if !on {
+                    s.mode = Mode::Detail;
+                }
             }
         }
     }
@@ -93,6 +98,8 @@ impl CoastSim {
             d.set("genome_len", ph[4]);
             d.set("divisions", w.stats.divisions as i64);
             d.set("bit_error", w.stats.bit_errors as f64 / w.stats.bits_inherited.max(1) as f64);
+            d.set("lineage", s.mode == Mode::Surrogate);
+            d.set("confidence", s.conf);
             arr.push(&d.to_variant());
         }
         arr
@@ -177,13 +184,18 @@ impl CoastSim {
         let Some(c) = self.coast.as_ref() else { return d };
         d.set("cells", c.cells() as i64);
         d.set("migrations", c.stats.migrations as i64);
+        d.set("lineage_sites", c.sites.iter().filter(|s| s.mode == Mode::Surrogate).count() as i64);
+        d.set("lifts", c.stats.lifts as i64);
+        d.set("auto", c.cp.auto);
         d.set("surrogate", c.sites.iter().map(|s| s.world.cells.iter().filter(|c| c.mode == Mode::Surrogate).count()).sum::<usize>() as i64);
+        let coast_disc = c.discoveries.entries.iter().rev().take(3).map(|e| (e.t_days, format!("day {:.1}: {}", e.t_days, e.note)));
         let mut disc: Vec<(f64, String)> = c
             .sites
             .iter()
             .flat_map(|s| {
                 s.world.ctx.discoveries.entries.iter().rev().take(3).map(move |e| (e.t_days, format!("day {:.1} lat {:+.2}: {}", e.t_days, s.latitude, e.note)))
             })
+            .chain(coast_disc)
             .collect();
         disc.sort_by(|a, b| b.0.total_cmp(&a.0));
         let mut arr = VarArray::new();

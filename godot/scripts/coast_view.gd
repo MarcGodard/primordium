@@ -174,6 +174,10 @@ func _draw_coast() -> void:
 		art.draw_string(font, o + Vector2(TILE_W + 50, 13), "%d cells" % s.cells, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.8))
 		art.draw_string(font, o + Vector2(TILE_W + 50, 25), "gen %d" % s.max_generation, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.65))
 		art.draw_string(font, o + Vector2(TILE_W + 50, 37), "err %.1f%%" % (s.bit_error * 100.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.65))
+		if s.lineage:
+			# lineage mode: cells divide at learned rates instead of running their chemistry
+			art.draw_rect(Rect2(o, Vector2(TILE_W, TILE_H)), Color(0.75, 0.6, 1.0, 0.7), false, 0.4)
+			art.draw_string(font, o + Vector2(TILE_W - 34, 8), "lineage", HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(0.8, 0.7, 1.0, 0.9))
 		if k == selected:
 			art.draw_rect(Rect2(o - Vector2(1, 1), Vector2(TILE_W + 2, TILE_H + 2)), Color(1, 1, 0.4, 0.9), false, 0.6)
 		# current between neighbours: drifting dashes in the gap
@@ -200,7 +204,9 @@ func hud_text() -> String:
 		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"
 	if stats.is_empty():
 		return ""
-	var t := "[b]Coast[/b] %d sites, north at top\ncells %d (surrogate %d)   migrations %d\n" % [n_sites, stats.cells, stats.surrogate, stats.migrations]
+	var t := "[b]Coast[/b] %d sites, north at top\ncells %d   migrations %d\n[b]Resolution[/b] %s   lineage sites %d   lifts %d\n" % [
+		n_sites, stats.cells, stats.migrations, "auto (A)" if stats.auto else "detail (A)", stats.lineage_sites, stats.lifts]
+	t += "[color=#cbf]purple frame: site runs as lineages (learned division rates)[/color]\n"
 	if selected >= 0 and selected < sites.size():
 		var s: Dictionary = sites[selected]
 		t += "\n[b]Site %+.0f°[/b]  %.1f K  tide x%.1f\ncells %d   generation %d   divisions %d\nbit error %.2f%%   genome %.0f letters\npolymerase %.2f  metabolism %.2f\nmembrane %.2f  pigment %.2f\n" % [

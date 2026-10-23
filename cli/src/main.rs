@@ -27,6 +27,8 @@ fn main() {
         "cell-selection" => cell_selection(&args),
         "cell-shadow" => cell_shadow(&args),
         "coast" => coast(&args),
+        "coast-shadow" => coast_shadow(&args),
+        "coast-price" => coast_price(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -840,4 +842,207 @@ fn coast(args: &[String]) {
         }
     }
     println!("matter drift: {}", if c.matter() == m0 { "0" } else { "NONZERO" });
+}
+
+/// Scale-4 shadow: detailed coast vs all sites as lineages vs a reseeded detailed twin,
+/// on per-site population, division and phenotype statistics.
+fn coast_shadow(args: &[String]) {
+    use primordium_core::coast::{Coast, CoastParams};
+    use primordium_core::hybrid::Mode;
+    use primordium_core::surrogate::{RateTable, agreement};
+    let warm: f64 = arg(args, "warm", 60.0);
+    let days: f64 = arg(args, "days", 40.0);
+    let sites: usize = arg(args, "sites", 12);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let mut a = Coast::new(CoastParams { sites, ..Default::default() }, CosmosParams::default(), rates, 1);
+    let t0 = Instant::now();
+    while a.t_days < warm {
+        a.step(0.02);
+    }
+    println!("warm-up {warm} days in {:.1}s, lineage table coverage {:.1}%", t0.elapsed().as_secs_f64(), a.model.fate.coverage() * 100.0);
+    let lift: f64 = arg(args, "lift", 0.5);
+    let learn: bool = arg(args, "learn", true);
+    a.learn = false;
+    let mut b = a.clone();
+    b.set_mode(Mode::Surrogate);
+    b.cp.auto = true;
+    b.cp.lift_below = lift;
+    // a site that falls back to detail keeps training the table, as in a normal run
+    b.learn = learn;
+    b.reseed(0x5EED);
+    let mut twin = a.clone();
+    twin.reseed(0xD1CE);
+    let d0: Vec<u64> = a.sites.iter().map(|s| s.world.stats.divisions).collect();
+    let errs = |c: &Coast| {
+        c.sites.iter().fold((0u64, 0u64, 0u64), |acc, s| {
+            (acc.0 + s.world.stats.bit_errors, acc.1 + s.world.stats.bits_inherited, acc.2 + s.world.stats.radiation_mutations)
+        })
+    };
+    let (ea0, eb0) = (errs(&a), errs(&b));
+    if std::env::var("DIAG").is_ok() {
+        let e = errs(&a);
+        println!("fidelity table pooled {:.4}; detail lifetime bit error {:.4}", b.model.fidelity.global_rate(0), e.0 as f64 / e.1.max(1) as f64);
+        let (e1, n1) = a.sites.iter().fold((0, 0), |acc, s| (acc.0 + s.world.stats.bit_errors_on1, acc.1 + s.world.stats.ones_inherited));
+        let (et, nt) = (e.0, e.1);
+        println!("   detail spectrum: error on 1-bits {:.4}, on 0-bits {:.4}", e1 as f64 / n1.max(1) as f64, (et - e1) as f64 / (nt - n1).max(1) as f64);
+        for (k, name) in [(3, "poly"), (4, "synth"), (5, "amph"), (6, "age")] {
+            let f = |v: Vec<f64>| v.iter().map(|x| format!("{x:.3}")).collect::<Vec<_>>().join(" ");
+            println!("   {name:5} div/day [{}]  burst/day [{}]", f(b.model.fate.marginal(k, 0)), f(b.model.fate.marginal(k, 1)));
+        }
+    }
+    let m0 = b.matter();
+    let summary = |c: &mut Coast| -> Vec<f64> {
+        let mut v = Vec::new();
+        for (k, s) in c.sites.iter_mut().enumerate() {
+            let ph = s.world.phenotype_means();
+            v.extend([s.world.cells.len() as f64, (s.world.stats.divisions - d0[k]) as f64, ph[0] * 100.0, ph[1] * 100.0, ph[2] * 100.0, ph[3] * 100.0, ph[4]]);
+        }
+        v
+    };
+    let (mut acc, mut ceil, mut n) = (0.0, 0.0, 0.0);
+    let (mut ta, mut tb) = (0.0, 0.0);
+    let end = a.t_days + days;
+    let mut next = a.t_days + 5.0;
+    while a.t_days < end {
+        let t = Instant::now();
+        a.step(0.02);
+        ta += t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        b.step(0.02);
+        tb += t.elapsed().as_secs_f64();
+        twin.step(0.02);
+        if a.t_days >= next {
+            next += 5.0;
+            let (sa, sb, st) = (summary(&mut a), summary(&mut b), summary(&mut twin));
+            let (x, y) = (agreement(&sa, &sb), agreement(&sa, &st));
+            acc += x;
+            ceil += y;
+            n += 1.0;
+            let lin = b.sites.iter().filter(|s| s.mode == Mode::Surrogate).count();
+            let div = |v: &[f64]| v.chunks(7).map(|c| c[1]).sum::<f64>();
+            if std::env::var("DIAG").is_ok() {
+                let col = |v: &[f64], j: usize| v.chunks(7).map(|c| c[j]).collect::<Vec<_>>();
+                let names = ["cells", "divs", "poly", "synth", "amph", "pig", "len"];
+                let row: Vec<String> = (0..7)
+                    .map(|j| format!("{} {:.1}/{:.1}", names[j], 100.0 * agreement(&col(&sa, j), &col(&sb, j)), 100.0 * agreement(&col(&sa, j), &col(&st, j))))
+                    .collect();
+                println!("   {}", row.join("  "));
+                let ready = b.sites.iter().map(|s| s.world.cells.iter().filter(|c| c.ready).count()).sum::<usize>();
+                println!("   lineage cells waiting to pay for a daughter: {ready}/{}", b.cells());
+                let mean = |v: &[f64], j: usize| col(v, j).iter().sum::<f64>() / sites as f64;
+                println!(
+                    "   coast means detail/lineage/twin: poly {:.1}/{:.1}/{:.1} amph {:.1}/{:.1}/{:.1} len {:.0}/{:.0}/{:.0}",
+                    mean(&sa, 2),
+                    mean(&sb, 2),
+                    mean(&st, 2),
+                    mean(&sa, 4),
+                    mean(&sb, 4),
+                    mean(&st, 4),
+                    mean(&sa, 6),
+                    mean(&sb, 6),
+                    mean(&st, 6)
+                );
+            }
+            println!(
+                "t={:6.1} lineage {:.1}% twin {:.1}% | lineage sites {lin}/{} | divisions detail {} lineage {} twin {}",
+                a.t_days,
+                x * 100.0,
+                y * 100.0,
+                b.sites.len(),
+                div(&sa),
+                div(&sb),
+                div(&st)
+            );
+        }
+    }
+    let drift = if b.matter() == m0 { "0" } else { "NONZERO" };
+    let (ea, eb) = (errs(&a), errs(&b));
+    println!(
+        "bit error per division: detail {:.4} lineage {:.4} | radiation mutations detail {} lineage {}",
+        (ea.0 - ea0.0) as f64 / (ea.1 - ea0.1).max(1) as f64,
+        (eb.0 - eb0.0) as f64 / (eb.1 - eb0.1).max(1) as f64,
+        ea.2 - ea0.2,
+        eb.2 - eb0.2
+    );
+    for d in b.discoveries.entries.iter().take(5) {
+        println!("discovery day {:.1}: {}", d.t_days, d.note);
+    }
+    println!(
+        "mean agreement {:.1}% vs twin ceiling {:.1}% = {:.1}% of ceiling | time detail {:.1}s lineage {:.1}s ({:.1}x) | lifts {} | matter drift {}",
+        100.0 * acc / n,
+        100.0 * ceil / n,
+        100.0 * acc / ceil,
+        ta,
+        tb,
+        ta / tb.max(1e-9),
+        b.stats.lifts,
+        drift
+    );
+}
+
+/// Price decomposition on the coast's membrane and polymerase traits: selection (dividing
+/// parents vs population) and transmission (daughter vs parent), detail vs lineage mode.
+fn coast_price(args: &[String]) {
+    use primordium_core::coast::{Coast, CoastParams};
+    use primordium_core::hybrid::Mode;
+    use primordium_core::surrogate::RateTable;
+    use std::collections::HashMap;
+    let warm: f64 = arg(args, "warm", 120.0);
+    let days: f64 = arg(args, "days", 10.0);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let mut a = Coast::new(CoastParams::default(), CosmosParams::default(), rates, 1);
+    while a.t_days < warm {
+        a.step(0.02);
+    }
+    a.learn = false;
+    let mut b = a.clone();
+    b.set_mode(Mode::Surrogate);
+    b.cp.lift_below = 0.0;
+    b.reseed(0x5EED);
+    for (name, c) in [("detail", &mut a), ("lineage", &mut b)] {
+        // trait sums: (pop mean accum, parents, parent->daughter delta), for amph and poly
+        let (mut pop, mut npop) = ([0.0; 2], 0.0);
+        let (mut par, mut dlt, mut n) = ([0.0; 2], [0.0; 2], 0.0);
+        let end = c.t_days + days;
+        while c.t_days < end {
+            let mut before: HashMap<u64, [f64; 2]> = HashMap::new();
+            for s in c.sites.iter_mut() {
+                let w = &mut s.world;
+                let ids: Vec<(u64, Vec<u8>)> = w.cells.iter().map(|c| (c.id, c.genome.clone())).collect();
+                for (id, g) in ids {
+                    let i = w.info(&g);
+                    before.insert(id, [i.amph, i.poly_cut]);
+                    pop[0] += i.amph;
+                    pop[1] += i.poly_cut;
+                    npop += 1.0;
+                }
+            }
+            c.step(0.02);
+            for s in c.sites.iter_mut() {
+                let w = &mut s.world;
+                let kids: Vec<(u64, Vec<u8>)> =
+                    w.cells.iter().filter(|c| !before.contains_key(&c.id)).filter_map(|c| c.parent.map(|p| (p, c.genome.clone()))).collect();
+                for (p, g) in kids {
+                    let Some(pz) = before.get(&p) else { continue };
+                    let i = w.info(&g);
+                    par[0] += pz[0];
+                    par[1] += pz[1];
+                    dlt[0] += i.amph - pz[0];
+                    dlt[1] += i.poly_cut - pz[1];
+                    n += 1.0;
+                }
+            }
+        }
+        println!(
+            "{name:8} births {n:.0} | amph: population {:.4} parents {:.4} (selection {:+.4}) daughter-parent {:+.4} | poly: population {:.4} parents {:.4} (selection {:+.4}) daughter-parent {:+.4}",
+            pop[0] / npop,
+            par[0] / n,
+            par[0] / n - pop[0] / npop,
+            dlt[0] / n,
+            pop[1] / npop,
+            par[1] / n,
+            par[1] / n - pop[1] / npop,
+            dlt[1] / n
+        );
+    }
 }

@@ -6,6 +6,7 @@ pub mod cosmos;
 pub mod element;
 pub mod hybrid;
 pub mod kinetics;
+pub mod lineage;
 pub mod polymer;
 pub mod pool;
 pub mod protocell;

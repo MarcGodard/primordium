@@ -194,6 +194,7 @@ pub fn translate(gene: &[u8], bits: &[u8; N_LETTERS]) -> Seq {
 pub struct Cell {
     pub id: u64,
     pub parent: Option<u64>,
+    /// Day the current cell cycle began (birth, or the parent's last division).
     pub born: f64,
     pub generation: u32,
     pub genome: Seq,
@@ -214,6 +215,14 @@ pub struct Cell {
     pub mutations: u32,
     /// Display position along the shore (0..1), viewer-only.
     pub y: f64,
+    /// Lineage mode: due to divide, waiting for its patch to afford a daughter.
+    #[serde(default)]
+    pub ready: bool,
+    /// Lineage mode: the genome as it was when this cycle began. A detailed cell copies its
+    /// genome during the cycle, so radiation damage the parent takes afterwards is not
+    /// inherited; lineage daughters copy this snapshot to keep that. Information, not matter.
+    #[serde(default)]
+    pub template: Option<Seq>,
 }
 
 impl Cell {
@@ -279,6 +288,11 @@ pub struct CellStats {
     /// Heritable errors: daughter genome bits that differ from the parent's (what selection sees).
     pub bit_errors: u64,
     pub bits_inherited: u64,
+    /// Heritable errors on parent 1-bits, and parent 1-bits inherited: the spectrum's bias.
+    #[serde(default)]
+    pub bit_errors_on1: u64,
+    #[serde(default)]
+    pub ones_inherited: u64,
     pub tx_ok: u64,
     pub tx_junk: u64,
     pub tx_short: u64,
@@ -321,6 +335,8 @@ pub struct World {
     refreshing: bool,
     /// Pooled copy model per channel, refreshed each step: the prior for thin bins.
     sel_prior: Vec<f64>,
+    /// When set, detailed steps log each cell's lineage features and fate (scale-4 training).
+    pub lineage_log: Option<Vec<crate::lineage::LineageSample>>,
 }
 
 fn round_flux(expected: f64, rng: &mut Rng) -> i64 {
@@ -356,7 +372,7 @@ pub const TX_TOLERANCE: f64 = 0.2;
 
 /// Carry product copies across a genome change: a gene whose product sequence still
 /// exists keeps its copies; the rest dissolve into `free`. Matter exact.
-fn remap_products(old: &GenomeInfo, counts: &[i64], new: &GenomeInfo, free: &mut [i64; N_LETTERS]) -> Vec<i64> {
+pub(crate) fn remap_products(old: &GenomeInfo, counts: &[i64], new: &GenomeInfo, free: &mut [i64; N_LETTERS]) -> Vec<i64> {
     let mut out = vec![0i64; new.genes.len()];
     for (g, &n) in old.genes.iter().zip(counts) {
         if n == 0 {
@@ -440,6 +456,7 @@ impl World {
             best_poly: 0.0,
             refreshing: false,
             sel_prior: vec![0.0; COPY_CHANNELS],
+            lineage_log: None,
         };
         w.seed_founders(founders);
         w
@@ -498,6 +515,8 @@ impl World {
                 mode: Mode::Detail,
                 conf: 0.0,
                 mutations: 0,
+                ready: false,
+                template: None,
                 y: rng.f64(),
             };
             self.cells.push(cell);
@@ -585,12 +604,19 @@ impl World {
         let mut cells = std::mem::take(&mut self.cells);
         let mut born = Vec::new();
         let mut dead = Vec::new();
+        let logging = self.lineage_log.is_some();
+        let mut samples = Vec::new();
         for (ci, c) in cells.iter_mut().enumerate() {
             let info = self.info(&c.genome);
             debug_assert_eq!(c.products.len(), info.genes.len());
             let shade = self.cp.max_shade * info.pigment * self.expressed_fraction(c, &info, |g| g.func.pigment > 0.0);
             let site = self.patch_site(c.patch, shade);
+            if logging {
+                samples.push(crate::lineage::LineageSample { x: self.lineage_features(c, &info, &site), ..Default::default() });
+            }
             let x = Self::features(c, &info, site.env.kt);
+            // a lineage-mode division queued before this cell came back to chemistry
+            c.ready = false;
             c.conf = self.model.confidence(&x);
             self.resolve_mode(c, &x, &site);
             // shared membrane physics (permeation, turnover, abiotic assembly) runs in both modes;
@@ -605,6 +631,9 @@ impl World {
             }
             if c.area() < self.cp.burst_area {
                 dead.push(ci);
+                if logging {
+                    samples[ci].burst = true;
+                }
                 continue;
             }
             // division: genome copied and membrane doubled
@@ -619,9 +648,19 @@ impl World {
         // divide (indices stable: we only append)
         let mut daughters = Vec::new();
         for &ci in &born {
+            let (e0, b0) = (self.stats.bit_errors, self.stats.bits_inherited);
             if let Some(d) = self.divide(&mut cells[ci], &mut rng) {
                 daughters.push(d);
+                if logging {
+                    let s = &mut samples[ci];
+                    s.divided = true;
+                    s.bit_errors = self.stats.bit_errors - e0;
+                    s.bits = self.stats.bits_inherited - b0;
+                }
             }
+        }
+        if let Some(log) = self.lineage_log.as_mut() {
+            log.extend(samples);
         }
         cells.extend(daughters);
         dead.sort_unstable();
@@ -644,7 +683,7 @@ impl World {
     }
 
     /// Re-derive phenotypes whose product folds just landed; log record polymerases.
-    fn refresh_pending(&mut self) {
+    pub(crate) fn refresh_pending(&mut self) {
         let stale: Vec<Seq> = self.genomes.iter().filter(|(_, i)| i.pending).map(|(g, _)| g.clone()).collect();
         self.refreshing = true;
         for g in stale {
@@ -675,7 +714,7 @@ impl World {
     }
 
     /// Fraction of the cell's expressed product copies whose gene satisfies `f`.
-    fn expressed_fraction(&self, c: &Cell, info: &GenomeInfo, f: impl Fn(&Gene) -> bool) -> f64 {
+    pub(crate) fn expressed_fraction(&self, c: &Cell, info: &GenomeInfo, f: impl Fn(&Gene) -> bool) -> f64 {
         let total: i64 = c.products.iter().sum();
         if total == 0 {
             return 0.0;
@@ -907,6 +946,9 @@ impl World {
         // genome replication: start once the membrane has grown, then copy at polymerase speed
         if c.fork.is_none() && c.area() as f64 >= (1.5 * c.birth_area as f64).min(0.75 * self.cp.divide_area as f64) {
             c.fork = Some(Vec::new());
+            // copy errors are measured against the genome as the copy began: radiation the
+            // parent takes afterwards is its own damage, not a copying mistake
+            c.template = Some(c.genome.clone());
         }
         if let Some(mut fork) = c.fork.take() {
             if fork.len() < c.genome.len() {
@@ -924,7 +966,7 @@ impl World {
     }
 
     /// UV (shaded by pigment, blocked by water) and cosmic rays mutate the genome in place.
-    fn radiation(&mut self, c: &mut Cell, site: &Site, dt: f64, rng: &mut Rng) {
+    pub(crate) fn radiation(&mut self, c: &mut Cell, site: &Site, dt: f64, rng: &mut Rng) {
         let rate = self.cp.uv_mutation * site.x[3] + self.cp.cosmic_mutation * site.env.cosmic;
         let n = rng.poisson(rate * c.genome.len() as f64 * dt);
         if n == 0 {
@@ -980,9 +1022,13 @@ impl World {
         }
         self.stats.copied_letters += genome.len() as u64;
         self.stats.copy_mutations += errs as u64;
-        let same = genome.len().min(c.genome.len());
+        let source = c.template.take().unwrap_or_else(|| c.genome.clone());
+        let same = genome.len().min(source.len());
         self.stats.bits_inherited += same as u64;
-        self.stats.bit_errors += (0..same).filter(|&i| self.bits[genome[i] as usize] != self.bits[c.genome[i] as usize]).count() as u64;
+        self.stats.bit_errors += (0..same).filter(|&i| self.bits[genome[i] as usize] != self.bits[source[i] as usize]).count() as u64;
+        let ones: Vec<usize> = (0..same).filter(|&i| self.bits[source[i] as usize] == 1).collect();
+        self.stats.ones_inherited += ones.len() as u64;
+        self.stats.bit_errors_on1 += ones.iter().filter(|&&i| self.bits[genome[i] as usize] == 0).count() as u64;
         if genome.len() > self.cp.genome_max {
             for &l in &genome[self.cp.genome_max..] {
                 c.free[l as usize] += 1;
@@ -1014,6 +1060,8 @@ impl World {
         }
         c.birth_area = c.area().max(1);
         c.generation += 1;
+        // both halves start a new cycle: `born` is the start of the current one
+        c.born = self.t_days;
         self.stats.divisions += 1;
         self.stats.births += 1;
         let dinfo = self.info(&genome);
@@ -1037,11 +1085,13 @@ impl World {
             mode: c.mode,
             conf: c.conf,
             mutations: 0,
+            ready: false,
+            template: None,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
         })
     }
 
-    fn spill(&mut self, c: Cell) {
+    pub(crate) fn spill(&mut self, c: Cell) {
         let info = self.info(&c.genome);
         let p = &mut self.patches[c.patch];
         for &l in &c.genome {
@@ -1065,7 +1115,7 @@ impl World {
     }
 
     /// High water mixes each flooded patch with the ocean; monomers wash out and fall apart.
-    fn tides(&mut self, dt: f64, rng: &mut Rng) {
+    pub(crate) fn tides(&mut self, dt: f64, rng: &mut Rng) {
         let k = (self.cp.flush_rate * dt).min(1.0);
         let w = (self.cp.washout_rate * dt).min(1.0);
         let cells = self.cp.patch_cells;
