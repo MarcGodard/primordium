@@ -113,19 +113,31 @@ impl RateTable {
     /// is blind to changes inside a bin: selection on a trait the table bins coarsely would
     /// see no cost in small losses, and the trait decays by mutation.
     pub fn rate_smooth(&self, x: &[f64], ch: usize, prior: f64, prior_weight: f64, smooth: &[usize]) -> f64 {
-        let mut idx: Vec<usize> = self.axes.iter().zip(x).map(|(a, &v)| a.locate(v).0).collect();
-        let mut spans = Vec::with_capacity(smooth.len());
-        for &k in smooth {
+        let mut out = [0.0];
+        self.rates_smooth(x, &[(ch, prior)], prior_weight, smooth, &mut out);
+        out[0]
+    }
+
+    /// `rate_smooth` for several (channel, prior) pairs, sharing the corner lookups.
+    pub fn rates_smooth(&self, x: &[f64], chs: &[(usize, f64)], prior_weight: f64, smooth: &[usize], out: &mut [f64]) {
+        const MAX_AXES: usize = 8;
+        assert!(self.axes.len() <= MAX_AXES && smooth.len() <= MAX_AXES);
+        debug_assert_eq!(out.len(), chs.len());
+        let mut idx = [0usize; MAX_AXES];
+        for (k, (a, &v)) in self.axes.iter().zip(x).enumerate() {
+            idx[k] = a.locate(v).0;
+        }
+        let mut spans = [(0usize, 0usize, 0usize, 0.0f64); MAX_AXES];
+        for (j, &k) in smooth.iter().enumerate() {
             let a = &self.axes[k];
             let pos = (x[k] - a.lo) / (a.hi - a.lo) * a.bins as f64 - 0.5;
             let i0 = pos.floor().clamp(0.0, (a.bins - 1) as f64) as usize;
-            let i1 = (i0 + 1).min(a.bins - 1);
-            spans.push((k, i0, i1, (pos - i0 as f64).clamp(0.0, 1.0)));
+            spans[j] = (k, i0, (i0 + 1).min(a.bins - 1), (pos - i0 as f64).clamp(0.0, 1.0));
         }
-        let mut total = 0.0;
-        for corner in 0..(1usize << spans.len()) {
+        out.iter_mut().for_each(|o| *o = 0.0);
+        for corner in 0..(1usize << smooth.len()) {
             let mut w = 1.0;
-            for (j, &(k, i0, i1, t)) in spans.iter().enumerate() {
+            for (j, &(k, i0, i1, t)) in spans[..smooth.len()].iter().enumerate() {
                 let hi = corner >> j & 1 == 1;
                 idx[k] = if hi { i1 } else { i0 };
                 w *= if hi { t } else { 1.0 - t };
@@ -133,12 +145,13 @@ impl RateTable {
             if w == 0.0 {
                 continue;
             }
-            let b = idx.iter().zip(&self.axes).fold(0, |acc, (&i, a)| acc * a.bins + i);
-            let e = self.events[b * self.channels + ch];
-            let xp = self.exposure[b * self.channels + ch];
-            total += w * (e + prior * prior_weight) / (xp + prior_weight);
+            let b = idx[..self.axes.len()].iter().zip(&self.axes).fold(0, |acc, (&i, a)| acc * a.bins + i);
+            for (o, &(ch, prior)) in out.iter_mut().zip(chs) {
+                let e = self.events[b * self.channels + ch];
+                let xp = self.exposure[b * self.channels + ch];
+                *o += w * (e + prior * prior_weight) / (xp + prior_weight);
+            }
         }
-        total
     }
 
     /// Shrinks toward the global rate with pseudo-exposure `prior_weight`.

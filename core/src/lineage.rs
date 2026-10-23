@@ -106,12 +106,12 @@ impl LineageModel {
     /// (divisions/day, bursts/day, bit error per copied letter by source letter) at `x`.
     fn rates(&self, x: &[f64], prior: &[f64]) -> (f64, f64, [f64; N_LETTERS]) {
         let f = fidelity_x(x);
-        let p_bit = std::array::from_fn(|l| self.fidelity.rate_smooth(&f, l, prior[L_CHANNELS + l], 1.0, &[1]).clamp(0.0, 0.5));
-        (
-            self.fate.rate_smooth(x, L_DIV, prior[L_DIV], 1.0, &TRAIT_AXES).max(0.0),
-            self.fate.rate_smooth(x, L_BURST, prior[L_BURST], 1.0, &TRAIT_AXES).max(0.0),
-            p_bit,
-        )
+        let chs: [(usize, f64); N_LETTERS] = std::array::from_fn(|l| (l, prior[L_CHANNELS + l]));
+        let mut p_bit = [0.0; N_LETTERS];
+        self.fidelity.rates_smooth(&f, &chs, 1.0, &[1], &mut p_bit);
+        let mut fate = [0.0; 2];
+        self.fate.rates_smooth(x, &[(L_DIV, prior[L_DIV]), (L_BURST, prior[L_BURST])], 1.0, &TRAIT_AXES, &mut fate);
+        (fate[0].max(0.0), fate[1].max(0.0), p_bit.map(|p| p.clamp(0.0, 0.5)))
     }
 }
 
@@ -237,6 +237,39 @@ impl World {
             by_letter[src].1 += 1;
             *g = canon[bit];
         }
+        // price the daughter before deriving its genes: a division the patch cannot pay for is
+        // retried every step, and working out each throwaway genome's folds cost 3.5x the
+        // genomes of a detailed run. Its matter is the parent's contents with the new genome in
+        // place of the parent's genome and fork (dissolving products later only moves letters).
+        let (mut m, _) = c.matter(&info);
+        for &l in c.genome.iter().chain(c.fork.iter().flatten()) {
+            m[l as usize] -= 1;
+        }
+        for &l in &genome {
+            m[l as usize] += 1;
+        }
+        let p = &mut self.patches[c.patch];
+        // bound letters carry a Ka each: a loose monomer pays for one, else a raw letter + raw Ka
+        let mut from_free = [0i64; N_LETTERS];
+        let mut from_raw = [0i64; N_LETTERS];
+        let mut ka_needed = c.raw_ka;
+        for l in 0..N_LETTERS {
+            let bound = m[l] - c.raw[l];
+            from_free[l] = bound.min(p.free[l]);
+            from_raw[l] = bound - from_free[l] + c.raw[l];
+            ka_needed += bound - from_free[l];
+            if from_raw[l] > p.raw[l] {
+                return None;
+            }
+        }
+        if ka_needed > p.raw_ka {
+            return None;
+        }
+        for l in 0..N_LETTERS {
+            p.free[l] -= from_free[l];
+            p.raw[l] -= from_raw[l];
+        }
+        p.raw_ka -= ka_needed;
         let dinfo = self.info(&genome);
         let mut free = c.free;
         let products = if genome == c.genome { c.products.clone() } else { remap_products(&info, &c.products, &dinfo, &mut free) };
@@ -262,29 +295,7 @@ impl World {
             template: None,
             y: (c.y + rng.f64() * 0.04 - 0.02).rem_euclid(1.0),
         };
-        let (m, _) = d.matter(&dinfo);
-        let p = &mut self.patches[c.patch];
-        // bound letters carry a Ka each: a loose monomer pays for one, else a raw letter + raw Ka
-        let mut from_free = [0i64; N_LETTERS];
-        let mut from_raw = [0i64; N_LETTERS];
-        let mut ka_needed = d.raw_ka;
-        for l in 0..N_LETTERS {
-            let bound = m[l] - d.raw[l];
-            from_free[l] = bound.min(p.free[l]);
-            from_raw[l] = bound - from_free[l] + d.raw[l];
-            ka_needed += bound - from_free[l];
-            if from_raw[l] > p.raw[l] {
-                return None;
-            }
-        }
-        if ka_needed > p.raw_ka {
-            return None;
-        }
-        for l in 0..N_LETTERS {
-            p.free[l] -= from_free[l];
-            p.raw[l] -= from_raw[l];
-        }
-        p.raw_ka -= ka_needed;
+        debug_assert_eq!(d.matter(&dinfo).0, m, "daughter priced wrong");
         let id = self.ctx.next_id();
         c.generation += 1;
         c.born = self.t_days;

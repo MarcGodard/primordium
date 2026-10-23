@@ -811,10 +811,26 @@ fn coast(args: &[String]) {
     let seed: u64 = arg(args, "seed", 1);
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
     let mut c = Coast::new(CoastParams { sites, ..Default::default() }, CosmosParams { seed, ..Default::default() }, rates, seed);
+    let lineage_after: f64 = arg(args, "lineage-after", f64::INFINITY);
     let start = Instant::now();
     let m0 = c.matter();
     let mut next = every;
+    let mut switched: Option<(f64, Instant)> = None;
     while c.t_days < days {
+        if switched.is_none() && c.t_days >= lineage_after {
+            c.set_mode(primordium_core::hybrid::Mode::Surrogate);
+            c.cp.lift_below = 0.0;
+            println!(
+                "day {:.1}: all sites to lineage mode after {:.1}s; folds {} predictions {} genomes {} divisions {}",
+                c.t_days,
+                start.elapsed().as_secs_f64(),
+                c.sites.iter().map(|s| s.world.ctx.model.folds).sum::<u64>(),
+                c.sites.iter().map(|s| s.world.ctx.model.nearest).sum::<u64>(),
+                c.sites.iter().map(|s| s.world.stats.new_genomes).sum::<u64>(),
+                c.sites.iter().map(|s| s.world.stats.divisions).sum::<u64>()
+            );
+            switched = Some((c.t_days, Instant::now()));
+        }
         c.step(0.02);
         if c.t_days >= next {
             next += every;
@@ -839,6 +855,17 @@ fn coast(args: &[String]) {
                 );
             }
         }
+    }
+    if let Some((d0, t0)) = switched {
+        println!(
+            "lineage mode: {:.1} days in {:.1}s; folds {} predictions {} genomes {} divisions {}",
+            c.t_days - d0,
+            t0.elapsed().as_secs_f64(),
+            c.sites.iter().map(|s| s.world.ctx.model.folds).sum::<u64>(),
+            c.sites.iter().map(|s| s.world.ctx.model.nearest).sum::<u64>(),
+            c.sites.iter().map(|s| s.world.stats.new_genomes).sum::<u64>(),
+            c.sites.iter().map(|s| s.world.stats.divisions).sum::<u64>()
+        );
     }
     println!("matter drift: {}", if c.matter() == m0 { "0" } else { "NONZERO" });
 }
