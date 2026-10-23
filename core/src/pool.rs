@@ -14,9 +14,9 @@
 //! (scale 2) are what make catalysts selfish enough to be selected.
 
 use crate::cosmos::{Cosmos, EnvSample};
-use crate::element::{KT, Table};
+use crate::element::Table;
 use crate::kinetics::{CH_BREAK, CH_FORM, bidx, pair};
-use crate::polymer::{Function, LetterPhysics, N_LETTERS, Seq, express, seq_string};
+use crate::polymer::{Function, LETTERS, LetterPhysics, N_LETTERS, Seq, express, seq_string};
 use crate::rng::Rng;
 use crate::surrogate::{Discovery, DiscoveryLog, RateTable};
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,9 @@ pub struct PoolParams {
     pub max_len: usize,
     /// Below this function confidence, fold for real (detail) and log.
     pub fold_below: f64,
+    /// Side-group atoms and Ka atoms not yet joined into monomers.
+    pub raw: [i64; N_LETTERS],
+    pub raw_ka: i64,
 }
 
 impl Default for PoolParams {
@@ -55,6 +58,8 @@ impl Default for PoolParams {
             fold_protect: 0.7,
             max_len: 40,
             fold_below: 0.9,
+            raw: [600, 600, 400, 400, 600],
+            raw_ka: 2600,
         }
     }
 }
@@ -70,6 +75,9 @@ pub struct Chain {
     pub func: Function,
     pub conf: f64,
     pub generation: u32,
+    /// Waiting for its batched fold (kT bin it was born at); function is a placeholder until then.
+    #[serde(default)]
+    pub pending: Option<i32>,
 }
 
 /// Scale-1 surrogate: sequence -> function. Exact cache hit, else the nearest
@@ -83,8 +91,10 @@ pub struct FunctionModel {
     pub nearest: u64,
 }
 
+const NEIGHBOUR_WINDOW: usize = 256;
+
 /// kT bins of 0.05: fold and stability shift with temperature.
-fn kt_bin(kt: f64) -> i32 {
+pub fn kt_bin(kt: f64) -> i32 {
     (kt / 0.05).round() as i32
 }
 
@@ -101,10 +111,39 @@ impl FunctionModel {
     pub fn fold(&mut self, seq: &[u8], kt: f64, ph: &LetterPhysics) -> Function {
         let kb = kt_bin(kt);
         let (_, f) = express(seq, ph, kb as f64 * 0.05, 1);
-        self.cache.insert((seq.to_vec(), kb), f.clone());
-        self.by_len.entry((seq.len(), kb)).or_default().push(seq.to_vec());
-        self.folds += 1;
+        self.insert(seq, kb, f.clone());
         f
+    }
+
+    pub fn cached(&self, seq: &[u8], kb: i32) -> Option<&Function> {
+        self.cache.get(&(seq.to_vec(), kb))
+    }
+
+    fn insert(&mut self, seq: &[u8], kb: i32, f: Function) {
+        self.cache.insert((seq.to_vec(), kb), f);
+        // neighbour search scans only recent folds per bin: relatives of a new
+        // mutant are recent, and an unbounded scan made lookups grow with history
+        let recent = self.by_len.entry((seq.len(), kb)).or_default();
+        if recent.len() >= NEIGHBOUR_WINDOW {
+            recent.remove(0);
+        }
+        recent.push(seq.to_vec());
+        self.folds += 1;
+    }
+
+    /// Surrogate answer if confident enough, else None (caller queues a real fold).
+    pub fn lookup(&mut self, seq: &[u8], kt: f64, fold_below: f64) -> Option<(Function, f64)> {
+        match self.predict(seq, kt) {
+            Some((f, c)) if c >= fold_below => {
+                if c >= 1.0 {
+                    self.exact += 1;
+                } else {
+                    self.nearest += 1;
+                }
+                Some((f, c))
+            }
+            _ => None,
+        }
     }
 
     /// Surrogate prediction and its confidence. None if nothing comparable is cached.
@@ -150,85 +189,145 @@ pub struct PoolStats {
     pub breaks: u64,
     pub ligations: u64,
     pub melts: u64,
+    pub synthesized: u64,
+    pub decayed: u64,
 }
 
-pub struct Pool {
+impl PoolStats {
+    pub fn add(&mut self, o: &PoolStats) {
+        self.copies += o.copies;
+        self.mutations += o.mutations;
+        self.copied_letters += o.copied_letters;
+        self.breaks += o.breaks;
+        self.ligations += o.ligations;
+        self.melts += o.melts;
+        self.synthesized += o.synthesized;
+        self.decayed += o.decayed;
+    }
+}
+
+pub const KA: u8 = 5;
+/// Weak pairing in the dry is this much stronger: no water competing for the bond.
+pub const DRY_PAIR_GAIN: f64 = 2.0;
+/// Extra pairing discrimination per kT of backbone catalysis: a polymerase pocket
+/// pins the incoming monomer against the template (escape from Eigen's error threshold).
+pub const FIDELITY_PER_CUT: f64 = 4.0;
+
+/// Rules and caches shared by every body of water (pond, vesicle interiors).
+#[derive(Clone)]
+pub struct Ctx {
     pub p: PoolParams,
-    pub cosmos: Cosmos,
     pub rates: RateTable,
     pub ph: LetterPhysics,
     pub table: Table,
-    pub chains: Vec<Chain>,
-    pub free: [i64; N_LETTERS],
-    pub t_days: f64,
-    pub env: EnvSample,
     pub model: FunctionModel,
     pub discoveries: DiscoveryLog,
-    pub stats: PoolStats,
     /// Best Ka-Ka barrier cut seen so far; beating it is a discovery.
     pub best_cut: f64,
-    rng: Rng,
+    pub rng: Rng,
     next_id: u64,
+    /// Sequences awaiting a real fold this step, deduplicated.
+    pending: std::collections::HashSet<(Seq, i32)>,
 }
 
-const KA: u8 = 5;
-/// Weak pairing in the dry is this much stronger: no water competing for the bond.
-pub const DRY_PAIR_GAIN: f64 = 2.0;
+impl Ctx {
+    /// Function for a new chain: surrogate if confident, else queue a fold and return a placeholder.
+    pub fn function_for(&mut self, seq: &[u8], kt: f64) -> (Function, f64, Option<i32>) {
+        if let Some((f, c)) = self.model.lookup(seq, kt, self.p.fold_below) {
+            return (f, c, None);
+        }
+        let kb = kt_bin(kt);
+        self.pending.insert((seq.to_vec(), kb));
+        (Function { catalysis: vec![0.0; crate::kinetics::N_PAIRS], ..Default::default() }, 0.0, Some(kb))
+    }
 
-impl Pool {
-    pub fn new(p: PoolParams, cosmos: Cosmos, rates: RateTable, seed: u64) -> Self {
-        let table = Table::new();
-        let ph = LetterPhysics::new(&table);
-        let env = cosmos.sample(0.25);
-        let free = p.monomers;
-        Self {
-            p,
-            cosmos,
-            rates,
-            ph,
-            table,
-            chains: Vec::new(),
-            free,
-            t_days: 0.25,
-            env,
-            model: FunctionModel::default(),
-            discoveries: DiscoveryLog::default(),
-            stats: PoolStats::default(),
-            best_cut: 0.0,
-            rng: Rng::new(seed),
-            next_id: 1,
+    /// Fold every queued sequence in parallel (pure function), memoize, log record catalysts.
+    pub fn resolve(&mut self, t_days: f64) {
+        use rayon::prelude::*;
+        if self.pending.is_empty() {
+            return;
+        }
+        let jobs: Vec<(Seq, i32)> = self.pending.drain().collect();
+        let ph = &self.ph;
+        let done: Vec<(Seq, i32, Function)> = jobs.into_par_iter().map(|(s, kb)| {
+            let (_, f) = express(&s, ph, kb as f64 * 0.05, 1);
+            (s, kb, f)
+        }).collect();
+        let ka = bidx(KA).unwrap();
+        for (s, kb, f) in done {
+            let cut = f.catalysis.get(pair(ka, ka)).copied().unwrap_or(0.0);
+            if cut > self.best_cut + 0.05 {
+                self.best_cut = cut;
+                let n = self.discoveries.entries.len();
+                self.discoveries.log(
+                    n,
+                    Discovery { t_days, scale: 1, region: 0, confidence: 0.0, features: vec![cut, s.len() as f64], note: format!("new best backbone catalyst {} cuts {:.2} kT", seq_string(&s), cut) },
+                );
+            }
+            self.model.insert(&s, kb, f);
         }
     }
 
-    pub fn wet(&self) -> bool {
-        self.env.tide_level > self.p.elevation
+    pub fn new(p: PoolParams, rates: RateTable, seed: u64) -> Self {
+        let table = Table::new();
+        let ph = LetterPhysics::new(&table);
+        Self { p, rates, ph, table, model: FunctionModel::default(), discoveries: DiscoveryLog::default(), best_cut: 0.0, rng: Rng::new(seed), next_id: 1, pending: Default::default() }
     }
 
-    /// Scale-0 features for the pool floor: same shape the rate table was trained on.
-    pub fn features(&self) -> [f64; 4] {
-        let depth = (self.env.tide_level - self.p.elevation).max(0.0);
-        let wet = if self.wet() { 1.0 } else { 0.0 };
-        crate::kinetics::features(self.env.kt, wet, self.env.visible * (-1.5 * depth).exp(), self.env.uv * (-8.0 * depth).exp())
+    /// Fresh dice, same state: shadow mode's detail twin.
+    pub fn reseed(&mut self, seed: u64) {
+        self.rng = Rng::new(seed);
     }
 
-    /// Learned scale-0 rate for a backbone channel, per sweep per unit exposure.
-    fn backbone_rate(&self, ch_base: usize) -> f64 {
-        let ka = bidx(KA).unwrap();
-        let ch = ch_base + pair(ka, ka);
-        let x = self.features();
-        self.rates.rate(&x, ch, self.rates.global_rate(ch), 1.0)
+    pub fn next_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id - 1
     }
 
-    /// Pool catalysis of Ka-Ka bonds, kT of barrier cut. Diluted by chain count vs volume.
-    pub fn backbone_cut(&self) -> f64 {
-        let ka = bidx(KA).unwrap();
-        let p = pair(ka, ka);
-        let total: f64 = self.chains.iter().map(|c| c.func.catalysis.get(p).copied().unwrap_or(0.0)).sum();
-        // saturating: many weak catalysts do not add past the best single site
-        let best = self.chains.iter().map(|c| c.func.catalysis.get(p).copied().unwrap_or(0.0)).fold(0.0, f64::max);
-        best.min(total * 200.0 / self.p.cells)
+    /// Learned scale-0 rate for a bond channel (CH_FORM or CH_BREAK base) between Ka and `z`.
+    pub fn ka_rate(&self, ch_base: usize, z: u8, x: &[f64]) -> f64 {
+        let ch = ch_base + pair(bidx(KA).unwrap(), bidx(z).unwrap());
+        self.rates.rate(x, ch, self.rates.global_rate(ch), 1.0)
     }
+}
 
+/// Where a body of water sits and what it feels this step.
+#[derive(Clone, Copy, Debug)]
+pub struct Site {
+    pub env: EnvSample,
+    pub wet: bool,
+    /// Scale-0 features (kT, wet, light, uv) the rate table was trained on.
+    pub x: [f64; 4],
+    pub t_days: f64,
+}
+
+impl Site {
+    pub fn at(env: EnvSample, elevation: f64, shade: f64) -> Self {
+        let depth = (env.tide_level - elevation).max(0.0);
+        let wet = env.tide_level > elevation;
+        let x = crate::kinetics::features(env.kt, if wet { 1.0 } else { 0.0 }, env.visible * (-1.5 * depth).exp() * (1.0 - shade), env.uv * (-8.0 * depth).exp() * (1.0 - shade));
+        Self { env, wet, x, t_days: env.t_days }
+    }
+}
+
+/// One body of water: chains, free monomers, and raw atoms monomers are made from.
+/// Matter per letter: raw + free + residues. Ka: raw_ka + all free + all residues.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Contents {
+    pub chains: Vec<Chain>,
+    pub free: [i64; N_LETTERS],
+    /// Side-group atoms not yet on a Ka.
+    pub raw: [i64; N_LETTERS],
+    pub raw_ka: i64,
+    /// Volume, lattice cells.
+    pub cells: f64,
+    pub stats: PoolStats,
+}
+
+/// Monomer concentration at which copying runs at its nominal rate.
+const REF_MONOMER_CONC: f64 = 0.3;
+
+impl Contents {
     pub fn residues(&self) -> [i64; N_LETTERS] {
         let mut r = [0; N_LETTERS];
         for c in &self.chains {
@@ -239,51 +338,122 @@ impl Pool {
         r
     }
 
-    /// `paired`: born annealed to a partner strand (a fresh copy, or a piece of a duplex).
-    fn spawn(&mut self, seq: Seq, parent: Option<u64>, generation: u32, paired: bool) {
-        let kt = self.env.kt;
-        let (func, conf, folded) = self.model.get(&seq, kt, &self.ph, self.p.fold_below);
-        if folded {
-            let ka = bidx(KA).unwrap();
-            let cut = func.catalysis.get(pair(ka, ka)).copied().unwrap_or(0.0);
-            if cut > self.best_cut + 0.05 {
-                self.best_cut = cut;
-                self.discoveries.log(
-                    self.discoveries.entries.len(),
-                    Discovery {
-                        t_days: self.t_days,
-                        scale: 1,
-                        region: 0,
-                        confidence: 0.0,
-                        features: vec![cut, seq.len() as f64],
-                        note: format!("new best backbone catalyst {} cuts {:.2} kT", seq_string(&seq), cut),
-                    },
-                );
-            }
+    /// Per-letter totals including raw atoms; plus the Ka total. Matter-ledger view.
+    pub fn matter(&self) -> ([i64; N_LETTERS], i64) {
+        let r = self.residues();
+        let mut m = [0; N_LETTERS];
+        for l in 0..N_LETTERS {
+            m[l] = self.raw[l] + self.free[l] + r[l];
         }
-        let id = self.next_id;
-        self.next_id += 1;
-        self.chains.push(Chain { id, seq, parent, born: self.t_days, paired, func, conf, generation });
+        (m, self.raw_ka + self.free.iter().sum::<i64>() + r.iter().sum::<i64>())
     }
 
-    /// Advance `dt` days. Order: hydrolysis, melting, copying, ligation.
-    pub fn step(&mut self, dt: f64) {
-        self.env = self.cosmos.sample(self.t_days);
-        let kt = self.env.kt;
-        let sweeps = dt * self.p.sweeps_per_day;
-        let cut = self.backbone_cut();
-        let boost = (cut * KT / (kt * KT)).exp();
-        let k_break = self.backbone_rate(CH_BREAK) * boost;
-        let k_form = self.backbone_rate(CH_FORM) * boost;
-        let wet = self.wet();
+    /// Catalysis of scale-0 pair `p` by this body's chains, kT barrier cut.
+    /// Saturates at the best single site; dilution by volume.
+    pub fn cut(&self, p: usize) -> f64 {
+        let mut total = 0.0;
+        let mut best: f64 = 0.0;
+        for c in &self.chains {
+            let v = c.func.catalysis.get(p).copied().unwrap_or(0.0);
+            total += v;
+            best = best.max(v);
+        }
+        best.min(total * 200.0 / self.cells.max(1.0))
+    }
+
+    pub fn backbone_cut(&self) -> f64 {
+        let ka = bidx(KA).unwrap();
+        self.cut(pair(ka, ka))
+    }
+
+    /// Mean catalysis over Ka-letter (monomer synthesis) pairs.
+    pub fn synthesis_cut(&self) -> f64 {
+        let ka = bidx(KA).unwrap();
+        LETTERS.iter().map(|&z| self.cut(pair(ka, bidx(z).unwrap()))).sum::<f64>() / N_LETTERS as f64
+    }
+
+    /// `paired`: born annealed to a partner strand (a fresh copy, or a piece of a duplex).
+    pub fn spawn(&mut self, ctx: &mut Ctx, site: &Site, seq: Seq, parent: Option<u64>, generation: u32, paired: bool) {
+        let (func, conf, pending) = ctx.function_for(&seq, site.env.kt);
+        let id = ctx.next_id();
+        self.chains.push(Chain { id, seq, parent, born: site.t_days, paired, func, conf, generation, pending });
+    }
+
+    /// Fill placeholders from the cache after Ctx::resolve.
+    pub fn apply_folds(&mut self, ctx: &Ctx) {
+        for c in self.chains.iter_mut() {
+            if let Some(kb) = c.pending {
+                if let Some(f) = ctx.model.cached(&c.seq, kb) {
+                    c.func = f.clone();
+                    c.conf = 1.0;
+                    c.pending = None;
+                }
+            }
+        }
+    }
+
+    fn draw_free(&mut self, rng: &mut Rng) -> Option<u8> {
+        let total: i64 = self.free.iter().sum();
+        if total <= 0 {
+            return None;
+        }
+        let mut r = rng.below(total as usize) as i64;
+        for l in 0..N_LETTERS {
+            if r < self.free[l] {
+                self.free[l] -= 1;
+                return Some(l as u8);
+            }
+            r -= self.free[l];
+        }
+        None
+    }
+
+    /// Advance `dt` days. Order: metabolism, hydrolysis, melting, copying, ligation.
+    pub fn step(&mut self, ctx: &mut Ctx, site: &Site, dt: f64) {
+        let mut rng = std::mem::replace(&mut ctx.rng, Rng::new(0));
+        self.step_inner(ctx, site, dt, &mut rng);
+        ctx.rng = rng;
+    }
+
+    fn step_inner(&mut self, ctx: &mut Ctx, site: &Site, dt: f64, rng: &mut Rng) {
+        let kt = site.env.kt;
+        let sweeps = dt * ctx.p.sweeps_per_day;
+        let cells = self.cells.max(1.0);
+        let boost = (self.backbone_cut() / kt).exp();
+        let x = site.x;
+        // A pocket binds small reactants; it can trim a chain end (the exact reverse of
+        // adding a monomer) but cannot swallow a mid-chain bond. Internal bonds stay uncatalysed.
+        let k_break_inner = ctx.ka_rate(CH_BREAK, KA, &x);
+        let k_break_end = k_break_inner * boost;
+        let k_form = ctx.ka_rate(CH_FORM, KA, &x) * boost;
+        let wet = site.wet;
+
+        // Metabolism: Ka + side atom <-> monomer, at learned scale-0 rates for that pair.
+        // A catalyst of the pair speeds both ways (it cannot move the equilibrium).
+        let ka = bidx(KA).unwrap();
+        for (l, &z) in LETTERS.iter().enumerate() {
+            let cat = (self.cut(pair(ka, bidx(z).unwrap())) / kt).exp();
+            let make = rng.poisson(ctx.ka_rate(CH_FORM, z, &x) * cat * (self.raw_ka * self.raw[l]) as f64 / cells * sweeps) as i64;
+            let make = make.min(self.raw_ka).min(self.raw[l]);
+            self.raw_ka -= make;
+            self.raw[l] -= make;
+            self.free[l] += make;
+            let lose = (rng.poisson(ctx.ka_rate(CH_BREAK, z, &x) * cat * self.free[l] as f64 * sweeps) as i64).min(self.free[l]);
+            self.free[l] -= lose;
+            self.raw[l] += lose;
+            self.raw_ka += lose;
+            self.stats.synthesized += make as u64;
+            self.stats.decayed += lose as u64;
+        }
 
         // Hydrolysis / photolysis: per backbone bond, folded bonds partly shielded.
         // Pieces join the next step's population, so each chain is exposed once per step.
         for c in std::mem::take(&mut self.chains) {
-            let shield = 1.0 - self.p.fold_protect * c.func.stability;
-            let p_bond = 1.0 - (-k_break * shield * sweeps).exp();
+            let shield = 1.0 - ctx.p.fold_protect * c.func.stability;
+            let p_inner = 1.0 - (-k_break_inner * shield * sweeps).exp();
+            let p_end = 1.0 - (-k_break_end * shield * sweeps).exp();
             let bonds = c.seq.len().saturating_sub(1);
-            let mut cuts: Vec<usize> = (1..=bonds).filter(|_| self.rng.chance(p_bond)).collect();
+            let mut cuts: Vec<usize> = (1..=bonds).filter(|&b| rng.chance(if b == 1 || b == bonds { p_end } else { p_inner })).collect();
             if cuts.is_empty() {
                 self.chains.push(c);
                 continue;
@@ -297,7 +467,7 @@ impl Pool {
                 if piece.len() == 1 {
                     self.free[piece[0] as usize] += 1;
                 } else {
-                    self.spawn(piece, Some(c.id), c.generation, c.paired);
+                    self.spawn(ctx, site, piece, Some(c.id), c.generation, c.paired);
                 }
             }
         }
@@ -305,10 +475,10 @@ impl Pool {
         // Melting: duplex strands separate in water with Boltzmann odds on mean pair energy.
         if wet {
             for c in self.chains.iter_mut().filter(|c| c.paired) {
-                let mean_pair: f64 = c.seq.iter().map(|&l| self.ph.pair[l as usize].iter().cloned().fold(0.0, f64::max)).sum::<f64>() / c.seq.len() as f64;
+                let mean_pair: f64 = c.seq.iter().map(|&l| ctx.ph.pair[l as usize].iter().cloned().fold(0.0, f64::max)).sum::<f64>() / c.seq.len() as f64;
                 // cooperative: a few-residue core must open at once
                 let p_melt = (-(mean_pair * 3.0) / kt).exp() * 20.0 * dt;
-                if self.rng.chance(p_melt.min(1.0)) {
+                if rng.chance(p_melt.min(1.0)) {
                     c.paired = false;
                     self.stats.melts += 1;
                 }
@@ -318,10 +488,11 @@ impl Pool {
         // Templated copying in the dry: needs unpaired template and monomers.
         if !wet {
             let total_free: i64 = self.free.iter().sum();
-            let frac = total_free as f64 / self.p.monomers.iter().sum::<i64>() as f64;
+            let frac = (total_free as f64 / cells / REF_MONOMER_CONC).min(1.0);
+            let gain = DRY_PAIR_GAIN * (1.0 + FIDELITY_PER_CUT * self.backbone_cut());
             let n = self.chains.len();
             for ci in 0..n {
-                if self.chains[ci].paired || !self.rng.chance((self.p.copy_rate * frac * boost * dt).min(1.0)) {
+                if self.chains[ci].paired || !rng.chance((ctx.p.copy_rate * frac * boost * dt).min(1.0)) {
                     continue;
                 }
                 let template = self.chains[ci].seq.clone();
@@ -332,13 +503,13 @@ impl Pool {
                     let mut w = [0.0; N_LETTERS];
                     let mut sum = 0.0;
                     for l in 0..N_LETTERS {
-                        w[l] = self.free[l].max(0) as f64 * (DRY_PAIR_GAIN * self.ph.pair[t as usize][l] / kt).exp();
+                        w[l] = self.free[l].max(0) as f64 * (gain * ctx.ph.pair[t as usize][l] / kt).exp();
                         sum += w[l];
                     }
-                    if sum <= 0.0 || self.rng.chance(self.p.stall) {
+                    if sum <= 0.0 || rng.chance(ctx.p.stall) {
                         break;
                     }
-                    let mut r = self.rng.f64() * sum;
+                    let mut r = rng.f64() * sum;
                     // fallback: last available letter, in case rounding walks r past the end
                     let mut pick = (0..N_LETTERS).rev().find(|&l| w[l] > 0.0).unwrap();
                     for (l, &wl) in w.iter().enumerate() {
@@ -348,14 +519,14 @@ impl Pool {
                         }
                         r -= wl;
                     }
-                    let best = (0..N_LETTERS).max_by(|&a, &b| self.ph.pair[t as usize][a].total_cmp(&self.ph.pair[t as usize][b])).unwrap();
+                    let best = (0..N_LETTERS).max_by(|&a, &b| ctx.ph.pair[t as usize][a].total_cmp(&ctx.ph.pair[t as usize][b])).unwrap();
                     self.free[pick] -= 1;
                     copy.push(pick as u8);
                     if pick != best {
                         mutations += 1;
                         // a frayed end extends badly: stall odds grow with the pairing shortfall
-                        let shortfall = DRY_PAIR_GAIN * (self.ph.pair[t as usize][best] - self.ph.pair[t as usize][pick]);
-                        if self.rng.chance(1.0 - (-shortfall / kt).exp()) {
+                        let shortfall = gain * (ctx.ph.pair[t as usize][best] - ctx.ph.pair[t as usize][pick]);
+                        if rng.chance(1.0 - (-shortfall / kt).exp()) {
                             break;
                         }
                     }
@@ -367,7 +538,7 @@ impl Pool {
                     self.stats.mutations += mutations;
                     let (pid, gen_) = (self.chains[ci].id, self.chains[ci].generation);
                     // the copy is the other strand of the same duplex: both must melt first
-                    self.spawn(copy, Some(pid), gen_ + 1, true);
+                    self.spawn(ctx, site, copy, Some(pid), gen_ + 1, true);
                 } else {
                     for l in copy {
                         self.free[l as usize] += 1;
@@ -379,15 +550,14 @@ impl Pool {
         // Ligation in the dry: monomer joins a chain end or a monomer (de novo dimer). Mass action on free counts.
         if !wet {
             let total_free: i64 = self.free.iter().sum();
-            let conc = total_free as f64 / self.p.cells;
+            let conc = total_free as f64 / cells;
             let ends = 2.0 * self.chains.len() as f64 + total_free as f64;
-            let expected = k_form * conc * ends * sweeps;
-            let k = self.rng.poisson(expected);
+            let k = rng.poisson(k_form * conc * ends * sweeps);
             for _ in 0..k {
                 let free_now: i64 = self.free.iter().sum();
-                let Some(l) = self.draw_free() else { break };
-                let target = self.rng.below(self.chains.len() + free_now.max(1) as usize);
-                if target < self.chains.len() && self.chains[target].seq.len() >= self.p.max_len {
+                let Some(l) = self.draw_free(rng) else { break };
+                let target = rng.below(self.chains.len() + free_now.max(1) as usize);
+                if target < self.chains.len() && self.chains[target].seq.len() >= ctx.p.max_len {
                     // full-length chain cannot take another letter: no event
                     self.free[l as usize] += 1;
                     continue;
@@ -395,14 +565,14 @@ impl Pool {
                 if target < self.chains.len() {
                     let c = self.chains.swap_remove(target);
                     let mut seq = c.seq.clone();
-                    if self.rng.chance(0.5) {
+                    if rng.chance(0.5) {
                         seq.push(l);
                     } else {
                         seq.insert(0, l);
                     }
-                    self.spawn(seq, Some(c.id), c.generation, c.paired);
-                } else if let Some(m) = self.draw_free() {
-                    self.spawn(vec![l, m], None, 0, false);
+                    self.spawn(ctx, site, seq, Some(c.id), c.generation, c.paired);
+                } else if let Some(m) = self.draw_free(rng) {
+                    self.spawn(ctx, site, vec![l, m], None, 0, false);
                 } else {
                     self.free[l as usize] += 1;
                     break;
@@ -415,15 +585,14 @@ impl Pool {
         // Pairs of chains ~ n^2 / 2, each with 4 end-to-end orientations.
         if !wet && self.chains.len() >= 2 {
             let n = self.chains.len() as f64;
-            let expected = k_form * 2.0 * n * (n - 1.0) / self.p.cells * sweeps;
-            let k = self.rng.poisson(expected);
+            let k = rng.poisson(k_form * 2.0 * n * (n - 1.0) / cells * sweeps);
             for _ in 0..k {
                 let len = self.chains.len();
                 if len < 2 {
                     break;
                 }
-                let (i, j) = (self.rng.below(len), self.rng.below(len));
-                if i == j || self.chains[i].seq.len() + self.chains[j].seq.len() > self.p.max_len {
+                let (i, j) = (rng.below(len), rng.below(len));
+                if i == j || self.chains[i].seq.len() + self.chains[j].seq.len() > ctx.p.max_len {
                     continue;
                 }
                 let (hi, lo) = (i.max(j), i.min(j));
@@ -431,7 +600,7 @@ impl Pool {
                 let b = self.chains.swap_remove(lo);
                 let mut seq = a.seq.clone();
                 seq.extend_from_slice(&b.seq);
-                self.spawn(seq, Some(a.id), a.generation.max(b.generation), a.paired || b.paired);
+                self.spawn(ctx, site, seq, Some(a.id), a.generation.max(b.generation), a.paired || b.paired);
                 self.stats.ligations += 1;
             }
         }
@@ -439,33 +608,24 @@ impl Pool {
         // Functions are temperature dependent: refresh a slice each step.
         if !self.chains.is_empty() {
             for _ in 0..(self.chains.len() / 20).max(1) {
-                let ci = self.rng.below(self.chains.len());
+                let ci = rng.below(self.chains.len());
+                if self.chains[ci].pending.is_some() {
+                    continue;
+                }
                 let seq = self.chains[ci].seq.clone();
-                let (f, c, _) = self.model.get(&seq, kt, &self.ph, self.p.fold_below);
-                self.chains[ci].func = f;
-                self.chains[ci].conf = c;
+                let (f, c, pending) = ctx.function_for(&seq, kt);
+                if pending.is_none() {
+                    self.chains[ci].func = f;
+                    self.chains[ci].conf = c;
+                } else {
+                    // keep the old function until the new temperature's fold lands
+                    self.chains[ci].pending = pending;
+                }
             }
         }
-        self.t_days += dt;
     }
 
-    fn draw_free(&mut self) -> Option<u8> {
-        let total: i64 = self.free.iter().sum();
-        if total <= 0 {
-            return None;
-        }
-        let mut r = self.rng.below(total as usize) as i64;
-        for l in 0..N_LETTERS {
-            if r < self.free[l] {
-                self.free[l] -= 1;
-                return Some(l as u8);
-            }
-            r -= self.free[l];
-        }
-        None
-    }
-
-    /// Most common sequences: the pool's "species".
+    /// Most common sequences: the "species".
     pub fn top_sequences(&self, n: usize) -> Vec<(String, usize)> {
         let mut m: HashMap<&[u8], usize> = HashMap::new();
         for c in &self.chains {
@@ -475,6 +635,40 @@ impl Pool {
         v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         v.truncate(n);
         v
+    }
+}
+
+/// A single open tide pool: one Contents at a fixed beach elevation.
+pub struct Pool {
+    pub ctx: Ctx,
+    pub c: Contents,
+    pub cosmos: Cosmos,
+    pub env: EnvSample,
+    pub t_days: f64,
+}
+
+impl Pool {
+    pub fn new(p: PoolParams, cosmos: Cosmos, rates: RateTable, seed: u64) -> Self {
+        let env = cosmos.sample(0.25);
+        let c = Contents { free: p.monomers, raw: p.raw, raw_ka: p.raw_ka, cells: p.cells, ..Default::default() };
+        Self { ctx: Ctx::new(p, rates, seed), c, cosmos, env, t_days: 0.25 }
+    }
+
+    pub fn site(&self) -> Site {
+        Site::at(self.env, self.ctx.p.elevation, 0.0)
+    }
+
+    pub fn wet(&self) -> bool {
+        self.env.tide_level > self.ctx.p.elevation
+    }
+
+    pub fn step(&mut self, dt: f64) {
+        self.env = self.cosmos.sample(self.t_days);
+        let site = self.site();
+        self.c.step(&mut self.ctx, &site, dt);
+        self.ctx.resolve(self.t_days);
+        self.c.apply_folds(&self.ctx);
+        self.t_days += dt;
     }
 }
 
@@ -492,6 +686,11 @@ mod tests {
                 t.record_sample(&x);
                 t.record(&x, CH_FORM + pair(ka, ka), 2.0, 100.0);
                 t.record(&x, CH_BREAK + pair(ka, ka), if wet > 0.5 { 3.0 } else { 0.3 }, 10000.0);
+                for z in LETTERS {
+                    let kz = pair(ka, bidx(z).unwrap());
+                    t.record(&x, CH_FORM + kz, 1.0, 100.0);
+                    t.record(&x, CH_BREAK + kz, 0.1, 10000.0);
+                }
             }
         }
         t
@@ -500,16 +699,16 @@ mod tests {
     #[test]
     fn matter_closed_per_letter() {
         let mut p = Pool::new(PoolParams::default(), Cosmos::new(CosmosParams::default()), toy_rates(), 3);
-        let start = p.p.monomers;
+        let start = p.c.matter();
         for _ in 0..400 {
             p.step(0.02);
-            let r = p.residues();
             for l in 0..N_LETTERS {
-                assert!(p.free[l] >= 0);
-                assert_eq!(p.free[l] + r[l], start[l], "letter {l} leaked at t={}", p.t_days);
+                assert!(p.c.free[l] >= 0 && p.c.raw[l] >= 0);
             }
+            assert_eq!(p.c.matter(), start, "matter leaked at t={}", p.t_days);
         }
-        assert!(p.stats.ligations > 0 && p.stats.copies > 0, "{:?}", p.stats);
+        let s = &p.c.stats;
+        assert!(s.ligations > 0 && s.copies > 0 && s.synthesized > 0 && s.decayed > 0, "{s:?}");
     }
 
     #[test]
@@ -519,10 +718,10 @@ mod tests {
         for _ in 0..300 {
             p.step(0.02);
         }
-        assert_eq!(p.stats.melts, 0);
-        assert!(p.stats.copies > 0);
+        assert_eq!(p.c.stats.melts, 0);
+        assert!(p.c.stats.copies > 0);
         // copies are born paired, so a copy never templates before a melt: no generation 2
-        let max_gen = p.chains.iter().map(|c| c.generation).max().unwrap_or(0);
+        let max_gen = p.c.chains.iter().map(|c| c.generation).max().unwrap_or(0);
         assert!(max_gen <= 1, "copy of a copy without melting: generation {max_gen}");
     }
 
@@ -532,7 +731,7 @@ mod tests {
         for _ in 0..400 {
             p.step(0.02);
         }
-        let s = &p.stats;
+        let s = &p.c.stats;
         assert!(s.copied_letters > 100);
         let error = s.mutations as f64 / s.copied_letters as f64;
         assert!(error < 0.6, "copy error {error}");

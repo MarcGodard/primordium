@@ -19,7 +19,6 @@ var env := {}
 var stats := {}
 var selected := -1
 var info := {}
-var residue := -1
 var wet_smooth := 1.0
 var dragging := false
 var timer := 0.0
@@ -75,12 +74,10 @@ func _ready() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 2
 	add_child(layer)
-	inset = Control.new()
+	inset = load("res://scripts/fold_inset.gd").new()
 	inset.position = Vector2(12, 430)
 	inset.size = Vector2(330, 500)
-	inset.mouse_filter = Control.MOUSE_FILTER_STOP
-	inset.draw.connect(_draw_inset)
-	inset.gui_input.connect(_inset_input)
+	inset.visible = false
 	layer.add_child(inset)
 	if ok:
 		sim.step(1, DT)
@@ -89,7 +86,7 @@ func activate(on: bool) -> void:
 	visible = on
 	set_process(on)
 	set_process_unhandled_input(on)
-	inset.visible = on
+	inset.visible = on and not info.is_empty()
 	if on:
 		cam.make_current()
 
@@ -118,8 +115,6 @@ func _process(delta: float) -> void:
 	fm.set_shader_parameter("wet", wet_smooth)
 	fm.set_shader_parameter("light", light)
 	lines.queue_redraw()
-	if residue >= 0:
-		inset.queue_redraw()
 	timer -= delta
 	if timer <= 0.0:
 		timer = 0.4
@@ -130,8 +125,8 @@ func _process(delta: float) -> void:
 				selected = -1
 			elif info.id != selected:
 				selected = info.id
-				residue = min(residue, info.letters.size() - 1)
-		inset.queue_redraw()
+		inset.show_chain(info)
+		inset.visible = not info.is_empty()
 
 func _draw_lines() -> void:
 	var l: PackedVector2Array = sim.backbone_lines()
@@ -156,7 +151,9 @@ func pick_longest() -> void:
 					best = id
 	selected = best
 	info = sim.chain_info(best) if best >= 0 else {}
-	residue = 2 if best_len > 2 else -1
+	inset.show_chain(info)
+	inset.visible = not info.is_empty()
+	inset.residue = 2 if best_len > 2 else -1
 
 func hud_text() -> String:
 	if not ok:
@@ -198,9 +195,9 @@ func _unhandled_input(e: InputEvent) -> void:
 			dragging = e.pressed
 		elif e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
 			selected = sim.chain_at(screen_to_world(e.position), 6.0)
-			residue = -1
 			info = sim.chain_info(selected) if selected >= 0 else {}
-			inset.queue_redraw()
+			inset.show_chain(info)
+			inset.visible = not info.is_empty()
 	elif e is InputEventMouseMotion and dragging:
 		cam.position -= e.relative / cam.zoom
 	elif e is InputEventKey and e.pressed:
@@ -209,90 +206,6 @@ func _unhandled_input(e: InputEvent) -> void:
 				speed_idx = 0 if speed_idx != 0 else 2
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
 				speed_idx = e.keycode - KEY_1
-
-## Close-up: selected chain's fold, letters, catalytic sites; then one residue's atoms.
-func _inset_layout() -> Dictionary:
-	var fold: PackedVector2Array = info.fold
-	var lo := Vector2(1e9, 1e9)
-	var hi := Vector2(-1e9, -1e9)
-	for p in fold:
-		lo = lo.min(p)
-		hi = hi.max(p)
-	var span: Vector2 = (hi - lo) + Vector2.ONE
-	var box := Rect2(10, 30, 310, 230)
-	var s: float = min(box.size.x / span.x, box.size.y / span.y)
-	s = min(s, 34.0)
-	var off: Vector2 = box.position + (box.size - span * s) * 0.5 - lo * s + Vector2(s, s) * 0.5
-	return {"s": s, "off": off}
-
-func _inset_input(e: InputEvent) -> void:
-	if not (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT) or info.is_empty():
-		return
-	var lay := _inset_layout()
-	var fold: PackedVector2Array = info.fold
-	for k in fold.size():
-		if (fold[k] * lay.s + lay.off).distance_to(e.position) < lay.s * 0.5:
-			residue = k
-			inset.queue_redraw()
-			return
-
-func _draw_inset() -> void:
-	if info.is_empty():
-		return
-	var pal: Array = load("res://scripts/chem_view.gd").PALETTE
-	var font := ThemeDB.fallback_font
-	inset.draw_rect(Rect2(0, 0, 330, 500), Color(0.03, 0.05, 0.08, 0.86))
-	inset.draw_string(font, Vector2(10, 20), "Fold close-up (dashes = catalytic pockets)", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
-	var lay := _inset_layout()
-	var fold: PackedVector2Array = info.fold
-	var letters: PackedByteArray = info.letters
-	var s: float = lay.s
-	for k in fold.size() - 1:
-		inset.draw_line(fold[k] * s + lay.off, fold[k + 1] * s + lay.off, Color(0.9, 0.9, 0.85, 0.8), 3.0)
-	var sites: PackedVector2Array = info.sites
-	for k in range(0, sites.size(), 2):
-		inset.draw_dashed_line(sites[k] * s + lay.off, sites[k + 1] * s + lay.off, Color(1.0, 0.85, 0.3, 0.9), 2.0, 4.0)
-	var zs := [1, 3, 4, 6, 7]
-	for k in fold.size():
-		var c: Vector2 = fold[k] * s + lay.off
-		var z: int = zs[letters[k]]
-		inset.draw_circle(c, s * 0.32, pal[z])
-		if k == residue:
-			inset.draw_arc(c, s * 0.45, 0, TAU, 24, Color(1, 1, 0.4), 2.0)
-		inset.draw_string(font, c + Vector2(-4, 4), "hlbof"[letters[k]], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.8))
-	if residue < 0 or residue >= letters.size():
-		inset.draw_string(font, Vector2(10, 290), "click a residue to see its atoms", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.5))
-		return
-	# scale 0 inside scale 1: the residue's atoms with their shells
-	var letter: int = letters[residue]
-	inset.draw_string(font, Vector2(10, 290), "Residue %d: Ka backbone + %s side group" % [residue, sim.letter_name(letter)], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
-	var atoms: Array = sim.residue_atoms(letter)
-	var names := ["", "Hy", "Ne", "Li", "Bo", "Ka", "Ox", "Fl", "Ar"]
-	var t := Time.get_ticks_msec() / 1000.0
-	for k in atoms.size():
-		var a: Dictionary = atoms[k]
-		var c: Vector2 = Vector2(165, 330) + a.pos * 62.0
-		if k > 0:
-			inset.draw_line(Vector2(165, 330) + atoms[k - 1].pos * 62.0, c, Color(1, 1, 1, 0.7), 3.0)
-	for k in atoms.size():
-		var a: Dictionary = atoms[k]
-		var c: Vector2 = Vector2(165, 330) + a.pos * 62.0
-		var z: int = a.z
-		var col: Color = pal[z]
-		inset.draw_circle(c, 26, Color(col, 0.18))
-		inset.draw_circle(c, 5, col.lerp(Color.WHITE, 0.4))
-		inset.draw_arc(c, 12, 0, TAU, 24, Color(col, 0.6), 1.0)
-		for e in min(z, 2):
-			var ang: float = t * 2.3 + PI * e + k
-			inset.draw_circle(c + Vector2(cos(ang), sin(ang)) * 12, 2.2, Color(0.6, 0.85, 1.0))
-		var outer: int = max(z - 2, 0)
-		if outer > 0:
-			inset.draw_arc(c, 22, 0, TAU, 32, Color(col, 0.6), 1.0)
-		for e in outer:
-			var ang: float = -t * 1.1 + TAU * e / outer + k
-			var shared: bool = e < a.bonds
-			inset.draw_circle(c + Vector2(cos(ang), sin(ang)) * 22, 2.6, Color.WHITE if shared else Color(0.55, 0.8, 1.0))
-		inset.draw_string(font, c + Vector2(28, 5), "%s (Z=%d)" % [names[z], z], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.75))
 
 func warm(n: int) -> void:
 	sim.step(n, DT)

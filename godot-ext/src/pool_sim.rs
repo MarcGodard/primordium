@@ -28,7 +28,7 @@ impl PoolSim {
             return f.clone();
         }
         let p = self.pool.as_ref().unwrap();
-        let (f, _) = polymer::express_ensemble(seq, &p.ph, p.env.kt, 1, 1, 0.5);
+        let (f, _) = polymer::express_ensemble(seq, &p.ctx.ph, p.env.kt, 1, 1, 0.5);
         if self.folds.len() > 20000 {
             self.folds.clear();
         }
@@ -39,9 +39,9 @@ impl PoolSim {
     fn sync_layout(&mut self) {
         let rng = self.rng.get_or_insert_with(|| Rng::new(42));
         let pool = self.pool.as_ref().unwrap();
-        let mut next = HashMap::with_capacity(pool.chains.len());
+        let mut next = HashMap::with_capacity(pool.c.chains.len());
         let wet = pool.wet();
-        for c in &pool.chains {
+        for c in &pool.c.chains {
             let (mut pos, mut vel) = self.layout.get(&c.id).copied().unwrap_or_else(|| {
                 // new chains appear beside their parent, else anywhere
                 let at = c.parent.and_then(|p| self.layout.get(&p)).map(|(p, _)| *p + Vector2::new(rng.f64() as f32 * 6.0 - 3.0, rng.f64() as f32 * 6.0 - 3.0));
@@ -99,14 +99,14 @@ impl PoolSim {
 
     #[func]
     fn residue_count(&self) -> i64 {
-        self.pool.as_ref().map_or(0, |p| p.chains.iter().map(|c| c.seq.len() as i64).sum())
+        self.pool.as_ref().map_or(0, |p| p.c.chains.iter().map(|c| c.seq.len() as i64).sum())
     }
 
     /// MultiMesh 2D buffer, one instance per residue: custom = (side-group Z, 2 backbone bonds, highlight, phase).
     #[func]
     fn instance_buffer(&mut self, selected: i64) -> PackedFloat32Array {
         let Some(pool) = self.pool.as_ref() else { return PackedFloat32Array::new() };
-        let chains: Vec<(u64, Vec<u8>)> = pool.chains.iter().map(|c| (c.id, c.seq.clone())).collect();
+        let chains: Vec<(u64, Vec<u8>)> = pool.c.chains.iter().map(|c| (c.id, c.seq.clone())).collect();
         let mut v = Vec::new();
         for (id, seq) in chains {
             let fold = self.fold_of(&seq);
@@ -126,7 +126,7 @@ impl PoolSim {
     #[func]
     fn backbone_lines(&mut self) -> PackedVector2Array {
         let Some(pool) = self.pool.as_ref() else { return PackedVector2Array::new() };
-        let chains: Vec<(u64, Vec<u8>)> = pool.chains.iter().map(|c| (c.id, c.seq.clone())).collect();
+        let chains: Vec<(u64, Vec<u8>)> = pool.c.chains.iter().map(|c| (c.id, c.seq.clone())).collect();
         let mut v = Vec::new();
         for (id, seq) in chains {
             let fold = self.fold_of(&seq);
@@ -158,7 +158,7 @@ impl PoolSim {
         let mut d = VarDictionary::new();
         let Some(pool) = self.pool.as_ref() else { return d };
         // chains get new ids when they grow, break or join: follow the lineage to a descendant
-        let found = pool.chains.iter().find(|c| c.id as i64 == id).or_else(|| pool.chains.iter().filter(|c| c.parent == Some(id as u64)).max_by_key(|c| c.seq.len()));
+        let found = pool.c.chains.iter().find(|c| c.id as i64 == id).or_else(|| pool.c.chains.iter().filter(|c| c.parent == Some(id as u64)).max_by_key(|c| c.seq.len()));
         let Some(c) = found.cloned() else { return d };
         let id = c.id as i64;
         let fold = self.fold_of(&c.seq);
@@ -248,7 +248,7 @@ impl PoolSim {
         d.set("moon0_phase", (e.t_days / cp.moon_periods[0]).fract());
         d.set("moon1_phase", (e.t_days / cp.moon_periods[1]).fract());
         d.set("wet", p.wet());
-        d.set("elevation", p.p.elevation);
+        d.set("elevation", p.ctx.p.elevation);
         d.set("ledger_drift", 0i64);
         d
     }
@@ -257,21 +257,21 @@ impl PoolSim {
     fn stats(&self) -> VarDictionary {
         let mut d = VarDictionary::new();
         let Some(p) = self.pool.as_ref() else { return d };
-        let n = p.chains.len();
+        let n = p.c.chains.len();
         d.set("chains", n as i64);
-        d.set("mean_len", p.chains.iter().map(|c| c.seq.len()).sum::<usize>() as f64 / n.max(1) as f64);
-        d.set("max_len", p.chains.iter().map(|c| c.seq.len()).max().unwrap_or(0) as i64);
-        d.set("max_generation", p.chains.iter().map(|c| c.generation).max().unwrap_or(0) as i64);
-        d.set("copies", p.stats.copies as i64);
-        d.set("copy_error", p.stats.mutations as f64 / p.stats.copied_letters.max(1) as f64);
-        d.set("free_monomers", p.free.iter().sum::<i64>());
-        d.set("backbone_cut", p.backbone_cut());
-        d.set("best_cut", p.best_cut);
-        d.set("folds", p.model.folds as i64);
-        d.set("exact", p.model.exact as i64);
-        d.set("nearest", p.model.nearest as i64);
+        d.set("mean_len", p.c.chains.iter().map(|c| c.seq.len()).sum::<usize>() as f64 / n.max(1) as f64);
+        d.set("max_len", p.c.chains.iter().map(|c| c.seq.len()).max().unwrap_or(0) as i64);
+        d.set("max_generation", p.c.chains.iter().map(|c| c.generation).max().unwrap_or(0) as i64);
+        d.set("copies", p.c.stats.copies as i64);
+        d.set("copy_error", p.c.stats.mutations as f64 / p.c.stats.copied_letters.max(1) as f64);
+        d.set("free_monomers", p.c.free.iter().sum::<i64>());
+        d.set("backbone_cut", p.c.backbone_cut());
+        d.set("best_cut", p.ctx.best_cut);
+        d.set("folds", p.ctx.model.folds as i64);
+        d.set("exact", p.ctx.model.exact as i64);
+        d.set("nearest", p.ctx.model.nearest as i64);
         let mut disc = VarArray::new();
-        for e in p.discoveries.entries.iter().rev().take(5) {
+        for e in p.ctx.discoveries.entries.iter().rev().take(5) {
             disc.push(&format!("day {:.1}: {}", e.t_days, e.note).to_variant());
         }
         d.set("discoveries", &disc);
