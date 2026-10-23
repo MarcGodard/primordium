@@ -13,6 +13,7 @@ fn main() {
     let mode = args.get(1).map(String::as_str).unwrap_or("chem");
     match mode {
         "chem" => chem(&args),
+        "fold" => fold(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -42,4 +43,25 @@ fn chem(args: &[String]) {
     }
     let secs = start.elapsed().as_secs_f64();
     println!("{} sweeps in {:.2}s = {:.0} sweeps/s", total, secs, total as f64 / secs);
+}
+
+fn fold(args: &[String]) {
+    use primordium_core::element::Table;
+    use primordium_core::kinetics::{BONDABLE, pair_members};
+    use primordium_core::polymer::{LetterPhysics, express, parse_seq};
+    let kt: f64 = arg(args, "kt", 1.0);
+    let ph = LetterPhysics::new(&Table::new());
+    println!("pair kT: {:?}", ph.pair);
+    println!("hydropathy: {:?}", ph.hydropathy);
+    for s in args.iter().skip(2).filter(|a| !a.starts_with("--")) {
+        let seq = parse_seq(s);
+        let (f, func) = express(&seq, &ph, kt, 1);
+        let (p, cut) = func.best_catalysis();
+        let (a, b) = pair_members(p);
+        println!(
+            "{s}: E={:.2} stab={:.3} amph={:.2} pig={:.2} best cut {:.2} kT on {}-{}",
+            f.energy, func.stability, func.amphiphile, func.pigment, cut,
+            primordium_core::element::NAMES[BONDABLE[a] as usize - 1], primordium_core::element::NAMES[BONDABLE[b] as usize - 1]
+        );
+    }
 }

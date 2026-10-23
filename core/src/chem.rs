@@ -347,19 +347,18 @@ impl ChemWorld {
         }
         let ny = ny.rem_euclid(self.p.height as i32);
         let wet_old = self.wet(ox);
-        if !wet_old && !self.rng.chance(self.p.dry_mobility) {
+        // Either end dry thins the move both ways, so drying slows without biasing where atoms sit.
+        if (!wet_old || !self.wet(nx)) && !self.rng.chance(self.p.dry_mobility) {
             return;
         }
-        for &j in &a.bonds[..a.nb as usize] {
+        // Weak pairs are rigid like covalent bonds: only try_weak makes or breaks them,
+        // since a move has no reverse that re-forms a pair (detailed balance).
+        for &j in a.bonds[..a.nb as usize].iter().chain((a.weak != NONE).then_some(&a.weak)) {
             if !self.adjacent(&self.atoms[j as usize], nx, ny) {
                 return;
             }
         }
         let mut d_e = 0.0;
-        let weak_breaks = a.weak != NONE && !self.adjacent(&self.atoms[a.weak as usize], nx, ny);
-        if weak_breaks {
-            d_e += self.table.weak[a.z as usize][self.atoms[a.weak as usize].z as usize] as f64;
-        }
 
         // Solvation (kinetic): E = -s * sum over atom-water contacts of hydropathy.
         let s = self.p.solvation * KT;
@@ -392,9 +391,6 @@ impl ChemWorld {
 
         if !self.accept(d_e) {
             return;
-        }
-        if weak_breaks {
-            self.break_weak(i);
         }
         self.grid[oc] = NONE;
         self.grid[nc] = i;
@@ -444,15 +440,14 @@ impl ChemWorld {
         let fa = self.free_valence(i);
         let fb = self.free_valence(j);
         let e_ab = self.table.bond[za][zb];
-        if e_ab == 0 {
+        // A weakly paired couple must unpair (try_weak) before going covalent: condense
+        // from the paired state has no reverse into it.
+        if e_ab == 0 || a.weak == j {
             return;
         }
         if fa > 0 && fb > 0 {
             // Condense. In water, dG = -E + hydrolysis.
             if self.rng.chance(arrhenius(self.p.barrier_form)) && self.accept(hydro - e_ab as f64) {
-                if a.weak == j {
-                    self.break_weak(i);
-                }
                 self.link(i, j);
                 self.book(-e_ab);
                 self.counts.forms += 1;
@@ -463,9 +458,6 @@ impl ChemWorld {
             let e_bc = self.table.bond[zb][self.atoms[c as usize].z as usize];
             let d = (e_bc - e_ab) as f64;
             if self.rng.chance(arrhenius(self.p.barrier_exchange)) && self.accept(d) {
-                if a.weak == j {
-                    self.break_weak(i);
-                }
                 self.unlink(j, c);
                 self.link(i, j);
                 self.book(e_bc - e_ab);
@@ -725,7 +717,10 @@ mod tests {
                 assert!(w.adjacent(b, a.x as i32, a.y as i32));
             }
             if a.weak != NONE {
-                assert_eq!(w.atoms[a.weak as usize].weak, i as u32);
+                let b = &w.atoms[a.weak as usize];
+                assert_eq!(b.weak, i as u32);
+                assert!(w.adjacent(b, a.x as i32, a.y as i32), "weak partners adjacent");
+                assert!(!a.bonded_to(a.weak), "weak and covalent never share a pair");
             }
             assert_eq!(w.atom_at(a.x as i32, a.y as i32), Some(i as u32));
         }

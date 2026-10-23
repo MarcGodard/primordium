@@ -1,0 +1,295 @@
+//! Scale 1: sequence polymers. Detailed model = lattice folding scored with
+//! scale-0 energies; function falls out of the fold, never from a lookup.
+//!
+//! Backbone atom Ka is trivalent: two backbone bonds plus one side group, so a
+//! chain is a sequence of side-group letters. Letters are scale-0 elements
+//! bonded to Ka (valence-2 letters carry an Hy cap). Everything a letter does
+//! here (stickiness, pairing, water preference, colour) is read from the
+//! scale-0 table.
+//!
+//! Function vector of a folded chain:
+//!   - catalysis[p]: barrier cut (kT) for forming scale-0 bond pair p, from
+//!     surface "sites" (two exposed residues in contact) that bind the two
+//!     reactants with weak bonds and hold them adjacent;
+//!   - stability: fraction of time folded at this kT (hot unfolds, loses function);
+//!   - amphiphile: hydrophobic-tail / hydrophilic-head score (membrane builder);
+//!   - pigment: light capture.
+
+use crate::element::{KT, Table};
+use crate::kinetics::{BONDABLE, N_PAIRS, NB, bidx, pair};
+use crate::rng::Rng;
+use serde::{Deserialize, Serialize};
+
+/// Letter alphabet as side-group Z. Nobles cannot bond; Ka as side group is a branch (excluded).
+pub const LETTERS: [u8; 5] = [1, 3, 4, 6, 7];
+pub const LETTER_NAMES: [&str; 5] = ["Hy", "Li", "Bo", "Ox", "Fl"];
+pub const N_LETTERS: usize = LETTERS.len();
+
+pub type Seq = Vec<u8>;
+
+pub fn seq_string(s: &[u8]) -> String {
+    s.iter().map(|&l| ['h', 'l', 'b', 'o', 'f'][l as usize]).collect()
+}
+
+pub fn parse_seq(s: &str) -> Seq {
+    s.chars().filter_map(|c| "hlbof".find(c).map(|i| i as u8)).collect()
+}
+
+/// Per-letter physics, derived once from the scale-0 table.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LetterPhysics {
+    /// Weak-bond energy between letters, kT.
+    pub pair: [[f64; N_LETTERS]; N_LETTERS],
+    /// Weak-bond energy letter -> scale-0 bondable element, kT. Reactant binding.
+    pub bind: [[f64; NB]; N_LETTERS],
+    pub hydropathy: [f64; N_LETTERS],
+    pub absorb: [f64; N_LETTERS],
+}
+
+impl LetterPhysics {
+    pub fn new(t: &Table) -> Self {
+        let mut pair = [[0.0; N_LETTERS]; N_LETTERS];
+        let mut bind = [[0.0; NB]; N_LETTERS];
+        let mut hydropathy = [0.0; N_LETTERS];
+        let mut absorb = [0.0; N_LETTERS];
+        for (i, &zi) in LETTERS.iter().enumerate() {
+            for (j, &zj) in LETTERS.iter().enumerate() {
+                pair[i][j] = t.weak[zi as usize][zj as usize] as f64 / KT;
+            }
+            for (k, &zk) in BONDABLE.iter().enumerate() {
+                bind[i][k] = t.weak[zi as usize][zk as usize] as f64 / KT;
+            }
+            let e = t.get(zi);
+            // valence-2 letters carry an Hy cap: average the two atoms' water preference
+            hydropathy[i] = if e.valence == 2 { 0.5 * (e.hydropathy + t.get(1).hydropathy) } else { e.hydropathy };
+            absorb[i] = e.absorb;
+        }
+        Self { pair, bind, hydropathy, absorb }
+    }
+}
+
+const SQ: [(i32, i32); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+
+/// A self-avoiding 2D walk: one lattice point per residue.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Fold {
+    pub pos: Vec<(i32, i32)>,
+    pub energy: f64,
+}
+
+/// Contact energy of residues i, j (non-consecutive, lattice-adjacent), kT.
+/// Hydrophobic burial plus weak pairing between side groups.
+fn contact(ph: &LetterPhysics, a: u8, b: u8) -> f64 {
+    let (ha, hb) = (ph.hydropathy[a as usize], ph.hydropathy[b as usize]);
+    let hydrophobic = if ha < 0.0 && hb < 0.0 { 1.4 * (ha * hb).sqrt() } else { 0.0 };
+    -(hydrophobic + ph.pair[a as usize][b as usize])
+}
+
+fn energy(seq: &[u8], pos: &[(i32, i32)], ph: &LetterPhysics) -> f64 {
+    let mut e = 0.0;
+    for i in 0..pos.len() {
+        for j in (i + 2)..pos.len() {
+            let d = (pos[i].0 - pos[j].0).abs() + (pos[i].1 - pos[j].1).abs();
+            if d == 1 {
+                e += contact(ph, seq[i], seq[j]);
+            }
+        }
+    }
+    e
+}
+
+fn self_avoiding(pos: &[(i32, i32)]) -> bool {
+    let mut v: Vec<_> = pos.to_vec();
+    v.sort();
+    v.windows(2).all(|w| w[0] != w[1])
+}
+
+/// Anneal a fold from a straight chain: pivot moves, Metropolis, cooling to `kt`.
+/// Deterministic per (seq, seed). Cost ~ steps * len^2: fine for len <= 32.
+pub fn fold(seq: &[u8], ph: &LetterPhysics, kt: f64, steps: usize, seed: u64) -> Fold {
+    let n = seq.len();
+    let mut pos: Vec<(i32, i32)> = (0..n as i32).map(|i| (i, 0)).collect();
+    if n < 4 {
+        let e = energy(seq, &pos, ph);
+        return Fold { pos, energy: e };
+    }
+    let mut rng = Rng::new(seed ^ seq.iter().fold(0xcbf29ce484222325u64, |h, &l| (h ^ l as u64).wrapping_mul(0x100000001b3)));
+    let mut e = energy(seq, &pos, ph);
+    let mut best = (pos.clone(), e);
+    for s in 0..steps {
+        let temp = kt * (1.0 + 4.0 * (1.0 - s as f64 / steps as f64));
+        let pivot = 1 + rng.below(n - 2);
+        let rot = 1 + rng.below(3); // 90, 180, 270 degrees
+        let (px, py) = pos[pivot];
+        let mut cand = pos.clone();
+        for p in cand.iter_mut().skip(pivot + 1) {
+            let (mut dx, mut dy) = (p.0 - px, p.1 - py);
+            for _ in 0..rot {
+                (dx, dy) = (-dy, dx);
+            }
+            *p = (px + dx, py + dy);
+        }
+        if !self_avoiding(&cand) {
+            continue;
+        }
+        let ce = energy(seq, &cand, ph);
+        if ce <= e || rng.chance(((e - ce) / temp).exp()) {
+            pos = cand;
+            e = ce;
+            if e < best.1 {
+                best = (pos.clone(), e);
+            }
+        }
+    }
+    let (mut pos, energy) = best;
+    // canonical frame: start at origin, first step +x
+    let (ox, oy) = pos[0];
+    let (fx, fy) = (pos[1].0 - ox, pos[1].1 - oy);
+    for p in pos.iter_mut() {
+        let (mut dx, mut dy) = (p.0 - ox, p.1 - oy);
+        let mut k = 0;
+        let (mut ax, mut ay) = (fx, fy);
+        while (ax, ay) != (1, 0) && k < 4 {
+            (ax, ay) = (ay, -ax);
+            (dx, dy) = (dy, -dx);
+            k += 1;
+        }
+        *p = (dx, dy);
+    }
+    Fold { pos, energy }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Function {
+    /// Barrier cut per scale-0 bond pair, kT. Already scaled by stability.
+    pub catalysis: Vec<f64>,
+    pub stability: f64,
+    pub amphiphile: f64,
+    pub pigment: f64,
+    /// Fold energy, kT (negative = compact).
+    pub fold_energy: f64,
+}
+
+impl Function {
+    pub fn best_catalysis(&self) -> (usize, f64) {
+        self.catalysis.iter().cloned().enumerate().fold((0, 0.0), |a, (i, v)| if v > a.1 { (i, v) } else { a })
+    }
+
+    /// Flat vector for distance/accuracy comparisons.
+    pub fn as_vec(&self) -> Vec<f64> {
+        let mut v = self.catalysis.clone();
+        v.extend_from_slice(&[self.stability, self.amphiphile, self.pigment]);
+        v
+    }
+}
+
+/// Folding entropy per residue, kT: what a fold must beat to stay folded.
+pub const UNFOLD_ENTROPY: f64 = 0.35;
+/// Barrier cut per kT of reactant grip at a perfect pocket.
+pub const CUT_PER_GRIP: f64 = 1.6;
+
+/// Read function off a fold at temperature kt (units of kT at 300 K).
+pub fn function_of(seq: &[u8], f: &Fold, ph: &LetterPhysics, kt: f64) -> Function {
+    let n = seq.len();
+    let occupied: std::collections::HashSet<(i32, i32)> = f.pos.iter().cloned().collect();
+    let exposed: Vec<bool> = f.pos.iter().map(|&(x, y)| SQ.iter().any(|(dx, dy)| !occupied.contains(&(x + dx, y + dy)))).collect();
+    // two-state folding: dG = E_fold + T*S_unfold*n ; stability = 1/(1+exp(dG/kT))
+    let dg = f.energy + kt * UNFOLD_ENTROPY * n as f64;
+    let stability = 1.0 / (1.0 + (dg / kt).exp());
+    let mut catalysis = vec![0.0; N_PAIRS];
+    for i in 0..n {
+        for j in (i + 2)..n {
+            let d = (f.pos[i].0 - f.pos[j].0).abs() + (f.pos[i].1 - f.pos[j].1).abs();
+            if d != 1 || !exposed[i] || !exposed[j] {
+                continue;
+            }
+            let (li, lj) = (seq[i] as usize, seq[j] as usize);
+            // pocket: a site flanked by chain holds reactants; a bare edge does not
+            let walls = |k: usize| SQ.iter().filter(|(dx, dy)| occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy))).count();
+            let pocket = ((walls(i) + walls(j)) as f64 - 4.0).clamp(0.0, 3.0) / 3.0;
+            if pocket == 0.0 {
+                continue;
+            }
+            for a in 0..NB {
+                for b in 0..NB {
+                    // reactants must bind both sites; weaker grip limits the cut
+                    let grip = ph.bind[li][a].min(ph.bind[lj][b]);
+                    let cut = CUT_PER_GRIP * grip * pocket;
+                    let p = pair(a, b);
+                    if cut > catalysis[p] {
+                        catalysis[p] = cut;
+                    }
+                }
+            }
+        }
+    }
+    for c in catalysis.iter_mut() {
+        *c *= stability;
+    }
+    // amphiphile: one end water-hating, the other water-loving, chain long enough to matter
+    let half = n / 2;
+    let h = |r: &[u8]| r.iter().map(|&l| ph.hydropathy[l as usize]).sum::<f64>() / r.len().max(1) as f64;
+    let amphiphile = if n >= 4 { ((h(&seq[half..]) - h(&seq[..half])).abs() * (n as f64 / 8.0).min(1.0)).min(1.0) } else { 0.0 };
+    let pigment = seq.iter().map(|&l| ph.absorb[l as usize]).sum::<f64>() / n.max(1) as f64;
+    Function { catalysis, stability, amphiphile, pigment, fold_energy: f.energy }
+}
+
+/// Convenience: fold then read function.
+pub fn express(seq: &[u8], ph: &LetterPhysics, kt: f64, seed: u64) -> (Fold, Function) {
+    let f = fold(seq, ph, kt, 400 + 60 * seq.len(), seed);
+    let func = function_of(seq, &f, ph, kt);
+    (f, func)
+}
+
+/// Z of a letter, for scale-0 lookups.
+pub fn letter_z(l: u8) -> u8 {
+    LETTERS[l as usize]
+}
+
+pub fn letter_bidx(l: u8) -> usize {
+    bidx(letter_z(l)).expect("letters are bondable")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folds_are_valid_and_deterministic() {
+        let ph = LetterPhysics::new(&Table::new());
+        let s = parse_seq("lfbhoolfhbfllofh");
+        let (a, fa) = express(&s, &ph, 1.0, 1);
+        let (b, _) = express(&s, &ph, 1.0, 1);
+        assert_eq!(a, b);
+        assert!(self_avoiding(&a.pos));
+        for w in a.pos.windows(2) {
+            assert_eq!((w[0].0 - w[1].0).abs() + (w[0].1 - w[1].1).abs(), 1, "chain stays connected");
+        }
+        assert!(a.energy < 0.0, "some contacts form");
+        assert!((0.0..=1.0).contains(&fa.stability));
+    }
+
+    #[test]
+    fn heat_unfolds() {
+        let ph = LetterPhysics::new(&Table::new());
+        let s = parse_seq("lflflflflflflflf");
+        let (f, _) = express(&s, &ph, 1.0, 1);
+        let cold = function_of(&s, &f, &ph, 0.9).stability;
+        let hot = function_of(&s, &f, &ph, 1.3).stability;
+        assert!(cold > hot);
+    }
+
+    #[test]
+    fn different_sequences_differ_in_function() {
+        let ph = LetterPhysics::new(&Table::new());
+        let seqs = ["lflflflfhhhh", "hhhhhhhhhhhh", "lfbhoolfhbfllofh", "oobbooffllhhbbff", "fhfhlolobhbhffll"];
+        let funcs: Vec<Function> = seqs.iter().map(|s| express(&parse_seq(s), &ph, 1.0, 1).1).collect();
+        for i in 0..funcs.len() {
+            for j in (i + 1)..funcs.len() {
+                assert_ne!(funcs[i].as_vec(), funcs[j].as_vec(), "{} vs {}", seqs[i], seqs[j]);
+            }
+        }
+        let best: std::collections::HashSet<usize> = funcs.iter().filter(|f| f.best_catalysis().1 > 0.1).map(|f| f.best_catalysis().0).collect();
+        assert!(best.len() >= 2, "specialists on more than one reaction: {best:?}");
+    }
+}

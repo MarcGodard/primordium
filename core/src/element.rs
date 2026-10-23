@@ -53,14 +53,18 @@ pub fn element(z: u8) -> Element {
     let outer = left;
     let valence = outer.min(capacity - outer);
     let z_eff = (z - inner) as f64;
-    let n2 = (shell as f64).powi(2);
-    let chi = z_eff / n2;
+    // sublinear in z_eff, n^1.5 radius penalty: avoids the Hy == Ox tie a plain z_eff/n^2 gives
+    let chi = z_eff.powf(0.8) / (shell as f64).powf(1.5);
     let radius = 0.22 + 0.13 * shell as f64 - 0.02 * z_eff;
     let noble = valence == 0;
-    let hydropathy = if noble { 0.0 } else { 1.2 * (chi - 0.75).abs() - 0.35 };
+    // polarity against the backbone-like pull: Ka/Hy are oily, Li/Fl/Bo/Ox like water
+    let hydropathy = if noble { 0.0 } else { 2.0 * (chi - CHI_NONPOLAR).abs() - 0.3 };
     let absorb = if valence >= 2 { 0.4 + 0.3 * valence as f64 } else { 0.05 };
     Element { z, name: NAMES[z as usize - 1], shell, outer, capacity, valence, chi, radius, hydropathy, absorb }
 }
+
+/// Electronegativity of a perfectly nonpolar partner; sits between Ka and Hy.
+pub const CHI_NONPOLAR: f64 = 0.9;
 
 /// Lookup tables built once from the shell rule.
 #[derive(Clone, Debug, Serialize)]
