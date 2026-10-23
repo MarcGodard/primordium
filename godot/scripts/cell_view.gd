@@ -267,7 +267,8 @@ func _draw_genome() -> void:
 		var box: Rect2 = rows[k]
 		genome_panel.draw_rect(box, Color(1, 1, 0.4, 0.2) if k == gene_sel else Color(1, 1, 1, 0.05))
 		genome_panel.draw_rect(Rect2(box.position + Vector2(4, 8), Vector2(8, 8)), ROLE_COLORS[g.role])
-		genome_panel.draw_string(font, box.position + Vector2(16, 16), "%s x%d" % [ROLE_NAMES[g.role], g.copies], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.8))
+		var reg: String = g.get("promoter", "")
+		genome_panel.draw_string(font, box.position + Vector2(16, 16), "%s x%d%s" % [ROLE_NAMES[g.role], g.copies, ("  [" + reg + "]") if reg != "" else ""], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.8))
 
 func _genome_input(e: InputEvent) -> void:
 	if not (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT):

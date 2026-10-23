@@ -17,7 +17,7 @@ The chemistry is invented, not ours: elements come from a shell rule with capaci
 | 0 Chemistry | Lattice Monte-Carlo: bonds, exchange, weak pairing, photons, hydration | done |
 | 1 Polymers | Sequence-defined chains, lattice folding, pocket catalysis, templated copying | done |
 | 2 Protocells | Amphiphile vesicles with interior metabolism, growth, division | done |
-| 3 Cells | Binary genome, genetic code, expression, gated division, proofreading, radiation mutation | done |
+| 3 Cells | Binary genome, genetic code, regulated expression, gated division, proofreading, radiation mutation | done |
 | 4 Coast | Beaches along a latitude gradient, linked by along-shore currents; lineage surrogate | done (surrogate 96-98%, 2.3x faster) |
 | 5 Colonies | Adhesive products keep daughters attached: anchored, monomer-sharing, shade-sharing colonies | done (first step to multicellularity) |
 

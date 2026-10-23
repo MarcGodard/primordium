@@ -1,6 +1,6 @@
 //! Scale-3 bridge: cells on the beach. Patch = elevation band; position within a patch is viewer-only.
 use godot::prelude::*;
-use primordium_core::cell::{CellParams, GenomeInfo, World};
+use primordium_core::cell::{CellParams, GenomeInfo, Signal, World};
 use primordium_core::cosmos::{Cosmos, CosmosParams};
 use primordium_core::hybrid::Mode;
 use primordium_core::kinetics::{BONDABLE, N_PAIRS, bidx, pair, pair_members};
@@ -181,6 +181,15 @@ impl CellSim {
             let mut gd = VarDictionary::new();
             let (r, strength) = role(&g.func);
             gd.set("start", g.start as i64);
+            let pr = g.promoter;
+            let name = match pr.signal {
+                Signal::None => String::new(),
+                Signal::Light => "light".into(),
+                Signal::Cold => "cold".into(),
+                Signal::LiScarce => "Li short".into(),
+            };
+            // "light+" = on in light; "cold-" = off when cold
+            gd.set("promoter", if name.is_empty() { name } else { format!("{name}{}", if pr.on_high { "+" } else { "-" }) });
             gd.set("end", g.end as i64);
             gd.set("role", r);
             gd.set("strength", strength);

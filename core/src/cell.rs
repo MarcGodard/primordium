@@ -136,6 +136,9 @@ impl Default for CellParams {
 pub struct Gene {
     pub start: usize,
     pub end: usize,
+    /// Read from the bits just upstream of the gene's leading stop codon.
+    #[serde(default)]
+    pub promoter: Promoter,
     /// Translated product of the gene's codons: what expression makes.
     pub product: Seq,
     pub func: Function,
@@ -197,6 +200,61 @@ pub fn gene_spans(genome: &[u8], bits: &[u8; N_LETTERS]) -> Vec<(usize, usize)> 
         }
     }
     out
+}
+
+/// What a promoter listens to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Signal {
+    /// Constitutive: always on.
+    #[default]
+    None,
+    /// The light reaching the cell (after water and shade).
+    Light,
+    /// Cold: temperature below the comfortable range.
+    Cold,
+    /// The cell's own loose Li running short.
+    LiScarce,
+}
+
+/// Gene regulation: a signal, a sign (on when the signal is high, or low) and a gain.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Promoter {
+    pub signal: Signal,
+    pub on_high: bool,
+    pub gain: f64,
+}
+
+/// Bits before a gene's preceding stop codon: [signal, signal, sign, gain]. Genes too close to
+/// the genome start have no room for a promoter and stay constitutive. Promoter bits may
+/// overlap the previous gene's last codon, so rewiring one can recode the other.
+pub const PROMOTER_BITS: usize = 4;
+
+pub fn promoter(genome: &[u8], start: usize, bits: &[u8; N_LETTERS]) -> Promoter {
+    if start < 3 + PROMOTER_BITS {
+        return Promoter::default();
+    }
+    let b = |k: usize| bits[genome[start - 3 - PROMOTER_BITS + k] as usize];
+    let signal = match (b(0), b(1)) {
+        (0, 0) => Signal::None,
+        (0, 1) => Signal::Light,
+        (1, 0) => Signal::Cold,
+        _ => Signal::LiScarce,
+    };
+    Promoter { signal, on_high: b(2) == 1, gain: if b(3) == 1 { 10.0 } else { 4.0 } }
+}
+
+impl Promoter {
+    /// Expression level 0..1 at signal strengths (light, cold, li_scarce), each 0..1.
+    pub fn level(&self, sig: [f64; 3]) -> f64 {
+        let s = match self.signal {
+            Signal::None => return 1.0,
+            Signal::Light => sig[0],
+            Signal::Cold => sig[1],
+            Signal::LiScarce => sig[2],
+        };
+        let x = if self.on_high { s - 0.5 } else { 0.5 - s };
+        1.0 / (1.0 + (-self.gain * x).exp())
+    }
 }
 
 /// Translate a gene span codon by codon.
@@ -572,7 +630,7 @@ impl World {
             let product: Seq = translate(&genome[s..e], &self.bits);
             let (func, _, p) = self.ctx.function_for(&product, kt);
             pending |= p.is_some();
-            genes.push(Gene { start: s, end: e, product, func });
+            genes.push(Gene { start: s, end: e, promoter: promoter(genome, s, &self.bits), product, func });
         }
         let ka = bidx(KA).unwrap();
         let poly_cut = genes.iter().map(|g| g.func.catalysis[pair(ka, ka)]).fold(0.0, f64::max);
@@ -901,9 +959,15 @@ impl World {
             None => Copier::Pairing { gain, kt, pair: &self.ctx.ph.pair, fray: clip_odds(poly, kt) },
         };
 
+        let free_total: i64 = c.free.iter().sum();
+        let li_share = if free_total > 0 { c.free[1] as f64 / free_total as f64 } else { 0.0 };
+        let signals = [(site.x[2]).clamp(0.0, 1.0), ((1.05 - kt) / 0.2).clamp(0.0, 1.0), (1.0 - li_share / 0.3).clamp(0.0, 1.0)];
+
         // transcription: each gene makes product copies; any copy error makes junk
         for (k, g) in info.genes.iter().enumerate() {
-            let n = rng.poisson(self.cp.tx_rate * supply * boost * dt);
+            // regulated genes follow their signal: expression costs monomers, so making a
+            // product only when it pays (pigment in sunlight, say) is an advantage
+            let n = rng.poisson(self.cp.tx_rate * supply * boost * g.promoter.level(signals) * dt);
             for _ in 0..n {
                 // messenger: antisense copy of the gene, read back in sense order, then recycled
                 let template: Seq = c.genome[g.start..g.end].to_vec();
@@ -1299,6 +1363,28 @@ impl World {
         let adh: f64 = genomes.iter().map(|g| self.info(g).adhesion).sum();
         let n = self.cells.len().max(1) as f64;
         (colonial as f64 / n, if groups > 0 { colonial as f64 / groups as f64 } else { 0.0 }, adh / n)
+    }
+
+    /// Share of genes (over all cells) on each signal: none, light, cold, Li scarcity; then the
+    /// share of pigment-making genes switched on by light.
+    pub fn regulation_stats(&mut self) -> [f64; 5] {
+        let genomes: Vec<Seq> = self.cells.iter().map(|c| c.genome.clone()).collect();
+        let mut by = [0.0; 4];
+        let (mut pig, mut pig_light) = (0.0f64, 0.0f64);
+        for g in &genomes {
+            let info = self.info(g);
+            for gene in &info.genes {
+                by[gene.promoter.signal as usize] += 1.0;
+                if gene.func.pigment > 0.6 {
+                    pig += 1.0;
+                    if gene.promoter.signal == Signal::Light && gene.promoter.on_high {
+                        pig_light += 1.0;
+                    }
+                }
+            }
+        }
+        let total: f64 = by.iter().sum::<f64>().max(1.0);
+        [by[0] / total, by[1] / total, by[2] / total, by[3] / total, pig_light / pig.max(1.0)]
     }
 
     /// Population means of the phenotype, for watching evolution.

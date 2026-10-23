@@ -839,9 +839,10 @@ fn coast(args: &[String]) {
                 let w = &mut s.world;
                 let ph = w.phenotype_means();
                 let (colonial, size, adh) = w.colony_stats();
+                let reg = w.regulation_stats();
                 let st = &w.stats;
                 println!(
-                    "   lat {:+5.2} tide x{:.2} T {:5.1}K | cells {:3} gen {:3} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:3.0} | bit err {:.3} | adh {adh:.3} colonial {:3.0}% size {size:4.1}",
+                    "   lat {:+5.2} tide x{:.2} T {:5.1}K | cells {:3} gen {:3} | poly {:.2} synth {:.2} amph {:.2} pig {:.2} len {:3.0} | bit err {:.3} | adh {adh:.3} colonial {:3.0}% size {size:4.1} | genes on light {:.2} cold {:.2} Li {:.2}, pigment light-on {:.2}",
                     s.latitude,
                     s.tide_scale,
                     w.env.temperature_k,
@@ -853,7 +854,11 @@ fn coast(args: &[String]) {
                     ph[3],
                     ph[4],
                     st.bit_errors as f64 / st.bits_inherited.max(1) as f64,
-                    colonial * 100.0
+                    colonial * 100.0,
+                    reg[1],
+                    reg[2],
+                    reg[3],
+                    reg[4]
                 );
             }
         }
