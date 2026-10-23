@@ -1,5 +1,5 @@
 // A body cell. Instance colour = expressed polymerase, metabolism, membrane, pigment shade;
-// custom = adhesion, light reaching it, selected (1) / adrift (0.5), height in the body + 64 x lineage.
+// custom = adhesion, light reaching it, selected (1) / adrift (0.5) / crawling (0.1-0.3), height in the body + 64 x lineage.
 // Tint = what the cell's genes are doing there, as on scales 3 and 4, plus gold for glue.
 // Cells breathe, and sway more the higher they stand in the swell.
 shader_type spatial;
@@ -22,7 +22,9 @@ void vertex() {
 	extra = INSTANCE_CUSTOM;
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float phase = fract(sin(dot(origin.xz, vec2(12.9898, 78.233))) * 43758.5453) * 6.283;
-	VERTEX *= 1.0 + 0.05 * sin(TIME * 1.7 + phase);
+	// crawlers' cells beat fast, like cilia
+	float crawl = (extra.z > 0.05 && extra.z < 0.4) ? 1.0 : 0.0;
+	VERTEX *= 1.0 + mix(0.05, 0.08, crawl) * sin(TIME * mix(1.7, 14.0, crawl) + phase);
 	float z = mod(extra.w, 64.0);
 	vec2 drift = vec2(sin(TIME * 0.9 + origin.x * 0.05), cos(TIME * 0.7 + origin.z * 0.05)) * sway * z * z * 0.02;
 	VERTEX.xz += drift / max(length(MODEL_MATRIX[0].xyz), 0.01);
@@ -63,6 +65,8 @@ void fragment() {
 	vec3 glow = col * fres * 0.15;
 	if (extra.z > 0.75) {
 		glow += vec3(1.0, 0.95, 0.8) * (0.35 + 0.25 * sin(TIME * 4.0)) * (0.3 + fres);
+	} else if (extra.z > 0.05 && extra.z < 0.4) {
+		glow += vec3(0.6, 1.0, 0.85) * fres * 0.5;
 	} else if (extra.z > 0.25) {
 		glow += vec3(0.5, 0.9, 1.0) * (0.6 + 0.4 * sin(TIME * 6.0 + mod(extra.w, 64.0)));
 	}

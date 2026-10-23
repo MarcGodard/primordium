@@ -138,14 +138,15 @@ impl ReefSim {
 
     /// MultiMesh buffer (transform 12, colour 4, custom 4 per instance) for every cell. Colour =
     /// expressed polymerase, metabolism, membrane, shade; custom = adhesion, light reaching the cell,
-    /// selected (1) or adrift (0.5), height in the body + 64 x lineage. Drifters float at the water surface.
+    /// selected (1), adrift (0.5) or crawling (0.1-0.3 by speed), height in the body + 64 x lineage. Drifters float at the water surface.
     #[func]
     fn cell_buffer(&self, selected: i64) -> PackedFloat32Array {
         let Some(r) = self.reef.as_ref() else { return PackedFloat32Array::new() };
         let mut v = Vec::with_capacity(r.cells() * 20);
         let water = r.env.tide_level * VSCALE;
         for o in &r.organisms {
-            let sel = if o.id as i64 == selected { 1.0 } else { 0.0 };
+            // selected 1, crawling 0.1-0.3 by speed, else 0 (adrift is set below)
+            let sel = if o.id as i64 == selected { 1.0 } else if o.speed > 0.0 { 0.1 + 0.1 * o.speed.min(2.0) } else { 0.0 };
             let (drift_at, adrift) = if o.settled() {
                 (Vector3::ZERO, false)
             } else {
@@ -162,7 +163,9 @@ impl ReefSim {
                 } else {
                     // cells swell as they grow toward division
                     let f = (c.mass.iter().sum::<i64>() as f32 / c.birth_mass.max(1) as f32).clamp(1.0, 2.0);
-                    (Self::world_pos(r, c.pos), 0.36 + 0.1 * f)
+                    // a lone cell is drawn small: the many single cells otherwise hide the bodies
+                    let lone = if o.cells.len() == 1 { 0.6 } else { 1.0 };
+                    (Self::world_pos(r, c.pos), (0.36 + 0.1 * f) * lone)
                 };
                 v.extend_from_slice(&[s, 0.0, 0.0, pos.x, 0.0, s, 0.0, pos.y, 0.0, 0.0, s, pos.z]);
                 v.extend_from_slice(&[c.expr[0], c.expr[1], c.expr[2], c.expr[3]]);
@@ -222,6 +225,7 @@ impl ReefSim {
         d.set("lineage", o.clade as i64);
         d.set("age", r.t_days - o.born);
         d.set("adrift", !o.settled());
+        d.set("speed", o.speed);
         d.set("genome_len", o.genome.len() as i64);
         d.set("genome_text", seq_string(&o.genome));
         d.set("store", o.store.iter().sum::<i64>());
@@ -333,6 +337,9 @@ impl ReefSim {
         d.set("spores", st.spores as i64);
         d.set("tears", st.tears as i64);
         d.set("bites", st.bites as i64);
+        let crawl: Vec<&&Organism> = settled.iter().filter(|o| o.speed > 0.0).collect();
+        d.set("crawlers", crawl.len() as i64);
+        d.set("crawlers_multi", crawl.iter().filter(|o| o.cells.len() > 1).count() as i64);
         d.set("divisions", st.divisions as i64);
         d.set("bit_error", st.bit_errors as f64 / st.bits_inherited.max(1) as f64);
         d.set("unsure", st.unsure_cells as i64);

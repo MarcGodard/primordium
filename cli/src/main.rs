@@ -1182,6 +1182,10 @@ fn reef(args: &[String]) {
                 zones.push(format!("#{clade} {:.0}% elev {elev:.2} z {h:.1}", 100.0 * n as f64 / r.cells().max(1) as f64));
             }
             println!("        lineages {}: {}", r.clades().len(), zones.join(" | "));
+            let mobile: Vec<_> = r.organisms.iter().filter(|o| o.settled() && o.speed > 0.0).collect();
+            let multi_mobile = mobile.iter().filter(|o| o.cells.len() > 1).count();
+            let fastest = mobile.iter().map(|o| o.speed).fold(0.0f32, f32::max);
+            println!("        crawlers {} ({} multicellular), fastest {:.2} cells/day, steps {}", mobile.len(), multi_mobile, fastest, r.stats.moves);
             let spore_bodies = r.organisms.iter().filter(|o| o.settled() && o.generation > 0 && o.cells.len() > 1).count();
             println!("        multicellular bodies founded by spores {spore_bodies}");
             let max_gen = r.organisms.iter().map(|o| o.generation).max().unwrap_or(0);

@@ -437,11 +437,11 @@ func hud_text() -> String:
 		return "[color=#f88]data/reef_seed.json or rates0.json missing: run primordium reef-seed[/color]"
 	if stats.is_empty():
 		return ""
-	var t := "[b]Reef[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
-		env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.biggest, stats.tallest, stats.generation,
+	var t := "[b]Reef[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\ncrawling: %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
+		env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
 		stats.adrift, stats.spores, stats.tears, stats.bites, stats.bit_error * 100.0]
 	if not by_lineage:
-		t += "[color=#9ab]tint (C for lineage): [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nred flash: a bite[/color]\n"
+		t += "[color=#9ab]tint (C for lineage): [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nshimmering with a green rim: a crawling body\nred flash: a bite[/color]\n"
 	t += "lineages alive %d of %d founders; largest: " % [stats.lineages, stats.founders]
 	var parts := []
 	for v in stats.top_lineages:
@@ -466,7 +466,7 @@ func _draw_profile() -> void:
 	profile.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.05, 0.08, 0.82))
 	profile.draw_string(font, Vector2(10, 18), "Body #%d  lineage %d  %d cells, %d tall  gen %d  %s" % [
 		organism.id, organism.lineage, organism.cells, organism.height, organism.generation, "adrift" if organism.adrift else "age %.0f d" % organism.age], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.9))
-	profile.draw_string(font, Vector2(10, 34), "depth %.2f   waves %.2f   store %d" % [organism.depth, organism.waves, organism.store], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.8))
+	profile.draw_string(font, Vector2(10, 34), "depth %.2f   waves %.2f   store %d   %s" % [organism.depth, organism.waves, organism.store, "crawls %.1f cells/day" % organism.speed if organism.speed > 0.0 else "anchored"], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.7, 0.85, 1.0, 0.8))
 	var layers: PackedFloat32Array = organism.layers
 	var nl := layers.size() / 6
 	var top := 46.0

@@ -116,6 +116,13 @@ pub struct ReefParams {
     /// Smallest body a grazer can bite, cells: a bite needs something to hold, so a freshly
     /// settled spore slips through (a size refuge for recruits).
     pub graze_min: usize,
+    /// Swimming: each skin cell beats with the membrane it expresses beyond its glue (a
+    /// membrane-rich, unsticky cell is a cilium); rock-touching cells hold with `anchor` x their
+    /// glue. Net beat per cell x `swim` = lattice steps per day.
+    pub swim: f64,
+    pub anchor: f64,
+    /// Store letters each cell spends per step (returned to the water as loose monomers).
+    pub move_cost: f64,
     /// Body size at which the mates signal saturates.
     pub mates_full: f64,
 }
@@ -159,6 +166,9 @@ impl Default for ReefParams {
             graze_rate: 6.0,
             graze_size: 0.6,
             graze_min: 2,
+            swim: 4.0,
+            anchor: 1.0,
+            move_cost: 1.0,
             mates_full: (cp.colony_max - 1) as f64,
         }
     }
@@ -202,6 +212,8 @@ pub struct Organism {
     pub adrift: f64,
     /// Tile the organism floats over while adrift.
     pub drift_tile: usize,
+    /// Last step's crawling speed, lattice steps per day (display).
+    pub speed: f32,
     /// The founder this body descends from (by spores or fragments): its lineage.
     pub clade: u32,
 }
@@ -225,6 +237,8 @@ pub struct ReefStats {
     pub tears: u64,
     pub fragments: u64,
     pub bites: u64,
+    /// Lattice steps crawled by bodies.
+    pub moves: u64,
     pub deaths: u64,
     pub bit_errors: u64,
     pub bits_inherited: u64,
@@ -446,6 +460,7 @@ impl Reef {
                 store,
                 adrift: 0.0,
                 drift_tile: usize::MAX,
+                speed: 0.0,
                 clade: k as u32,
             });
         }
@@ -562,6 +577,7 @@ impl Reef {
         self.divide(&mut rng);
         torn.extend(self.waves(dt, &mut rng));
         torn.extend(self.graze(dt, &mut rng));
+        self.swim(dt, &mut rng);
         torn.sort_unstable();
         torn.dedup();
         for k in torn {
@@ -776,6 +792,7 @@ impl Reef {
                 store: [0; N_LETTERS],
                 adrift: self.rp.drift_days * (0.5 + rng.f64()),
                 drift_tile: home,
+                speed: 0.0,
                 clade,
             });
         }
@@ -852,6 +869,7 @@ impl Reef {
             store,
             adrift: self.rp.drift_days * (0.5 + rng.f64()),
             drift_tile: tile,
+            speed: 0.0,
             clade: o.clade,
         };
         let id = self.id();
@@ -982,6 +1000,87 @@ impl Reef {
             }
         }
         bitten
+    }
+
+    /// Bodies whose skin beats harder than their base holds crawl over the rock, one lattice step
+    /// at a time, toward the neighbouring tile with the most food, or, for a grazer, the most
+    /// cells it could bite. A step moves the whole body and costs store letters (spilled into the
+    /// water); a blocked step is not taken.
+    fn swim(&mut self, dt: f64, rng: &mut Rng) {
+        // (tile, size, id) of every settled body: what a grazer might steer for
+        let bodies: Vec<(usize, usize, u64)> =
+            self.organisms.iter().filter(|p| p.settled() && !p.cells.is_empty()).map(|p| (self.tile_at(p.cells[0].pos), p.cells.len(), p.id)).collect();
+        for k in 0..self.organisms.len() {
+            let o = &self.organisms[k];
+            if !o.settled() || o.cells.is_empty() {
+                self.organisms[k].speed = 0.0;
+                continue;
+            }
+            let beat: f64 = o.cells.iter().filter(|c| c.open > 0).map(|c| (c.expr[2] - c.expr[4]).max(0.0) as f64).sum();
+            let hold: f64 = o.cells.iter().filter(|c| c.pos[2] == 0).map(|c| c.expr[4] as f64).sum();
+            let n = o.cells.len() as f64;
+            let v = self.rp.swim * (beat - self.rp.anchor * hold).max(0.0) / n;
+            self.organisms[k].speed = v as f32;
+            if v <= 0.0 || !rng.chance((v * dt).min(1.0)) {
+                continue;
+            }
+            // where to: score each side by what lies on the next tile that way
+            let o = &self.organisms[k];
+            let here = o.cells[0].pos;
+            let skin: Vec<f64> = o.cells.iter().filter(|c| c.open > 0).map(|c| c.expr[4] as f64).collect();
+            let grazer = skin.iter().sum::<f64>() / skin.len().max(1) as f64 > self.rp.graze_floor;
+            let mut prey = HashMap::new();
+            if grazer {
+                for &(t, m, pid) in &bodies {
+                    if pid != o.id && m >= self.rp.graze_min && (m as f64) < n * self.rp.graze_size {
+                        *prey.entry(t).or_insert(0.0) += m as f64;
+                    }
+                }
+            }
+            let options: Vec<([i32; 3], f64)> = DIRS[..4]
+                .iter()
+                .map(|d| {
+                    let probe = [here[0] + d[0] * TILE, here[1] + d[1] * TILE, 0];
+                    let t = self.tile_at(probe);
+                    let food = (self.tiles[t].free.iter().sum::<i64>() + self.tiles[t].raw.iter().sum::<i64>()) as f64 / self.rp.tile_cells;
+                    (*d, 1.0 + 4.0 * food + prey.get(&t).copied().unwrap_or(0.0) / n)
+                })
+                .collect();
+            let total: f64 = options.iter().map(|o| o.1).sum();
+            let mut r = rng.f64() * total;
+            let mut dir = options[0].0;
+            for (d, w) in &options {
+                if r < *w {
+                    dir = *d;
+                    break;
+                }
+                r -= w;
+            }
+            let id = o.id;
+            let moved: Vec<[i32; 3]> = o.cells.iter().map(|c| [c.pos[0] + dir[0], c.pos[1] + dir[1], c.pos[2]]).collect();
+            if moved.iter().any(|q| !self.in_bounds(*q) || self.occ.get(q).is_some_and(|&who| who != id)) {
+                continue;
+            }
+            // the cost: letters out of the store, weighted by what the store holds; a starving body stays put
+            let cost = round_flux(self.rp.move_cost * n, rng).max(0);
+            if self.organisms[k].store.iter().sum::<i64>() < cost {
+                continue;
+            }
+            let t = self.tile_at(here);
+            for _ in 0..cost {
+                let Some(l) = pick_weighted(&self.organisms[k].store, rng) else { break };
+                self.organisms[k].store[l] -= 1;
+                self.tiles[t].free[l] += 1;
+            }
+            for c in &self.organisms[k].cells {
+                self.occ.remove(&c.pos);
+            }
+            for (c, q) in self.organisms[k].cells.iter_mut().zip(&moved) {
+                c.pos = *q;
+                self.occ.insert(*q, id);
+            }
+            self.stats.moves += 1;
+        }
     }
 
     /// Drifters ride the water to neighbouring tiles, die at a steady rate, and settle when
