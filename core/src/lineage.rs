@@ -281,8 +281,8 @@ impl World {
     }
 
     /// Lineage growth: the membrane builds toward twice its birth size at the pace the
-    /// division rate implies, letters in the membrane's own proportions, paid from the patch
-    /// (loose monomers first, then a raw letter plus raw Ka). Without it every lineage cell
+    /// division rate implies, letters in the membrane's own proportions, paid from the cell's
+    /// loose monomers, then the patch's (then a raw letter plus raw Ka). Without it every lineage cell
     /// stayed full size, and engulfing (which needs a size gap) misfired.
     fn grow(&mut self, c: &mut Cell, div: f64, dt: f64, rng: &mut Rng) {
         if c.area() >= (2 * c.birth_area).min(self.cp.divide_area) {
@@ -292,7 +292,11 @@ impl World {
         let p = &mut self.patches[c.patch];
         for _ in 0..n {
             let Some(l) = pick_weighted(&c.membrane, rng) else { return };
-            if p.free[l] > 0 {
+            // the cell's own loose monomers first (as detail's membrane assembly), so a meal
+            // feeds growth; then the patch
+            if c.free[l] > 0 {
+                c.free[l] -= 1;
+            } else if p.free[l] > 0 {
                 p.free[l] -= 1;
             } else if p.raw[l] > 0 && p.raw_ka > 0 {
                 p.raw[l] -= 1;
