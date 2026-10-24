@@ -25,8 +25,8 @@ const GOALS := [
 		"[b]Biogeography.[/b] Each beach has its own climate by latitude. Lineages that drift on the current to a new beach either fit or die, so beaches end up with their own kinds, like islands with their own birds."],
 	["Find a creature", "Find a body of %d+ cells with %d+ different cell jobs that crawls (gold rings; Shift+G searches for one) and keep it with K.",
 		"[b]Multicellular life.[/b] Cells of one body share a genome but switch it differently by where they sit: some hold on, some feed, some shade. A body that divides labour and moves is an animal in all but name. On the open reef they appear now and then and are gone again."],
-	["Life on every island", "Spread life from the Lagoon to all %d islands: each must hold a settled population at the same time.",
-		"[b]Island biogeography.[/b] Spores reach near islands often and far ones rarely, since a long crossing is a long time adrift. Small, far and harsh islands are the last to fill, and they empty again more easily. Life spreads by stepping stones, as it did across real oceans."],
+	["A living web", "All %d islands at once with plants (anchored seaweeds, more on bigger islands) and animals (crawlers, grazers), held for %d days.",
+		"[b]Ecosystems.[/b] Every island grew its own web of life from the same chemistry: plants that live on light, animals that crawl and graze them. Small, far and harsh islands hold the fewest kinds and lose them most easily (island biogeography), and spores from neighbours keep them stocked."],
 	["A creature that breeds true", "In your world, one lineage makes creatures on %d of the last %d days. Keep the best again to breed them.",
 		"[b]Breeding true.[/b] A lucky body is not yet a kind of animal. When one lineage keeps producing creatures, generation after generation, the trait is inherited: selection, yours and the reef's, has made a species."],
 ]

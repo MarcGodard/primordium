@@ -1483,7 +1483,7 @@ fn archipelago(args: &[String]) {
     }
     let Some((genome, mass)) = kept else { return println!("no creature in 3000 days") };
     let ap = ArchParams { crossing: arg(args, "crossing", ArchParams::default().crossing), ..Default::default() };
-    let mut base = ReefParams::default();
+    let mut base = ReefParams { heterotrophy: arg(args, "het", 0.0), ..Default::default() };
     recipe_arg(args).apply_reef(&mut base);
     let mut a = Archipelago::new(ap, default_islands(), base, CosmosParams { seed: seed + 100, ..Default::default() }, rates, &rs, seed + 100);
     let m0 = a.matter();
@@ -1509,6 +1509,8 @@ fn archipelago(args: &[String]) {
             let alive = a.alive();
             let arrived: Vec<u64> = (0..a.islands.len()).map(|j| a.crossings.iter().map(|row| row[j]).sum()).collect();
             let split = a.watch.last.map(|b| format!("{} {}-{} {:.4}", b.0, b.1, b.2, b.3)).unwrap_or("-".into());
+            let kinds: Vec<(usize, usize, usize)> = a.islands.iter().map(|r| r.kinds3()).collect();
+            println!("        plants/animals/decomposers per island {:?}  web reached {:?}", kinds, a.watch.web);
             println!("t={:5.0} alive {}/{} cells {:?} arrived {:?} | best split {} held {:.0} | ledger {}", a.t_days(), alive.iter().filter(|&&x| x).count(), alive.len(), cells, arrived, split, a.split_held(), if a.matter() == m0 { "exact" } else { "DRIFT" });
         }
     }

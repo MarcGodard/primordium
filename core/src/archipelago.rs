@@ -57,10 +57,22 @@ impl Default for ArchParams {
 /// An island counts as alive while it holds this many settled cells.
 pub const ALIVE_CELLS: usize = 40;
 
-/// Net genome divergence that counts as two kinds, and the days it must hold. Calibrated with
-/// `primordium archipelago` over 6 seeds: the split is mostly a founder effect when an island is
-/// first reached (islands settle in ~200-400 days and sit at 0.7-1.0%); x4 currents jump past
-/// 1% at colonisation, then gene flow erodes them to 0.3-0.6% within ~100 days.
+/// A living web on an island: plants and animals (Reef::kinds), the plants scaled to its size
+/// (small islands hold fewer kinds: island biogeography). A flat 5 plants + 2 animals was never
+/// held 100 days by day 500 (seeds 4, 6, 7): Lone Stack (36 tiles) holds 1-8 plants, 0-2 animals.
+pub const WEB_TILES_PER_PLANT: usize = 40;
+pub const WEB_ANIMALS: usize = 1;
+/// Days the web must hold on every island at once.
+pub const WEB_HOLD: f64 = 60.0;
+
+/// (plants, animals) an island of `width` x `depth` tiles needs for a living web.
+pub fn web_needs(width: usize, depth: usize) -> (usize, usize) {
+    ((width * depth).div_ceil(WEB_TILES_PER_PLANT).max(1), WEB_ANIMALS)
+}
+
+/// Net genome divergence that counts as two kinds (a codex discovery), and the days it must
+/// hold. Set when one lineage colonised islands one by one (founder effect, 0.7-1.0%); with wild
+/// founders on every island from day 0, each island's copy drifts on its own from the start.
 pub const SPLIT_GOAL: f64 = 0.008;
 pub const SPLIT_HOLD: f64 = 150.0;
 
@@ -70,6 +82,10 @@ pub const SPLIT_HOLD: f64 = 150.0;
 pub struct SplitWatch {
     /// Last check: (lineage, island a, island b, divergence).
     pub last: Option<(u32, usize, usize, f64)>,
+    /// Day every island has held a living web since (`web_needs`; -1: not now),
+    /// and the first day it had held WEB_HOLD days.
+    pub web_since: f64,
+    pub web: Option<f64>,
     /// Day the current pair rose past the goal and has stayed there since (-1: not now).
     pub since: f64,
     next: f64,
@@ -77,7 +93,7 @@ pub struct SplitWatch {
 
 impl Default for SplitWatch {
     fn default() -> Self {
-        Self { last: None, since: -1.0, next: 0.0 }
+        Self { last: None, web_since: -1.0, web: None, since: -1.0, next: 0.0 }
     }
 }
 
@@ -104,7 +120,8 @@ impl Archipelago {
                 let rp = ReefParams {
                     width: s.width,
                     depth: s.depth,
-                    founders: 0,
+                    // every island starts alive: the coast's founders, as many per tile as the reef
+                    founders: ((d.founders as f64 * area).round() as usize).max(4),
                     elev_lo: s.elev.0,
                     elev_hi: s.elev.1,
                     drag: d.drag * s.waves,
@@ -171,6 +188,19 @@ impl Archipelago {
             return;
         }
         self.watch.next = t.floor() + 1.0;
+        let web = self.islands.iter().all(|r| {
+            let (p, a) = r.kinds();
+            let need = web_needs(r.rp.width, r.rp.depth);
+            p >= need.0 && a >= need.1
+        });
+        if !web {
+            self.watch.web_since = -1.0;
+        } else if self.watch.web_since < 0.0 {
+            self.watch.web_since = t;
+        }
+        if self.watch.web.is_none() && self.watch.web_since >= 0.0 && t - self.watch.web_since >= WEB_HOLD {
+            self.watch.web = Some(t);
+        }
         let b = self.best_split(30);
         let same = match (b, self.watch.last) {
             (Some(x), Some(y)) => x.0 == y.0,
@@ -260,9 +290,23 @@ impl Archipelago {
 
     /// The lineage and island pair grown furthest apart: (clade, a, b, divergence).
     pub fn best_split(&self, sample: usize) -> Option<(u32, usize, usize, f64)> {
-        let mut clades: Vec<u32> = self.islands.iter().flat_map(|r| r.organisms.iter().map(|o| o.clade)).collect();
-        clades.sort_unstable();
-        clades.dedup();
+        // the few biggest lineages living on 2+ islands: with wild founders everywhere there are
+        // hundreds, and one on a single island has no pair to compare
+        let mut total: std::collections::HashMap<u32, usize> = Default::default();
+        let mut homes: std::collections::HashMap<u32, usize> = Default::default();
+        for r in &self.islands {
+            let mut here: std::collections::HashSet<u32> = Default::default();
+            for o in r.organisms.iter().filter(|o| o.settled()) {
+                *total.entry(o.clade).or_default() += o.cells.len();
+                here.insert(o.clade);
+            }
+            for c in here {
+                *homes.entry(c).or_default() += 1;
+            }
+        }
+        let mut clades: Vec<(u32, usize)> = total.into_iter().filter(|c| homes.get(&c.0).copied().unwrap_or(0) >= 2).collect();
+        clades.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let clades: Vec<u32> = clades.into_iter().take(6).map(|c| c.0).collect();
         let n = self.islands.len();
         let mut best: Option<(u32, usize, usize, f64)> = None;
         for c in clades {

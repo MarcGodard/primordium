@@ -1,6 +1,9 @@
 ## Scale 1 view: tide pool of polymers. Chains drawn as their folds; click to inspect,
 ## click a residue in the close-up to see its atoms.
 extends Node2D
+## Light and tide as drawn: averaged when days fly by (calm.gd).
+var calm_light = preload("res://scripts/calm.gd").new()
+var calm_tide = preload("res://scripts/calm.gd").new()
 
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
@@ -128,7 +131,7 @@ func _process(delta: float) -> void:
 		sim.step(speed(), DT)
 	env = sim.env()
 	wet_smooth = lerp(wet_smooth, 1.0 if env.wet else 0.0, clamp(delta * 1.5, 0.0, 1.0))
-	var light: float = clamp(env.visible * 1.6 + 0.12, 0.0, 1.0)
+	var light: float = calm_light.step(clamp(env.visible * 1.6 + 0.12, 0.0, 1.0), env.get("t_days", 0.0), get_process_delta_time())
 	var buf: PackedFloat32Array = sim.instance_buffer(selected)
 	mm.instance_count = buf.size() / 16
 	if buf.size() > 0:

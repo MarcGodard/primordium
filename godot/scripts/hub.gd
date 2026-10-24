@@ -14,7 +14,7 @@ const SCALES := [
 	["Cells", "Genomes, a genetic code, mutation and the first predators.", Color(0.55, 0.95, 0.5)],
 	["Coast", "Twelve beaches along an Earth-sized planet adapt to their climate.", Color(0.4, 0.7, 1.0)],
 	["Reef", "Many-celled bodies in 3D: plants, crawlers, lineages, evolution.", Color(1.0, 0.5, 0.65)],
-	["Archipelago", "Seven islands linked by drifting spores: spread life to every one.", Color(0.45, 0.85, 1.0)],
+	["Archipelago", "Seven islands, each growing its own web of plants and animals.", Color(0.45, 0.85, 1.0)],
 	["Your world", "Your own reef: the creatures you kept live, compete and keep evolving.", Color(0.75, 1.0, 0.55)],
 ]
 const GARDEN := 8
@@ -388,7 +388,7 @@ func _hover(mp: Vector2) -> void:
 				g = "   Goal: " + campaign.goal_title(best) + (" (done)" if campaign.is_done(best) else "")
 			card_sub.text = SCALES[best][1] + g
 		elif best == GARDEN:
-			card_sub.text = "Locked. Split one lineage into two kinds on the islands and it opens here."
+			card_sub.text = "Locked. Grow a living web on every island and it opens here."
 		else:
 			card_sub.text = "Locked. Reach the %s goal first: %s." % [SCALES[best - 1][0], campaign.goal_title(best - 1)]
 	else:

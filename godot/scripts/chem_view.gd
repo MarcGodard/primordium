@@ -1,5 +1,8 @@
 ## Scale 0 view: the tidal-pool lattice. Pure renderer over ChemSim (Rust).
 extends Node2D
+## Light and tide as drawn: averaged when days fly by (calm.gd).
+var calm_light = preload("res://scripts/calm.gd").new()
+var calm_tide = preload("res://scripts/calm.gd").new()
 
 const CELL := 8.0
 const EXPLAIN := """[b]Scale 0: atoms and bonds[/b]
@@ -201,12 +204,12 @@ func _process(delta: float) -> void:
 func _refresh() -> void:
 	env = sim.env()
 	mm.buffer = sim.instance_buffer()
-	var light: float = clamp(env.visible * 1.6 + 0.12, 0.0, 1.0)
+	var light: float = calm_light.step(clamp(env.visible * 1.6 + 0.12, 0.0, 1.0), env.get("t_days", 0.0), get_process_delta_time())
 	var am: ShaderMaterial = atoms_node.material
 	am.set_shader_parameter("px_per_cell", px_per_cell())
 	am.set_shader_parameter("light", light)
 	var bm: ShaderMaterial = beach.material
-	bm.set_shader_parameter("tide_level", env.tide_level)
+	bm.set_shader_parameter("tide_level", calm_tide.step(env.tide_level, env.get("t_days", 0.0), get_process_delta_time()))
 	bm.set_shader_parameter("light", light)
 	bm.set_shader_parameter("uv_glow", clamp(env.flare * 0.4, 0.0, 0.5))
 	bonds.queue_redraw()

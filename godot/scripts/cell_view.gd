@@ -2,6 +2,9 @@
 ## Cell tint = what its genes do: teal polymerase, green metabolism, cream membrane, amber pigment.
 ## Zoom in to see each genome ring; click a cell for its genome, a gene for its product's fold.
 extends Node2D
+## Light and tide as drawn: averaged when days fly by (calm.gd).
+var calm_light = preload("res://scripts/calm.gd").new()
+var calm_tide = preload("res://scripts/calm.gd").new()
 
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
@@ -165,9 +168,9 @@ func _process(delta: float) -> void:
 	cells = sim.cells()
 	patches = sim.patches()
 	meals = sim.meals(0.5)
-	var light: float = clamp(env.visible * 1.6 + 0.12, 0.0, 1.0)
+	var light: float = calm_light.step(clamp(env.visible * 1.6 + 0.12, 0.0, 1.0), env.get("t_days", 0.0), get_process_delta_time())
 	var bm: ShaderMaterial = beach.material
-	bm.set_shader_parameter("tide_level", env.tide_level)
+	bm.set_shader_parameter("tide_level", calm_tide.step(env.tide_level, env.get("t_days", 0.0), get_process_delta_time()))
 	bm.set_shader_parameter("light", light)
 	bm.set_shader_parameter("uv_glow", clamp(env.flare * 0.4, 0.0, 0.5))
 	art.modulate = Color(1, 1, 1).lerp(Color(0.5, 0.55, 0.8), 1.0 - light)

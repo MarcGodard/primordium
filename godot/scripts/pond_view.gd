@@ -2,6 +2,9 @@
 ## residues; dots inside are the vesicle's own chains. Click a vesicle for its interior,
 ## click a chain thumbnail for its fold, click a residue for its atoms.
 extends Node2D
+## Light and tide as drawn: averaged when days fly by (calm.gd).
+var calm_light = preload("res://scripts/calm.gd").new()
+var calm_tide = preload("res://scripts/calm.gd").new()
 
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
@@ -126,7 +129,7 @@ func _process(delta: float) -> void:
 	vesicles = sim.vesicles()
 	specks = sim.specks()
 	wet_smooth = lerp(wet_smooth, 1.0 if env.wet else 0.0, clamp(delta * 1.5, 0.0, 1.0))
-	var light: float = clamp(env.visible * 1.6 + 0.12, 0.0, 1.0)
+	var light: float = calm_light.step(clamp(env.visible * 1.6 + 0.12, 0.0, 1.0), env.get("t_days", 0.0), get_process_delta_time())
 	var fm: ShaderMaterial = floor_rect.material
 	fm.set_shader_parameter("wet", wet_smooth)
 	fm.set_shader_parameter("light", light)

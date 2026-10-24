@@ -323,7 +323,9 @@ impl ReefSim {
     }
 
     /// Archipelago state (empty on a single reef or while busy): `islands` as [{name, waves, uv,
-    /// food, cells, width, depth (tiles), x, y (km on the map), lineages: [lineage, cells]
+    /// food, cells, plants, animals (Reef::kinds), need_plants, need_animals (a living web
+    /// there, `web_needs`), width, depth (tiles), x, y (km on the map),
+    /// lineages: [lineage, cells]
     /// pairs}], `alive` per island (1: at least `alive_cells` settled cells), `crossings`
     /// flattened n x n [from][to], and the lineage grown furthest apart: `split_lineage`, `split_a`, `split_b`, `divergence`
     /// (net share of genome letters differing between the two islands; -1 lineage before any),
@@ -340,6 +342,12 @@ impl ReefSim {
             e.set("uv", spec.uv);
             e.set("food", spec.food);
             e.set("cells", r.cells() as i64);
+            let (plants, animals) = r.kinds();
+            e.set("plants", plants as i64);
+            e.set("animals", animals as i64);
+            let need = primordium_core::archipelago::web_needs(spec.width, spec.depth);
+            e.set("need_plants", need.0 as i64);
+            e.set("need_animals", need.1 as i64);
             e.set("width", spec.width as i64);
             e.set("depth", spec.depth as i64);
             e.set("x", spec.at.0);
@@ -356,6 +364,10 @@ impl ReefSim {
         let alive = a.alive();
         d.set("alive", &alive.iter().map(|&x| x as i64).collect::<PackedInt64Array>());
         d.set("alive_cells", primordium_core::archipelago::ALIVE_CELLS as i64);
+        // checked once a sim day inside the archipelago: a fast-forward cannot skip past it
+        d.set("web_day", a.watch.web.unwrap_or(-1.0));
+        d.set("web_held", if a.watch.web_since >= 0.0 { a.t_days() - a.watch.web_since } else { 0.0 });
+        d.set("web_hold", primordium_core::archipelago::WEB_HOLD);
         let cross: PackedInt64Array = a.crossings.iter().flatten().map(|&v| v as i64).collect();
         d.set("crossings", &cross);
         // checked once a sim day inside the archipelago, fast-forward included
@@ -838,6 +850,9 @@ impl ReefSim {
         d.set("spores", st.spores as i64);
         d.set("tears", st.tears as i64);
         d.set("bites", st.bites as i64);
+        let (plants, animals) = r.kinds();
+        d.set("plants", plants as i64);
+        d.set("animals", animals as i64);
         let crawl: Vec<&&Organism> = settled.iter().filter(|o| o.speed > 0.0).collect();
         d.set("crawlers", crawl.len() as i64);
         d.set("crawlers_multi", crawl.iter().filter(|o| o.cells.len() > 1).count() as i64);

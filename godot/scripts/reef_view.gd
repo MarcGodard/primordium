@@ -107,20 +107,17 @@ var arch_released := {}
 ## Seed of the current archipelago (N starts the next).
 var arch_seed := 11
 var terrain_mi: MeshInstance3D
-## Two kinds: core archipelago.rs SPLIT_GOAL and SPLIT_HOLD (campaign GOALS[7] says them in
-## words). Mirrored here for the guide text; the goal reads them from the sim.
-const ARCH_GOAL := 0.008
-const ARCH_HOLD := 150.0
+
 const ARCH_LEVERS := [
 	["currents", "Currents", "How often a drifting spore is carried to another island. Strong currents mix the islands; weak ones leave them isolated."],
 ]
 const ARCH_EXPLAIN := """[b]Scale 6: an archipelago[/b]
 
-[b]What you see.[/b] Seven islands of different sizes under one sky, each with its own shore: the calm [b]Lagoon[/b], surf-beaten [b]Surf Point[/b], the sunlit shallow [b]Sun Flats[/b], dark [b]Deepwater[/b] and more, out to tiny [b]Lone Stack[/b]. You stand on one at a time; the others sit on the horizon where they lie on the map (I sails to the next). The creatures you kept start on the Lagoon.
+[b]What you see.[/b] Seven islands of different sizes under one sky, each with its own shore: the calm [b]Lagoon[/b], surf-beaten [b]Surf Point[/b], the sunlit shallow [b]Sun Flats[/b], dark [b]Deepwater[/b] and more, out to tiny [b]Lone Stack[/b]. Every island starts with wild life from the same coast; the creatures you kept land on the Lagoon. You stand on one island at a time; the others sit on the horizon where they lie on the map (I sails to the next).
 
-[b]What happens.[/b] Spores that drift off an island's deep edge are sometimes carried to another island, most often a near one: a long crossing is a long time adrift, and few survive it. A few arrivals start a new population (the [b]founder effect[/b]); each island's shore then keeps different bodies.
+[b]Plants and animals.[/b] Bodies that stay put and grow on light are the islands' [b]plants[/b] (seaweeds: the first plants were algae). Bodies that crawl or bite are its [b]animals[/b]. Each shore keeps different ones: calm water grows tall seaweed, surf keeps low crusts and crawlers.
 
-[b]Goal.[/b] Life on every island at once. Small, far and harsh islands fill last and empty most easily: life spreads by stepping stones ([b]island biogeography[/b]).
+[b]Goal.[/b] A living web on every island at once. Small, far and harsh islands hold the fewest kinds and lose them most easily ([b]island biogeography[/b]); spores from neighbours restock them.
 
 [b]Try.[/b] L opens the Currents lever: strong currents carry more spores further. Weak ones leave islands isolated, and an isolated lineage can split into two kinds (a discovery for the codex). T fast-forwards, N starts a new archipelago."""
 var campaign: Node
@@ -392,8 +389,9 @@ func _label_far_islands() -> void:
 			var lab: Label3D = node.get_node("Label")
 			var alive: PackedInt64Array = arch_state.get("alive", PackedInt64Array())
 			var life: bool = k < alive.size() and alive[k] == 1
-			lab.text = "%s\n%s" % [isl[k].name, ("%s cells" % _short(int(isl[k].cells))) if int(isl[k].cells) > 0 else "no life yet"]
-			lab.modulate = Color(0.6, 1.0, 0.6) if life else Color(1.0, 0.85, 0.55)
+			lab.text = "%s\n%d plants, %d animals" % [isl[k].name, isl[k].plants, isl[k].animals]
+			var web: bool = _web(isl[k])
+			lab.modulate = Color(0.6, 1.0, 0.6) if web else (Color(1.0, 0.85, 0.55) if life else Color(0.8, 0.8, 0.8))
 
 func _island_mesh(k: int, radius: float) -> MeshInstance3D:
 	var n := 48
@@ -722,12 +720,12 @@ func _set_island(k: int) -> void:
 	_build_far_islands()
 	timer = 0.0
 
-## Bonus: one lineage split into two kinds across islands (archipelago.rs SPLIT_GOAL held
+## Discovery: one lineage split into two kinds across islands (archipelago.rs SPLIT_GOAL held
 ## SPLIT_HOLD days, checked daily in the sim). Once per save, a toast and a codex page.
 func _check_two_kinds(a: Dictionary) -> void:
 	if campaign == null or campaign.state.get("two_kinds", false):
 		return
-	if float(a.get("held", 0.0)) < float(a.get("hold", ARCH_HOLD)):
+	if float(a.get("held", 0.0)) < float(a.get("hold", 150.0)):
 		return
 	var isl: Array = a.get("islands", [])
 	var sa: int = a.get("split_a", -1)
@@ -735,10 +733,17 @@ func _check_two_kinds(a: Dictionary) -> void:
 	if sa < 0 or sb < 0 or sa >= isl.size() or sb >= isl.size():
 		return
 	campaign.state["two_kinds"] = true
-	var nm: String = names.get(int(a.split_lineage), "one lineage")
-	var page := "[b]Two kinds.[/b] %s's descendants on %s and on %s have grown apart: their genomes now differ by %.1f letters in 100 beyond the variety inside each island, and have for %d days. Isolation first, then difference: how new species begin." % [nm, isl[sa].name, isl[sb].name, float(a.divergence) * 100.0, int(ARCH_HOLD)]
-	campaign.field_note("Discovery: two kinds", page)
+	var nm: String = names.get(int(a.split_lineage), "lineage #%d" % int(a.split_lineage))
+	var page := "[b]Two kinds.[/b] %s's descendants on %s and on %s have grown apart: their genomes now differ by %.1f letters in 100 beyond the variety inside each island, and have for %d days. Isolation first, then difference: how new species begin." % [nm, isl[sa].name, isl[sb].name, float(a.divergence) * 100.0, int(a.get("hold", 150))]
+	# a page of its own: field notes rotate out, a discovery stays
+	campaign.state.codex.append({"title": "Discovery: two kinds", "text": page, "scale": 7})
+	campaign.save()
+	campaign.changed.emit()
 	campaign.toast.emit("Discovery: two kinds", "%s on %s and %s have split apart. Saved in the codex (J)." % [nm, isl[sa].name, isl[sb].name], Color(0.6, 0.95, 1.0))
+
+## A living web on island `e` (an `archipelago()` island entry): its size's plants, an animal.
+static func _web(e: Dictionary) -> bool:
+	return int(e.plants) >= int(e.get("need_plants", 1)) and int(e.animals) >= int(e.get("need_animals", 1))
 
 func _island_name() -> String:
 	var isl: Array = arch_state.get("islands", [])
@@ -758,7 +763,8 @@ func _arch_text() -> String:
 		t += "[color=#9ab]%dx%d tiles, waves x%s, UV x%s, food x%s[/color]\n" % [e.width, e.depth, _mult(e.waves), _mult(e.uv), _mult(e.food)]
 	var dots := []
 	for j in isl.size():
-		var on: bool = j < alive.size() and alive[j] == 1
+		# filled: a living web there (enough plants and animals)
+		var on: bool = _web(isl[j])
 		var nm: String = isl[j].name
 		dots.append(("[color=#7f7]●[/color] " if on else "[color=#776]○[/color] ") + ("[b]%s[/b]" % nm if j == k else nm))
 	t += "[font_size=13]" + "  ".join(PackedStringArray(dots)) + "[/font_size]\n"
@@ -1463,22 +1469,26 @@ func goal_progress() -> Dictionary:
 		if a.is_empty():
 			return {}
 		var isl: Array = a.get("islands", [])
-		var alive: PackedInt64Array = a.get("alive", PackedInt64Array())
 		var n := isl.size()
 		var got := 0
-		var empty := []
+		var short := []
 		for k in n:
-			if k < alive.size() and alive[k] == 1:
+			var e: Dictionary = isl[k]
+			if _web(e):
 				got += 1
 			else:
-				empty.append(isl[k].name)
+				short.append("%s (%d plants, %d animals)" % [e.name, e.plants, e.animals])
 		_check_two_kinds(a)
-		var now := "life on %d of %d islands" % [got, n]
-		if not empty.is_empty() and empty.size() <= 3:
-			now += "; still empty: " + ", ".join(PackedStringArray(empty))
-		if got < 2:
-			now += " (stronger currents, L, carry more spores across)"
-		return {"p": float(got) / max(n, 1), "done": n > 0 and got == n, "args": [n], "now": now, "who": "your creatures' descendants"}
+		var now := "a living web on %d of %d islands" % [got, n]
+		if not short.is_empty() and short.size() <= 2:
+			now += "; short: " + ", ".join(PackedStringArray(short))
+		var done: bool = float(a.get("web_day", -1.0)) >= 0.0
+		var held: float = a.get("web_held", 0.0)
+		var hold: float = a.get("web_hold", 100.0)
+		if got == n and held > 0.0:
+			now += ", held %d of %d days" % [int(held), int(hold)]
+		var p: float = 0.6 * float(got) / max(n, 1) + 0.4 * clamp(held / hold, 0.0, 1.0)
+		return {"p": 1.0 if done else p, "done": done, "args": [n, int(hold)], "now": now, "who": "the islands' plants and animals"}
 	if garden:
 		var who: String = names.get(int(g.won_lineage), "lineage %d" % g.won_lineage)
 		var lead: String = names.get(int(g.best_lineage), "none yet")

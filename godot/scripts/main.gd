@@ -242,7 +242,7 @@ func travel(k: int) -> void:
 	if k == from:
 		return
 	if k >= 0 and not campaign.is_open(k) and shot == "":
-		var why: String = "Split one lineage into two kinds on the islands to open your world." if k == 8 else "Reach the goal of %s first: %s." % [hub.SCALES[k - 1][0], campaign.goal_title(k - 1)]
+		var why: String = "Grow a living web on every island to open your world." if k == 8 else "Reach the goal of %s first: %s." % [hub.SCALES[k - 1][0], campaign.goal_title(k - 1)]
 		show_toast("Locked: " + hub.SCALES[k][0], why, Color(0.7, 0.75, 0.85))
 		return
 	if shot != "" and not show_warp:

@@ -124,6 +124,11 @@ pub struct ReefParams {
     pub move_cost: f64,
     /// Body size at which the mates signal saturates.
     pub mates_full: f64,
+    /// Division per day a cell gains from organic food instead of light: x its metabolism, x how
+    /// full the body's store is, x how dark it sits. Dead matter is energy too; with this a body
+    /// can live in the shade on what others leave (a decomposer, the role fungi play). 0: light
+    /// is the only energy, as in every calibration before it.
+    pub heterotrophy: f64,
 }
 
 impl Default for ReefParams {
@@ -170,6 +175,7 @@ impl Default for ReefParams {
             anchor: 1.0,
             move_cost: 1.0,
             mates_full: (cp.colony_max - 1) as f64,
+            heterotrophy: 0.0,
         }
     }
 }
@@ -1238,6 +1244,32 @@ impl Reef {
         }
     }
 
+    /// Kinds of life now: (plants, animals). Plants are anchored bodies of 4+ cells growing on
+    /// light (seaweeds); animals are bodies of 4+ cells that crawl or bit something in the last
+    /// two days.
+    pub fn kinds(&self) -> (usize, usize) {
+        let k = self.kinds3();
+        (k.0, k.1)
+    }
+
+    /// (plants, animals, decomposers): anchored bodies of 4+ cells in deep shade (mean daylight
+    /// under DARK) live on what others leave, not on light: decomposers.
+    pub fn kinds3(&self) -> (usize, usize, usize) {
+        const DARK: f64 = 0.15;
+        let grazers: std::collections::HashSet<u64> = self.meals.iter().filter(|m| self.t_days - m.0 < 2.0).map(|m| m.1).collect();
+        let mut out = (0, 0, 0);
+        for o in self.organisms.iter().filter(|o| o.settled() && o.cells.len() >= 4) {
+            if o.speed > 0.0 || grazers.contains(&o.id) {
+                out.1 += 1;
+            } else if o.cells.iter().map(|c| c.x[7]).sum::<f64>() / (o.cells.len() as f64) < DARK {
+                out.2 += 1;
+            } else {
+                out.0 += 1;
+            }
+        }
+        out
+    }
+
     pub fn cells(&self) -> usize {
         self.organisms.iter().map(|o| o.cells.len()).sum()
     }
@@ -1284,6 +1316,8 @@ fn live(o: &mut Organism, sh: &Shared, dt: f64, rng: &mut Rng) -> (Vec<usize>, u
     let mut dead = Vec::new();
     let mut unsure = 0;
     let mut example = None;
+    // how well stocked the body is with organic food, 0..1 (for heterotrophy)
+    let rich = if sh.rp.heterotrophy > 0.0 { (o.store.iter().sum::<i64>() as f64 / (n as f64 * sh.rp.store_cap * N_LETTERS as f64)).min(1.0) } else { 0.0 };
     for (i, c) in o.cells.iter_mut().enumerate() {
         let p = c.pos;
         c.open = DIRS.iter().filter(|d| p[2] + d[2] >= 0 && !sh.occ.contains_key(&[p[0] + d[0], p[1] + d[1], p[2] + d[2]])).count() as u8;
@@ -1309,6 +1343,7 @@ fn live(o: &mut Organism, sh: &Shared, dt: f64, rng: &mut Rng) -> (Vec<usize>, u
             example.get_or_insert(c.x);
         }
         let (div, burst) = sh.model.fates(&c.x, sh.prior);
+        let div = if sh.rp.heterotrophy > 0.0 { div + sh.rp.heterotrophy * traits.1 * rich * (1.0 - daylight.min(1.0)) } else { div };
         if c.total() < 2 * c.birth_mass {
             let k = round_flux(c.birth_mass as f64 * div * dt, rng).max(0);
             for _ in 0..k {
