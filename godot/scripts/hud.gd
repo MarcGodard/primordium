@@ -170,6 +170,9 @@ func _unhandled_input(e: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 ## The choices below that this world was built from, when any differ from the default.
+var sky_alert := ""
+var sky_until := 0.0
+
 static func _built_from() -> String:
 	var parts := []
 	var m: PackedFloat64Array = ElementsSim.recipe()
@@ -184,7 +187,9 @@ static func _built_from() -> String:
 			parts.append("%s x%s" % [pn[i], _num(p[i])])
 	if parts.is_empty():
 		return ""
-	return "[color=#ffd080]built from: %s[/color]\n" % ", ".join(PackedStringArray(parts))
+	# a long list wraps over the whole panel: name the first two, count the rest
+	var more := "" if parts.size() <= 2 else " +%d more" % (parts.size() - 2)
+	return "[color=#ffd080]built from: %s%s[/color]\n" % [", ".join(PackedStringArray(parts.slice(0, 2))), more]
 
 static func _num(v: float) -> String:
 	return ("%.2f" % v).trim_suffix("0").trim_suffix("0").trim_suffix(".")
@@ -207,11 +212,15 @@ func _process(_d: float) -> void:
 	var mins := int(e.day_phase * 1440.0)
 	var season: String = SEASONS[int(e.year_phase * 4.0) % 4]
 	var tide_dir := "rising" if e.tide_rate > 0 else "falling"
-	var alerts := ""
-	if e.flare > 0.15:
-		alerts += "[color=#ff70ff]STELLAR FLARE[/color]  "
+	# sky events last a blink at speed: hold the line long enough to read, never add or drop a line
+	var now := Time.get_ticks_msec() / 1000.0
 	if e.supernova > 0.05:
-		alerts += "[color=#ffffff][b]SUPERNOVA[/b][/color]"
+		sky_alert = "[color=#ffffff][b]supernova[/b]: cosmic rays up, mutations rise[/color]"
+		sky_until = now + 4.0
+	elif e.flare > 0.15:
+		sky_alert = "[color=#ff9ad5]stellar flare[/color]: UV burst, membranes and genes take damage"
+		sky_until = now + 4.0
+	var alerts: String = (sky_alert if now < sky_until else "[color=#789]sky calm[/color]") + "\n"
 	label.text = "[b]PRIMORDIUM[/b]  [color=#8ab]%s[/color]\n" % view.SCALE_NAME + \
 		"Day %d  %02d:%02d   year %d, %s\n" % [day, mins / 60, mins % 60, int(e.year), season] + \
 		"%.1f K   tide %.2f %s   cloud %.0f%%\n" % [e.temperature_k, e.tide_level, tide_dir, e.cloud * 100.0] + \
