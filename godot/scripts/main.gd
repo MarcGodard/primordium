@@ -55,6 +55,7 @@ func _ready() -> void:
 		v.activate(false)
 		# recipe version this view's world was built from (campaign.set_recipe / set_planet)
 		v.set_meta("built", campaign.recipe_version())
+		v.set_meta("built_f", campaign.founders_version())
 	hud = load("res://scripts/hud.gd").new()
 	hud.view = view
 	add_child(hud)
@@ -139,12 +140,18 @@ func _ready() -> void:
 						m[int(zm[0]) - 1] = float(zm[1])
 				campaign.set_recipe(m)
 				if view.has_method("rebuild_world") and view.rebuild_world():
-					view.set_meta("built", campaign.recipe_version())
+					if view.has_method("mark_built"):
+						view.mark_built()
+					else:
+						view.set_meta("built", campaign.recipe_version())
 				if view.get("recipe_panel"):
 					view.recipe_panel.refresh()
 			"search":
 				if view.has_method("start_search"):
 					view.start_search()
+			"handup":
+				if view.has_method("hand_up"):
+					view.hand_up()
 			"island":
 				if view.has_method("_set_island"):
 					view._set_island(int(kv[1]))
@@ -196,9 +203,13 @@ func switch_to(k: int) -> void:
 	view = views[posmod(k, views.size())]
 	# a world built from an older recipe starts again from the new one
 	var vi := views.find(view)
-	if vi > 0 and view.get_meta("built", 0) != campaign.recipe_version() and view.has_method("rebuild_world") and view.rebuild_world():
-		view.set_meta("built", campaign.recipe_version())
-		show_toast(hub.SCALES[vi][0] + " rebuilt", "From your new recipe and sky: the world below changed, so this one started over.", Color(1.0, 0.8, 0.45))
+	var stale: bool = view.is_stale() if view.has_method("is_stale") else view.get_meta("built", 0) != campaign.recipe_version()
+	if vi > 0 and stale and view.has_method("rebuild_world") and view.rebuild_world():
+		if view.has_method("mark_built"):
+			view.mark_built()
+		else:
+			view.set_meta("built", campaign.recipe_version())
+		show_toast(hub.SCALES[vi][0] + " rebuilt", "The world below changed (your recipe, sky or coast founders), so this one started over from it.", Color(1.0, 0.8, 0.45))
 	in_hub = false
 	hub.activate(false)
 	for v in views:

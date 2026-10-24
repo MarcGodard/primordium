@@ -3,6 +3,7 @@
 ## bays at both ends. Cells drift between neighbours on the current at high water.
 ## Cell tint = what its genes do, as on scale 3. Bottom chart: each site's mean tint over time.
 extends Node2D
+var campaign: Node
 
 const CELL := 6.0
 const SPEEDS := [0, 1, 2, 4, 8]
@@ -56,6 +57,8 @@ func _ready() -> void:
 	sim = CoastSim.new()
 	add_child(sim)
 	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1)
+	if campaign:
+		campaign.graduated.connect(_on_graduated)
 	n_sites = sim.site_count()
 	# wide screens (ultrawide) take the coast in two columns, north half on the left
 	var vs0 := get_viewport_rect().size
@@ -322,7 +325,9 @@ func hud_text() -> String:
 	t += "[b]Discoveries[/b]\n"
 	for d in stats.discoveries:
 		t += "[color=#cbf]" + d + "[/color]\n"
-	t += "\n[color=#789]Tab: switch scale   A: auto resolution   L: levers\nclick a site, zoom in to see its cells[/color]"
+	if campaign and campaign.state.has("coast_founders"):
+		t += "[color=#ffd080]%d of your coast's cells are the reef's founders (U: send these instead)[/color]\n" % campaign.state.coast_founders.size()
+	t += "\n[color=#789]Tab: switch scale   A: auto resolution   L: levers\nU: send this coast's survivors up to the reef\nclick a site, zoom in to see its cells[/color]"
 	return t
 
 ## Evolution map: one row per site (north on top), one column per day, colour = mean tint.
@@ -395,6 +400,9 @@ func _unhandled_input(e: InputEvent) -> void:
 		cam.position -= e.relative / cam.zoom
 	elif e is InputEventKey and e.pressed:
 		match e.keycode:
+			KEY_U:
+				if not e.echo:
+					hand_up()
 			KEY_L:
 				if not e.echo:
 					levers_open = not levers_open
@@ -414,3 +422,25 @@ func rebuild_world() -> bool:
 	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1)
 	levers.refresh()
 	return true
+
+## When the coast's goal is met (this session, on this coast), its survivors go up once on
+## their own: never on a later visit, when the coast has just restarted from day 0.
+func _on_graduated(k: int, _page: String) -> void:
+	if k == 5 and active_here():
+		hand_up()
+
+func active_here() -> bool:
+	return is_visible_in_tree() and ok
+
+## Send this coast's living cells up: they found every reef, archipelago and your world from
+## now on (worlds already built rebuild when next visited). The shipped founders are only the
+## fallback before any coast was handed up.
+func hand_up() -> void:
+	if not ok or campaign == null:
+		return
+	var f: Array = sim.founders(96)
+	campaign.set_founders(f)
+	if f.is_empty():
+		campaign.toast.emit("No survivors to send", "This coast has no living cells: the reef above starts empty. Tune the coast and send again.", Color(1.0, 0.55, 0.45))
+	else:
+		campaign.toast.emit("Founders sent up", "%d of your coast's cells now found the reef and the islands. Worlds above rebuild from them when you next visit." % f.size(), Color(1.0, 0.8, 0.45))

@@ -57,6 +57,7 @@ func _ready() -> void:
 		load_state()
 	ElementsSim.set_recipe(PackedFloat64Array(state.get("recipe", [])))
 	ElementsSim.set_planet(PackedFloat64Array(state.get("planet", [])))
+	ReefSim.set_founders(state.get("coast_founders", []), state.has("coast_founders"))
 
 func load_state() -> void:
 	if not FileAccess.file_exists(save_path):
@@ -154,6 +155,22 @@ func set_planet(mult: Array) -> void:
 	state["recipe_version"] = int(state.get("recipe_version", 0)) + 1
 	ElementsSim.set_planet(PackedFloat64Array(mult))
 	save()
+
+## Founders handed up from the player's coast (CoastSim.founders): the reef and the
+## archipelago start from them (your world from kept creatures). Bumps `founders_version`, which
+## only those worlds check, so nothing below the coast restarts.
+func set_founders(list: Array) -> void:
+	# JSON keeps arrays: genomes and masses round-trip as plain lists
+	var plain := []
+	for f in list:
+		plain.append({"genome": Array(f.genome), "mass": Array(f.mass), "latitude": f.latitude, "colonial": f.colonial})
+	state["coast_founders"] = plain
+	state["founders_version"] = int(state.get("founders_version", 0)) + 1
+	ReefSim.set_founders(list, true)
+	save()
+
+func founders_version() -> int:
+	return int(state.get("founders_version", 0))
 
 func recipe_version() -> int:
 	return int(state.get("recipe_version", 0))

@@ -16,6 +16,23 @@ pub struct CoastSim {
 
 #[godot_api]
 impl CoastSim {
+    /// Up to `n` founders from the living coast (Coast::founders), for the reef: [{genome,
+    /// mass, latitude, colonial}]. Empty when the coast is dead or not started.
+    #[func]
+    fn founders(&mut self, n: i64) -> VarArray {
+        let mut out = VarArray::new();
+        let Some(c) = self.coast.as_mut() else { return out };
+        for f in c.founders(n.max(0) as usize) {
+            let mut d = VarDictionary::new();
+            d.set("genome", &PackedByteArray::from(f.genome.as_slice()));
+            d.set("mass", &PackedInt64Array::from(f.mass.as_slice()));
+            d.set("latitude", f.latitude);
+            d.set("colonial", f.colonial);
+            out.push(&d.to_variant());
+        }
+        out
+    }
+
     /// Lever (see lever_panel.gd): "current", the along-shore current, x1/4..x4 of default. It
     /// sets how many flooded cells a day ride to the next beach. False when unknown.
     #[func]

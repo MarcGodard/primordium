@@ -285,6 +285,35 @@ impl Coast {
     }
 }
 
+impl Coast {
+    /// Up to `n` founders drawn from the coast's living cells, spread over every site, colonial
+    /// ones first: what the coast hands the reef. Mass is what the cell is built of (membrane,
+    /// products, junk), not its pantry of loose and raw atoms.
+    pub fn founders(&mut self, n: usize) -> Vec<crate::reef::Founder> {
+        let mut pool = Vec::new();
+        for s in self.sites.iter_mut() {
+            let lat = s.latitude;
+            let cells = s.world.cells.clone();
+            for cell in &cells {
+                let info = s.world.info(&cell.genome);
+                let mut mass = cell.membrane;
+                for l in 0..mass.len() {
+                    mass[l] += cell.junk[l];
+                }
+                for (g, &k) in info.genes.iter().zip(&cell.products) {
+                    for &l in &g.product {
+                        mass[l as usize] += k;
+                    }
+                }
+                pool.push(crate::reef::Founder { genome: cell.genome.clone(), latitude: lat, colonial: cell.colony.is_some(), mass });
+            }
+        }
+        pool.sort_by_key(|f| !f.colonial);
+        let step = (pool.len() / n.max(1)).max(1);
+        pool.into_iter().step_by(step).take(n).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

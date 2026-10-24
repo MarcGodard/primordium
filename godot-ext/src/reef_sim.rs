@@ -13,6 +13,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Founders handed up from the player's own coast (CoastSim::founders, kept in the campaign):
+/// every reef and archipelago starts from them instead of the shipped seed's. None: the shipped
+/// founders (no coast run handed up yet).
+static FOUNDERS: std::sync::RwLock<Option<Vec<primordium_core::reef::Founder>>> = std::sync::RwLock::new(None);
+
 /// Cells a kept body's shape records (8 floats each): enough for any body seen so far.
 const SHAPE_MAX: usize = 400;
 
@@ -241,7 +246,10 @@ impl ReefSim {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
         let Ok(text) = std::fs::read_to_string(seed_path.to_string()) else { return false };
-        let Ok(rs) = serde_json::from_str::<ReefSeed>(&text) else { return false };
+        let Ok(mut rs) = serde_json::from_str::<ReefSeed>(&text) else { return false };
+        if let Some(f) = FOUNDERS.read().unwrap().as_ref() {
+            rs.founders = f.clone();
+        }
         let cosmos = crate::elements_sim::cosmos(seed as u64);
         let shore = if founders == Some(usize::MAX) {
             let mut base = ReefParams::default();
@@ -265,6 +273,51 @@ impl ReefSim {
 
 #[godot_api]
 impl ReefSim {
+    /// Founders for every reef started from now on: [{genome, mass, latitude, colonial}] as
+    /// CoastSim::founders gives them; `use_coast` false goes back to the shipped founders.
+    #[func]
+    fn set_founders(list: VarArray, use_coast: bool) {
+        if !use_coast {
+            *FOUNDERS.write().unwrap() = None;
+            return;
+        }
+        let mut v = Vec::new();
+        for item in list.iter_shared() {
+            let Ok(d) = item.try_to::<VarDictionary>() else { continue };
+            // packed arrays from CoastSim, plain arrays of numbers after a JSON save
+            let ints = |v: Option<Variant>| -> Vec<i64> {
+                let Some(v) = v else { return Vec::new() };
+                if let Ok(p) = v.try_to::<PackedInt64Array>() {
+                    return p.to_vec();
+                }
+                if let Ok(p) = v.try_to::<PackedByteArray>() {
+                    return p.as_slice().iter().map(|&b| b as i64).collect();
+                }
+                v.try_to::<VarArray>().map(|a| a.iter_shared().filter_map(|x| x.try_to::<f64>().ok().or_else(|| x.try_to::<i64>().ok().map(|i| i as f64))).map(|f| f as i64).collect()).unwrap_or_default()
+            };
+            let genome: Vec<u8> = ints(d.get("genome")).into_iter().map(|v| v.clamp(0, 255) as u8).collect();
+            let m: Vec<i64> = ints(d.get("mass"));
+            if genome.is_empty() || genome.iter().any(|&l| l as usize >= N_LETTERS) {
+                continue;
+            }
+            let mass: [i64; N_LETTERS] = std::array::from_fn(|l| m.get(l).copied().unwrap_or(0));
+            let latitude = d.get("latitude").and_then(|g| g.try_to::<f64>().ok()).unwrap_or(0.0);
+            let colonial = d.get("colonial").and_then(|g| g.try_to::<bool>().ok()).unwrap_or(false);
+            v.push(primordium_core::reef::Founder { genome, latitude, colonial, mass });
+        }
+        *FOUNDERS.write().unwrap() = Some(v);
+    }
+
+    /// How many founders the next reef starts from, and whether they came from the player's coast.
+    #[func]
+    fn founder_source() -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let f = FOUNDERS.read().unwrap();
+        d.set("from_coast", f.is_some());
+        d.set("count", f.as_ref().map_or(-1, |v| v.len() as i64));
+        d
+    }
+
     #[func]
     fn start(&mut self, rates_path: GString, seed_path: GString, seed: i64) -> bool {
         self.begin(rates_path, seed_path, seed, None)

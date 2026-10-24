@@ -928,9 +928,9 @@ func _ff_done(r: Dictionary) -> void:
 		_release_kept()
 		save_garden()
 	# the recipe or sky changed while this world was on the worker: rebuild it now
-	if campaign and has_meta("built") and get_meta("built") != campaign.recipe_version() and rebuild_world():
-		set_meta("built", campaign.recipe_version())
-		campaign.toast.emit("Rebuilt from your new recipe and sky", "The world below changed while this one ran ahead, so it started over.", Color(1.0, 0.8, 0.45))
+	if is_stale() and rebuild_world():
+		mark_built()
+		campaign.toast.emit("Rebuilt from the world below", "Your recipe, sky or coast founders changed while this one ran ahead, so it started over.", Color(1.0, 0.8, 0.45))
 
 ## Garden: the surviving lineages, one representative each, to come back next session.
 func save_garden() -> void:
@@ -1514,6 +1514,10 @@ func hud_text() -> String:
 	for c in [["cells", stats.cells], ["bodies", stats.bodies], ["biggest", stats.biggest], ["lineages", stats.lineages]]:
 		t += "[cell padding=0,0,14,0][center][font_size=22][b]%s[/b][/font_size]\n[color=#8ab][font_size=12]%s[/font_size][/color][/center][/cell]" % [_short(c[1]), c[0]]
 	t += "[/table]\n"
+	if not garden:
+		var fs: Dictionary = ReefSim.founder_source()
+		if fs.from_coast:
+			t += "[color=#ffd080]founded by %d cells from your coast[/color]\n" % fs.count
 	var now := _now_line()
 	if now != "":
 		t += "[color=#dde]%s[/color]\n" % now
@@ -1720,6 +1724,21 @@ func _draw_chart() -> void:
 
 ## The recipe changed: this world starts again in the new sea. The reef runs again, the
 ## archipelago starts over with the kept creatures, your world comes back from its save.
+## The reef and the archipelago start from the coast's founders; your world from kept creatures.
+func uses_founders() -> bool:
+	return not garden
+
+## World versions this view was built from (main.gd sets them, campaign bumps them).
+func is_stale() -> bool:
+	if campaign == null:
+		return false
+	return get_meta("built", 0) != campaign.recipe_version() or (uses_founders() and get_meta("built_f", 0) != campaign.founders_version())
+
+func mark_built() -> void:
+	if campaign:
+		set_meta("built", campaign.recipe_version())
+		set_meta("built_f", campaign.founders_version())
+
 func rebuild_world() -> bool:
 	if not ok or sim.busy():
 		return false

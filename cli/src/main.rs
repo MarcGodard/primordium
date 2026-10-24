@@ -36,6 +36,7 @@ fn main() {
         "reef-goal" => reef_goal(&args),
         "garden" => garden(&args),
         "archipelago" => archipelago(&args),
+        "chain" => chain(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -1107,29 +1108,7 @@ fn reef_seed(args: &[String]) {
             println!("day {:.0}: {} cells, {:.0}s", c.t_days, c.cells(), start.elapsed().as_secs_f64());
         }
     }
-    let mut pool: Vec<Founder> = Vec::new();
-    for s in c.sites.iter_mut() {
-        let lat = s.latitude;
-        let cells = s.world.cells.clone();
-        for cell in &cells {
-            // the body a cell is built of (membrane, products, junk), not its pantry of loose and raw atoms
-            let info = s.world.info(&cell.genome);
-            let mut mass = cell.membrane;
-            for l in 0..mass.len() {
-                mass[l] += cell.junk[l];
-            }
-            for (g, &k) in info.genes.iter().zip(&cell.products) {
-                for &l in &g.product {
-                    mass[l as usize] += k;
-                }
-            }
-            pool.push(Founder { genome: cell.genome.clone(), latitude: lat, colonial: cell.colony.is_some(), mass });
-        }
-    }
-    // spread over the coast: every k-th cell, colonial ones first
-    pool.sort_by_key(|f| !f.colonial);
-    let step = (pool.len() / n.max(1)).max(1);
-    let founders: Vec<Founder> = pool.into_iter().step_by(step).take(n).collect();
+    let founders: Vec<Founder> = c.founders(n);
     let colonial = founders.iter().filter(|f| f.colonial).count();
     let seed = ReefSeed { days: c.t_days, model: c.model.clone(), founders };
     std::fs::write(&out, serde_json::to_string(&seed).unwrap()).unwrap();
@@ -1531,4 +1510,59 @@ fn recipe_arg(args: &[String]) -> primordium_core::recipe::Recipe {
         }
     }
     primordium_core::recipe::Recipe::new(&m)
+}
+
+/// Carry-up test: a coast run for `--coast-days` (with `--recipe`, `--current`) hands its
+/// survivors to a reef run for `--reef-days`; how the reef does shows what the coast passed up.
+/// `--shipped=1` uses the shipped founders instead, for comparison.
+fn chain(args: &[String]) {
+    use primordium_core::coast::{Coast, CoastParams};
+    use primordium_core::goal::CreatureGoal;
+    use primordium_core::reef::{Reef, ReefParams, ReefSeed};
+    use primordium_core::surrogate::RateTable;
+    let seed: u64 = arg(args, "seed", 1);
+    let coast_days: f64 = arg(args, "coast-days", 40.0);
+    let reef_days: f64 = arg(args, "reef-days", 300.0);
+    let recipe = recipe_arg(args);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
+    let mut rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(data_file("reef_seed.json")).expect("run reef-seed first")).unwrap();
+    if arg(args, "shipped", 0.0) == 0.0 {
+        let d = CoastParams::default();
+        let mut cp = CoastParams { auto: true, current_m_s: d.current_m_s * arg(args, "current", 1.0), ..d };
+        recipe.apply_coast(&mut cp);
+        let mut c = Coast::new(cp, CosmosParams { seed, ..Default::default() }, rates.clone(), seed);
+        while c.t_days < coast_days {
+            c.step(0.02);
+        }
+        rs.founders = c.founders(96);
+        let colonial = rs.founders.iter().filter(|f| f.colonial).count();
+        let glen = rs.founders.iter().map(|f| f.genome.len()).sum::<usize>() as f64 / rs.founders.len().max(1) as f64;
+        println!("coast day {:.0}: {} cells, {} founders ({} colonial, genome {:.0})", c.t_days, c.cells(), rs.founders.len(), colonial, glen);
+    } else {
+        println!("shipped founders: {}", rs.founders.len());
+    }
+    let mut rp = ReefParams::default();
+    recipe.apply_reef(&mut rp);
+    let mut r = Reef::new(rp, CosmosParams { seed: seed + 50, ..Default::default() }, rates, &rs, seed + 50);
+    let goal = CreatureGoal::default();
+    let m0 = r.matter();
+    let (mut noon, mut creature_days, mut first) = (0.5, 0usize, None);
+    let mut next = 50.0;
+    while r.t_days < reef_days {
+        r.step(0.02);
+        if r.t_days >= noon {
+            noon += 1.0;
+            let n = r.organisms.iter().filter(|o| goal.body_ok(o)).count();
+            if n > 0 {
+                creature_days += 1;
+                first.get_or_insert(r.t_days);
+            }
+        }
+        if r.t_days >= next {
+            next += 50.0;
+            let multi = r.organisms.iter().filter(|o| o.settled() && o.cells.len() > 1).count();
+            let biggest = r.organisms.iter().map(|o| o.cells.len()).max().unwrap_or(0);
+            println!("reef day {:4.0}: cells {:5} multicellular {:4} biggest {:3} kinds {:?} creature noons {} first {:?} lineages {} ledger {}", r.t_days, r.cells(), multi, biggest, r.kinds3(), creature_days, first.map(|f: f64| f.round()), r.clades().len(), if r.matter() == m0 { "exact" } else { "DRIFT" });
+        }
+    }
 }
