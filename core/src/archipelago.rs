@@ -349,7 +349,8 @@ mod tests {
         let f = &rs.founders[0];
         let genome: Vec<u8> = f.genome.iter().map(|&l| a.islands[0].canon_letter(l)).collect();
         let (clade, _) = a.release(0, &genome, f.mass.map(|m| m.clamp(0, 40)), 20).expect("release");
-        for _ in 0..3000 {
+        // 120 days: bigger tables grow slower, a lineage needs longer to send a spore across
+        for _ in 0..6000 {
             a.step(0.02);
         }
         assert_eq!(a.matter(), m0, "matter changed across crossings");

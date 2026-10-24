@@ -13,10 +13,12 @@ use serde::Serialize;
 /// letters below all follow from it at compile time. `primordium elements --shells=2,6,6`
 /// previews a table before switching; the `shells-266` feature builds the whole sim on that
 /// table (data in its own folder, `data_dir`).
-#[cfg(not(feature = "shells-266"))]
+#[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
 pub const SHELLS: [u8; 2] = [2, 6];
 #[cfg(feature = "shells-266")]
 pub const SHELLS: [u8; 3] = [2, 6, 6];
+#[cfg(feature = "shells-2666")]
+pub const SHELLS: [u8; 4] = [2, 6, 6, 6];
 
 /// Where this table's learned data lives, relative to the repo root: `data/` for [2, 6], a
 /// folder per table otherwise (`data/shells-2-6-6/`), so tables never read each other's files.
@@ -267,7 +269,7 @@ mod tests {
     }
 
     // pins below are values of the [2, 6] world
-    #[cfg(not(feature = "shells-266"))]
+    #[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
     #[test]
     fn derived_constants_match_the_shell_rule() {
         assert_eq!(N_ELEMENTS, 8);
@@ -281,7 +283,7 @@ mod tests {
     }
 
     // pins below are values of the [2, 6] world
-    #[cfg(not(feature = "shells-266"))]
+    #[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
     #[test]
     fn universe_reads_our_table_as_the_sim_does() {
         let u = Universe::new(&SHELLS);

@@ -6,6 +6,8 @@ version.workspace = true
 [features]
 # The 14-element table (shells [2, 6, 6]) instead of this world's [2, 6]: see docs/bigger-table.md.
 shells-266 = []
+# 20 elements, [2, 6, 6, 6]. Pick at most one table feature.
+shells-2666 = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

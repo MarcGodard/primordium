@@ -15,7 +15,9 @@ const EXPLAIN := """[b]Scale -1: the periodic table[/b]
 
 [b]Electronegativity[/b] is how hard an atom pulls on shared electrons. Two atoms that pull very differently form strong, partly ionic bonds; atoms that pull alike stay oily and avoid water.
 
-[b]Try.[/b] Click any element. Then press a universe button to see what a third shell, or our own octets, would change: more elements, a different backbone, a different genetic alphabet."""
+[b]Difficulty is the table.[/b] Hard adds a third shell of 6 and Very hard a fourth: more elements, so more rival atoms dilute the useful ones, and a longer genetic code makes every gene longer and easier to break. Press a button to preview a table, then play it. Each table keeps its own campaign. Our own octets (2, 8, 8) only preview: carbon-like atoms bond four ways and chains branch.
+
+[b]Try.[/b] Click any element. Then press a table button to see what changes: more elements, a different backbone, a different genetic alphabet."""
 const SCALE_NAME := "scale -1: elements"
 
 const ROLE_COL := {
@@ -24,7 +26,8 @@ const ROLE_COL := {
 	"rival": Color(1.0, 0.5, 0.25),
 	"noble": Color(0.6, 0.5, 0.85),
 }
-const UNIVERSES := [[[2, 6], "This world (2, 6)"], [[2, 6, 6], "A third shell (2, 6, 6)"], [[2, 8, 8], "Our octets (2, 8, 8)"]]
+## Playable tables (Tables.TABLES) are difficulty levels; octets only preview (chains branch).
+const UNIVERSES := [[[2, 6], "Normal (2, 6)"], [[2, 6, 6], "Hard (2, 6, 6)"], [[2, 6, 6, 6], "Very hard (2, 6, 6, 6)"], [[2, 8, 8], "Our octets (2, 8, 8)"]]
 const TILE := 2.7
 
 var sim: ElementsSim
@@ -44,6 +47,9 @@ var tried_other := false
 var layer: CanvasLayer
 var bars: Control
 var title: Label
+## Shown while previewing a playable table other than the one running.
+var play: Button
+var play_key := ""
 var world_env: WorldEnvironment
 var environment: Environment
 var campaign: Node
@@ -90,14 +96,18 @@ func _build_overlay() -> void:
 	var row := HBoxContainer.new()
 	row.anchor_left = 0.5
 	row.anchor_right = 0.5
-	row.offset_left = -330
-	row.offset_right = 330
+	row.offset_left = -420
+	row.offset_right = 420
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.offset_top = 104
 	row.add_theme_constant_override("separation", 10)
 	layer.add_child(row)
 	for u in UNIVERSES:
 		var b := Button.new()
 		b.text = u[1]
+		if u[0] == Tables.current()[1]:
+			b.text = "> %s <" % u[1]
+			b.tooltip_text = "The world you are playing."
 		b.focus_mode = Control.FOCUS_NONE
 		var shells: Array = u[0]
 		b.pressed.connect(func() -> void: load_universe(shells))
@@ -113,6 +123,16 @@ func _build_overlay() -> void:
 	title.add_theme_font_size_override("font_size", 14)
 	title.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
 	layer.add_child(title)
+	play = Button.new()
+	play.anchor_left = 0.5
+	play.anchor_right = 0.5
+	play.offset_left = -200
+	play.offset_right = 200
+	play.offset_top = 196
+	play.focus_mode = Control.FOCUS_NONE
+	play.visible = false
+	play.pressed.connect(func() -> void: Tables.switch(play_key))
+	layer.add_child(play)
 	bars = Control.new()
 	bars.anchor_left = 0.5
 	bars.anchor_right = 0.5
@@ -132,6 +152,8 @@ func _build_overlay() -> void:
 func _build_recipe() -> void:
 	recipe_panel = load("res://scripts/lever_panel.gd").new()
 	recipe_panel.span = 3.25
+	if ElementsSim.element_names().size() > 11:
+		recipe_panel.columns = 2
 	var defs := []
 	var names: PackedStringArray = ElementsSim.element_names()
 	for z in range(1, names.size()):
@@ -204,9 +226,18 @@ func load_universe(shells: Array) -> void:
 			txt += ".  Letters: %s.  Genes written in: %s." % [names.call(summary.letters), names.call(summary.heritable)]
 			if b.valence > 3:
 				txt += "  Chains branch (%d side groups per link)." % (b.valence - 2)
+	var t: Array = Tables.for_shells(Array(s))
 	if not summary.this_world:
-		txt += "  (Preview: the simulation runs on 2, 6.)"
+		var cur: Array = Tables.current()
+		txt += "  (Preview: you are playing %s, %s.)" % [cur[2], ", ".join(PackedStringArray(cur[1].map(str)))]
+	if Tables.missing != "":
+		txt += "  " + Tables.missing
 	title.text = txt
+	play_key = t[0] if t.size() > 0 and not summary.this_world else ""
+	if play:
+		play.visible = play_key != ""
+		if play_key != "":
+			play.text = "Play this world (%s): restarts, keeps each world's campaign" % t[2]
 	if recipe_panel:
 		recipe_panel.visible = summary.get("this_world", false)
 		recipe_panel.refresh()
@@ -232,6 +263,10 @@ func _build_table() -> void:
 	for c in s:
 		maxcap = max(maxcap, c)
 	var origin := Vector3(-(maxcap - 1) * TILE * 0.5 - 6.0, (s.size() - 1) * TILE * 0.5, 0.0)
+	# a 4th row reaches down into the recipe panel (bottom left): shrink toward the top right
+	var k := 1.0 if s.size() <= 3 else 0.8
+	table_root.scale = Vector3.ONE * k
+	table_root.position = Vector3((origin.x + (maxcap - 1) * TILE) * (1.0 - k), origin.y * (1.0 - k) + 0.7 * (1.0 - k) * TILE, 0.0)
 	for i in elements.size():
 		var e: Dictionary = elements[i]
 		var g := _layout(e)
@@ -394,7 +429,7 @@ func speed() -> int:
 func warm(_n: int) -> void:
 	pass
 
-## Capture flag --pick: show the third-shell universe.
+## Capture flag --pick: show the (2, 6, 6) table.
 func pick_longest() -> void:
 	load_universe(UNIVERSES[1][0])
 

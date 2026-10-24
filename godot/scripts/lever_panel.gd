@@ -6,6 +6,8 @@ extends PanelContainer
 var levers: Array = []
 ## Slider reach in doublings each way (2: x1/4 .. x4). Set before `setup`.
 var span := 2.0
+## Levers side by side (2 for a long list, e.g. a 20-element recipe). Set before `setup`.
+var columns := 1
 var apply: Callable
 var read: Callable
 var sliders := {}
@@ -31,19 +33,22 @@ func setup(title: String, defs: Array, apply_fn: Callable, read_fn: Callable, no
 	head.text = title
 	head.add_theme_font_size_override("font_size", 14)
 	box.add_child(head)
+	var grid := GridContainer.new()
+	grid.columns = 2 * columns
+	grid.add_theme_constant_override("h_separation", 8)
+	box.add_child(grid)
 	for lv in defs:
-		var row := HBoxContainer.new()
 		var l := Label.new()
-		l.custom_minimum_size = Vector2(120, 0)
+		l.custom_minimum_size = Vector2(120 if columns == 1 else 64, 0)
 		l.add_theme_font_size_override("font_size", 13)
 		l.tooltip_text = lv[2]
 		l.mouse_filter = Control.MOUSE_FILTER_PASS
-		row.add_child(l)
+		grid.add_child(l)
 		var sl := HSlider.new()
 		sl.min_value = -span
 		sl.max_value = span
 		sl.step = 0.25
-		sl.custom_minimum_size = Vector2(180, 0)
+		sl.custom_minimum_size = Vector2(180 if columns == 1 else 100, 0)
 		sl.tooltip_text = lv[2]
 		sl.focus_mode = Control.FOCUS_NONE
 		# panels sit over the world, where the wheel zooms: it must not move a lever
@@ -52,8 +57,7 @@ func setup(title: String, defs: Array, apply_fn: Callable, read_fn: Callable, no
 		sl.value_changed.connect(func(v: float) -> void:
 			apply.call(key, pow(2.0, v))
 			refresh())
-		row.add_child(sl)
-		box.add_child(row)
+		grid.add_child(sl)
 		sliders[key] = sl
 		labels[key] = l
 	var n := Label.new()

@@ -3,7 +3,7 @@
 //! bit for bit). A change that is meant to alter trajectories updates the pins on purpose:
 //! `GOLDEN_PRINT=1 cargo test --release --test golden -- --nocapture` prints the new values.
 // The pins are trajectories of the [2, 6] world; another table has its own (none yet).
-#![cfg(not(feature = "shells-266"))]
+#![cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
 use primordium_core::cell::{CellParams, World};
 use primordium_core::chem::{ChemParams, ChemWorld};
 use primordium_core::coast::{Coast, CoastParams};

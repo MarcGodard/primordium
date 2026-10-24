@@ -8,7 +8,7 @@ signal toast(title: String, body: String, color: Color)
 ## A goal was reached: main shows the graduation card that leads to the next world.
 signal graduated(k: int, page: String)
 
-var save_path := "user://campaign.json"
+var save_path: String = Tables.save_path()
 ## Index = view index (0 elements .. 6 reef, 7 archipelago, 8 garden). Title, what to do, codex page on success.
 const GOALS := [
 	["Meet the atoms of life", "Inspect the backbone atom, a side-group letter and a noble gas (arrows or click), then try another universe's table.",
