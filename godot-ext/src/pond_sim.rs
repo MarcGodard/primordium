@@ -18,7 +18,7 @@ pub struct PondSim {
     pond: Option<Pond>,
     layout: HashMap<u64, (Vector2, Vector2)>,
     specks: HashMap<u64, Vector2>,
-    folds: HashMap<Vec<u8>, Vec<(i32, i32)>>,
+    folds: HashMap<Vec<u8>, Vec<primordium_core::polymer::P>>,
     rng: Option<Rng>,
     base: Base<Node>,
 }
@@ -37,7 +37,7 @@ fn dominant_z(seq: &[u8]) -> f32 {
 }
 
 impl PondSim {
-    fn fold_of(&mut self, seq: &[u8]) -> Vec<(i32, i32)> {
+    fn fold_of(&mut self, seq: &[u8]) -> Vec<primordium_core::polymer::P> {
         if let Some(f) = self.folds.get(seq) {
             return f.clone();
         }
@@ -97,12 +97,13 @@ impl PondSim {
 
     fn chain_dict(&mut self, c: &Chain) -> VarDictionary {
         let fold = self.fold_of(&c.seq);
-        let pos: Vec<Vector2> = fold.iter().map(|&(x, y)| Vector2::new(x as f32, y as f32)).collect();
+        let pos: Vec<Vector2> = fold.iter().map(|&p| crate::fold_2d(p)).collect();
         let mut d = VarDictionary::new();
         d.set("id", c.id as i64);
         d.set("seq", seq_string(&c.seq));
         d.set("letters", &PackedByteArray::from(c.seq.as_slice()));
         d.set("fold", &PackedVector2Array::from(pos.as_slice()));
+        d.set("fold3", &crate::fold_3d(&fold));
         d.set("generation", c.generation as i64);
         d.set("stability", c.func.stability);
         d.set("amphiphile", c.func.amphiphile);
@@ -119,11 +120,15 @@ impl PondSim {
         d.set("catalysis", &cat);
         let f = polymer::Fold { pos: fold, energy: 0.0 };
         let mut sites = PackedVector2Array::new();
+        let mut site_idx = PackedInt32Array::new();
         for (i, j, _) in polymer::sites(&f) {
             sites.push(pos[i]);
             sites.push(pos[j]);
+            site_idx.push(i as i32);
+            site_idx.push(j as i32);
         }
         d.set("sites", &sites);
+        d.set("site_idx", &site_idx);
         d
     }
 }

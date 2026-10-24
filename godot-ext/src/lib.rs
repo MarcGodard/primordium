@@ -302,3 +302,14 @@ impl ChemSim {
         d
     }
 }
+
+/// A 3D lattice fold drawn flat: depth shifts each residue up and right (cabinet projection),
+/// so stacked layers read as depth instead of landing on each other.
+pub(crate) fn fold_2d(p: primordium_core::polymer::P) -> godot::prelude::Vector2 {
+    godot::prelude::Vector2::new(p.0 as f32 + 0.45 * p.2 as f32, p.1 as f32 - 0.3 * p.2 as f32)
+}
+
+/// Fold positions as Godot 3D points (the close-up turns them).
+pub(crate) fn fold_3d(fold: &[primordium_core::polymer::P]) -> godot::prelude::PackedVector3Array {
+    fold.iter().map(|&(x, y, z)| godot::prelude::Vector3::new(x as f32, y as f32, z as f32)).collect()
+}

@@ -25,6 +25,8 @@ float ring(float r, float at, float w, float aa) {
 }
 
 void fragment() {
+	// instance colour: white for atoms; folded chains dim residues that sit deeper in the fold
+	vec4 inst = COLOR;
 	vec2 p = (UV - 0.5) * 2.0;
 	float r = length(p);
 	int z = int(custom.x + 0.5);
@@ -88,5 +90,6 @@ void fragment() {
 		o.rgb = mix(o.rgb, vec3(dot(o.rgb, vec3(0.33))), 0.8) * 0.5;
 		o.a *= 0.25;
 	}
+	o.rgb *= inst.rgb;
 	COLOR = o;
 }

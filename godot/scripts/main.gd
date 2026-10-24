@@ -12,7 +12,7 @@ var shot := ""
 var frames := 20
 var bar: HBoxContainer
 var bar_buttons: Array = []
-var warp: ColorRect
+var warp: TextureRect
 var warp_title: Label
 var warp_sub: Label
 var travelling := false
@@ -195,7 +195,8 @@ func _ready() -> void:
 			"explain": hud.explaining = kv[1] == "1"
 			"warp":
 				show_warp = true
-				travel(int(kv[1]))
+				# after a few frames: the zoom snapshots the screen, which is empty before the first draw
+				get_tree().create_timer(0.4).timeout.connect(travel.bind(int(kv[1])))
 			"view3d":
 				if view.has_method("set_3d"):
 					view.set_3d(kv[1] == "1")
@@ -272,8 +273,8 @@ func enter_hub() -> void:
 	if actions:
 		actions.visible = false
 
-## Travel to scale k (or the hub when k < 0) through a warp: streaks rush outward when
-## climbing to a bigger scale, inward when diving smaller or in from the hub.
+## Travel to scale k (or the hub when k < 0) through a powers-of-ten zoom (zoom.gdshader): the
+## world left behind shrinks into the bigger one, or swells as we dive into a smaller one.
 func travel(k: int) -> void:
 	if travelling:
 		return
@@ -291,30 +292,73 @@ func travel(k: int) -> void:
 			switch_to(k)
 		return
 	travelling = true
-	var outward := k >= 0 and from >= 0 and k > from
+	# climbing to a bigger world (or out to the hub) the old one shrinks into it; diving, we fly in
+	var climbing := k < 0 or (from >= 0 and k > from)
 	var m: ShaderMaterial = warp.material
-	m.set_shader_parameter("dir", 1.0 if outward else -1.0)
+	# snapshot the world alone: every panel layer hides for the frame it is taken and the zoom
+	var hidden := _hide_layers()
+	await RenderingServer.frame_post_draw
+	var snap := ImageTexture.create_from_image(get_viewport().get_texture().get_image())
+	m.set_shader_parameter("snap", snap)
 	m.set_shader_parameter("tint", hub.SCALES[k][2] if k >= 0 else Color(0.6, 0.7, 1.0))
+	m.set_shader_parameter("s", 1.0)
+	m.set_shader_parameter("lens", 0.0)
+	m.set_shader_parameter("fade", 1.0)
+	warp.texture = snap
 	warp_title.text = "The hub" if k < 0 else (hub.SCALES[k][0] if k == hub.GARDEN else "Scale %d  ·  %s" % [k - 1, hub.SCALES[k][0]])
 	warp_title.add_theme_color_override("font_color", hub.SCALES[k][2] if k >= 0 else Color(0.8, 0.9, 1.0))
-	warp_sub.text = hub.SCALES[k][1] if k >= 0 else "Seven scales of one world."
+	warp_sub.text = hub.SCALES[k][1] if k >= 0 else "Eight scales of one world."
 	warp.visible = true
+	# the snapshot covers the screen exactly, so the world can change behind it at once
+	if k < 0:
+		enter_hub()
+	else:
+		switch_to(k)
+	# switching shows the new world's panels: keep them for the end of the zoom too
+	hidden.append_array(_hide_layers())
 	var tw := create_tween()
-	tw.tween_method(func(p: float) -> void: m.set_shader_parameter("p", p), 0.0, 1.0, 0.45).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(warp_title, "modulate:a", 1.0, 0.45)
-	tw.parallel().tween_property(warp_sub, "modulate:a", 1.0, 0.45)
-	tw.tween_callback(func() -> void:
-		if k < 0:
-			enter_hub()
-		else:
-			switch_to(k))
-	tw.tween_interval(0.35)
-	tw.tween_method(func(p: float) -> void: m.set_shader_parameter("p", p), 1.0, 0.0, 0.6).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(warp_title, "modulate:a", 0.0, 0.8)
-	tw.parallel().tween_property(warp_sub, "modulate:a", 0.0, 0.8)
+	if climbing:
+		tw.tween_method(func(p: float) -> void:
+			var sc: float = lerp(1.0, 0.09, p)
+			m.set_shader_parameter("s", sc)
+			# the lens closes onto the picture early, then both shrink together
+			m.set_shader_parameter("lens", sc * 0.5 * lerp(1.9, 1.0, smoothstep(0.0, 0.35, p)))
+			m.set_shader_parameter("fade", 1.0 - smoothstep(0.75, 1.0, p)), 0.0, 1.0, 1.3).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+	else:
+		tw.tween_method(func(p: float) -> void:
+			m.set_shader_parameter("s", lerp(1.0, 7.0, p * p))
+			m.set_shader_parameter("fade", 1.0 - smoothstep(0.45, 1.0, p)), 0.0, 1.0, 1.1).set_ease(Tween.EASE_IN)
+	warp_title.modulate.a = 0.0
+	warp_sub.modulate.a = 0.0
+	var tt := create_tween()
+	tt.tween_property(warp_title, "modulate:a", 1.0, 0.35)
+	tt.parallel().tween_property(warp_sub, "modulate:a", 1.0, 0.35)
+	tt.tween_interval(0.6)
+	tt.tween_property(warp_title, "modulate:a", 0.0, 0.6)
+	tt.parallel().tween_property(warp_sub, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(func() -> void:
 		warp.visible = false
+		for l in hidden:
+			if is_instance_valid(l):
+				l.visible = true
+		# the hub hides the HUD itself: restoring the pre-zoom layers must not bring it back
+		if in_hub:
+			enter_hub()
 		travelling = false)
+
+## The game-wide panel layers (HUD, scale bar, buttons, goal) that were showing, now hidden.
+## Only main's own: some worlds draw their content on layers of their own (the coast's beaches).
+func _hide_layers() -> Array:
+	var out := []
+	var layers: Array = find_children("*", "CanvasLayer", false, false)
+	# the HUD's guide sits on a layer of its own inside the HUD
+	layers.append_array(hud.find_children("*", "CanvasLayer", true, false))
+	for l in layers:
+		# toasts (a world rebuilt on arrival) keep their few seconds on screen
+		if l != warp.get_parent() and l != toast_label.get_parent() and l.visible:
+			l.visible = false
+			out.append(l)
+	return out
 
 ## A key press from a button: the world's own key handler does the work.
 func press_key(code: Key, shift := false) -> void:
@@ -414,11 +458,13 @@ func _build_warp() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 20
 	add_child(layer)
-	warp = ColorRect.new()
+	warp = TextureRect.new()
 	warp.set_anchors_preset(Control.PRESET_FULL_RECT)
 	warp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	warp.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	warp.stretch_mode = TextureRect.STRETCH_SCALE
 	var m := ShaderMaterial.new()
-	m.shader = load("res://shaders/warp.gdshader")
+	m.shader = load("res://shaders/zoom.gdshader")
 	warp.material = m
 	warp.visible = false
 	layer.add_child(warp)
@@ -699,7 +745,8 @@ func show_graduation(k: int, page: String) -> void:
 		show_card("Goal reached: " + campaign.goal_title(k), body, "Go to %s now" % hub.SCALES[nk][0], nk, "Stay here a while")
 
 func _input(e: InputEvent) -> void:
-	if not card.visible or not (e is InputEventKey and e.pressed and not e.echo):
+	# mid-zoom a card's Enter would close it while the travel it asks for is refused
+	if travelling or not card.visible or not (e is InputEventKey and e.pressed and not e.echo):
 		return
 	if e.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
 		_card_accept()

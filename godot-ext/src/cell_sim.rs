@@ -14,7 +14,7 @@ use std::sync::Arc;
 #[class(base=Node, init)]
 pub struct CellSim {
     world: Option<World>,
-    folds: HashMap<Vec<u8>, Vec<(i32, i32)>>,
+    folds: HashMap<Vec<u8>, Vec<primordium_core::polymer::P>>,
     /// Phenotype means sampled over time: (t, poly, synth, amph, pigment, genome len, cells).
     history: VecDeque<[f64; 7]>,
     base: Base<Node>,
@@ -35,7 +35,7 @@ impl CellSim {
         self.world.as_mut().unwrap().info(genome)
     }
 
-    fn fold_of(&mut self, seq: &[u8]) -> Vec<(i32, i32)> {
+    fn fold_of(&mut self, seq: &[u8]) -> Vec<primordium_core::polymer::P> {
         if let Some(f) = self.folds.get(seq) {
             return f.clone();
         }
@@ -208,7 +208,7 @@ impl CellSim {
         let mut genes = VarArray::new();
         for (k, g) in info.genes.iter().enumerate() {
             let fold = self.fold_of(&g.product);
-            let pos: Vec<Vector2> = fold.iter().map(|&(x, y)| Vector2::new(x as f32, y as f32)).collect();
+            let pos: Vec<Vector2> = fold.iter().map(|&p| crate::fold_2d(p)).collect();
             let mut gd = VarDictionary::new();
             let (r, strength) = role(&g.func);
             gd.set("start", g.start as i64);
@@ -233,6 +233,7 @@ impl CellSim {
             gd.set("seq", seq_string(&g.product));
             gd.set("letters", &PackedByteArray::from(g.product.as_slice()));
             gd.set("fold", &PackedVector2Array::from(pos.as_slice()));
+            gd.set("fold3", &crate::fold_3d(&fold));
             let mut top: Vec<(usize, f64)> = (0..N_PAIRS).map(|p| (p, g.func.catalysis[p])).collect();
             top.sort_by(|a, b| b.1.total_cmp(&a.1));
             let mut cat = VarArray::new();
@@ -246,11 +247,15 @@ impl CellSim {
             gd.set("pigment", g.func.pigment);
             let f = polymer::Fold { pos: fold, energy: 0.0 };
             let mut sites = PackedVector2Array::new();
+            let mut site_idx = PackedInt32Array::new();
             for (i, j, _) in polymer::sites(&f) {
                 sites.push(pos[i]);
                 sites.push(pos[j]);
+                site_idx.push(i as i32);
+                site_idx.push(j as i32);
             }
             gd.set("sites", &sites);
+            gd.set("site_idx", &site_idx);
             genes.push(&gd.to_variant());
         }
         d.set("genes", &genes);

@@ -13,7 +13,7 @@ const EXPLAIN := """[b]Scale 3: cells[/b]
 
 [b]What you see.[/b] Cells on the beach, sea on the left. The strip is a loop: its top and bottom edges are the same place. Clumps are families: a daughter starts right beside its mother, and only cells in the water drift away. Each cell has a [b]genome[/b] (one long chain) and makes products from it. Tint shows what a cell's genes do: [color=#40ccd9]teal copying enzymes (polymerase)[/color], [color=#59cc4d]green metabolism[/color], [color=#f2e0b8]cream membrane builders[/color], [color=#f2a633]amber pigment[/color].
 
-[b]A genetic code, forced by chemistry.[/b] When a chain is copied twice, only two letters (Li and Fl) come back as themselves; the others get rewritten. So genes here are written in [b]binary[/b], and cells read them three letters at a time (a codon) to build products from all five letters, the way our cells read DNA to build proteins.
+[b]A genetic code, forced by chemistry.[/b] When a chain is copied twice, only two letters ({gene_a} and {gene_b}) come back as themselves; the others get rewritten. So genes here are written in [b]binary[/b], and cells read them {codon} letters at a time (a codon) to build products from all {n_letters} letters, the way our cells read DNA to build proteins.
 
 [b]Life cycle.[/b] A cell copies its genome, then divides; copy mistakes are [b]mutations[/b]. UV and cosmic rays cause more. Genes switch on and off with light, cold, food and neighbours ([b]gene regulation[/b]). Sticky cells stay together after dividing ([b]colonies[/b], gold bridges) and big sticky cells swallow small ones (red flashes): the first predators.
 
@@ -21,6 +21,9 @@ const EXPLAIN := """[b]Scale 3: cells[/b]
 
 [b]Try.[/b] Zoom in to see genome rings, click a cell for its genes, a gene for its folded product."""
 const SCALE_NAME := "scale 3: cells"
+
+func explain_text() -> String:
+	return EXPLAIN.format(preload("res://scripts/table_words.gd").words())
 const BAND := 22.0
 const HEIGHT := 140.0
 const ROLE_COLORS := [Color(0.3, 0.85, 0.85), Color(0.45, 0.85, 0.4), Color(0.95, 0.9, 0.75), Color(0.95, 0.65, 0.2), Color(0.6, 0.6, 0.65)]
@@ -307,7 +310,7 @@ func hud_text() -> String:
 	t += "\n[color=#789]Tab: switch scale   A: auto resolution   L: levers   V: 3D beach\nclick a cell, then a gene, then a residue\n3D: right-drag orbit, shift-drag pan, wheel zoom[/color]"
 	return t
 
-## Genome map: bit ring (Li dark, Fl light), gene arcs by role, fork progress; gene list to click.
+## Genome map: bit ring (heritable pair: first dark, second light), gene arcs by role, fork progress; gene list to click.
 func _gene_rows() -> Array:
 	var rows := []
 	for k in detail.get("genes", []).size():
@@ -319,7 +322,7 @@ func _draw_genome() -> void:
 		return
 	var font := ThemeDB.fallback_font
 	genome_panel.draw_rect(Rect2(Vector2.ZERO, genome_panel.size), Color(0.03, 0.05, 0.08, 0.86))
-	genome_panel.draw_string(font, Vector2(8, 16), "Genome of cell %d (binary: Li 0, Fl 1)" % detail.id, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
+	genome_panel.draw_string(font, Vector2(8, 16), "Genome of cell %d (binary: %s 0, %s 1)" % [detail.id, preload("res://scripts/table_words.gd").words().gene_a, preload("res://scripts/table_words.gd").words().gene_b], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
 	var bits: PackedByteArray = detail.bits
 	var n := bits.size()
 	var c := Vector2(88, 130)

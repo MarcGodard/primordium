@@ -26,12 +26,44 @@ func show_chain(d: Dictionary) -> void:
 		residue = min(residue, info.letters.size() - 1)
 	queue_redraw()
 
-func _process(_d: float) -> void:
-	if residue >= 0 and visible:
+func _process(d: float) -> void:
+	if visible and not info.is_empty():
+		spin += d * 0.4
 		queue_redraw()
 
+var spin := 0.0
+
+## The fold as drawn now: the 3D lattice fold turning slowly about its centre (tilted so the
+## turn shows depth), or the flat fold from an older bridge. Also each residue's depth 0..1.
+func _points() -> Array:
+	if not info.has("fold3"):
+		var flat: PackedVector2Array = info.fold
+		var dz := PackedFloat32Array()
+		dz.resize(flat.size())
+		dz.fill(1.0)
+		return [flat, dz]
+	var f3: PackedVector3Array = info.fold3
+	var c := Vector3.ZERO
+	for q in f3:
+		c += q
+	c /= max(f3.size(), 1)
+	var basis := Basis(Vector3.RIGHT, 0.45) * Basis(Vector3.UP, spin)
+	var out := PackedVector2Array()
+	var depth := PackedFloat32Array()
+	var zlo := 1e9
+	var zhi := -1e9
+	for q in f3:
+		var r: Vector3 = basis * (q - c)
+		out.append(Vector2(r.x, -r.y))
+		depth.append(r.z)
+		zlo = min(zlo, r.z)
+		zhi = max(zhi, r.z)
+	for k in depth.size():
+		depth[k] = (depth[k] - zlo) / max(zhi - zlo, 0.001)
+	return [out, depth]
+
 func _layout() -> Dictionary:
-	var fold: PackedVector2Array = info.fold
+	var fold: PackedVector2Array = _points()[0]
 	var lo := Vector2(1e9, 1e9)
 	var hi := Vector2(-1e9, -1e9)
 	for p in fold:
@@ -54,7 +86,7 @@ func _on_input(e: InputEvent) -> void:
 	if not (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT) or info.is_empty():
 		return
 	var lay := _layout()
-	var fold: PackedVector2Array = info.fold
+	var fold: PackedVector2Array = _points()[0]
 	for k in fold.size():
 		if (fold[k] * lay.s + lay.off).distance_to(e.position) < lay.s * 0.5:
 			residue = k
@@ -67,22 +99,32 @@ func _draw() -> void:
 		return
 	var font := ThemeDB.fallback_font
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.03, 0.05, 0.08, 0.86))
-	draw_string(font, Vector2(10, 18), "Chain %d fold (dashes = catalytic pockets)" % info.id, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
+	draw_string(font, Vector2(10, 18), "Chain %d, folded in 3D (dashes = catalytic pockets)" % info.id, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.8))
 	var lay := _layout()
-	var fold: PackedVector2Array = info.fold
+	var pts: Array = _points()
+	var fold: PackedVector2Array = pts[0]
+	var depth: PackedFloat32Array = pts[1]
 	var letters: PackedByteArray = info.letters
 	var s: float = lay.s
 	for k in fold.size() - 1:
-		draw_line(fold[k] * s + lay.off, fold[k + 1] * s + lay.off, Color(0.9, 0.9, 0.85, 0.8), 3.0)
-	var sites: PackedVector2Array = info.sites
-	for k in range(0, sites.size(), 2):
-		draw_dashed_line(sites[k] * s + lay.off, sites[k + 1] * s + lay.off, Color(1.0, 0.85, 0.3, 0.9), 2.0, 4.0)
-	for k in fold.size():
+		var dk: float = 0.5 * (depth[k] + depth[k + 1])
+		draw_line(fold[k] * s + lay.off, fold[k + 1] * s + lay.off, Color(0.9, 0.9, 0.85, 0.35 + 0.5 * dk), 2.0 + 2.0 * dk)
+	if info.has("site_idx"):
+		var si: PackedInt32Array = info.site_idx
+		for k in range(0, si.size(), 2):
+			draw_dashed_line(fold[si[k]] * s + lay.off, fold[si[k + 1]] * s + lay.off, Color(1.0, 0.85, 0.3, 0.9), 2.0, 4.0)
+	# back to front, so nearer residues cover farther ones
+	var order := range(fold.size())
+	order.sort_custom(func(a: int, b: int) -> bool: return depth[a] < depth[b])
+	for k in order:
 		var c: Vector2 = fold[k] * s + lay.off
-		draw_circle(c, s * 0.32, palette[LETTER_Z[letters[k]]])
+		var dk: float = depth[k]
+		var col: Color = palette[LETTER_Z[letters[k]]]
+		draw_circle(c, s * (0.24 + 0.12 * dk), col.darkened(0.45 * (1.0 - dk)))
 		if k == residue:
 			draw_arc(c, s * 0.45, 0, TAU, 24, Color(1, 1, 0.4), 2.0)
-		draw_string(font, c + Vector2(-4, 4), LETTER_CHARS[letters[k]], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.8))
+		if dk > 0.4:
+			draw_string(font, c + Vector2(-4, 4), LETTER_CHARS[letters[k]], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0, 0, 0, 0.8))
 	var y0 := fold_h + 6.0
 	if residue < 0 or residue >= letters.size():
 		draw_string(font, Vector2(10, y0), "click a residue to see its atoms", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.5))

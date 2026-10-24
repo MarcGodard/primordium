@@ -46,7 +46,7 @@ fn pool_golden() {
     for _ in 0..150 {
         p.step(0.02);
     }
-    check("pool", fp(&format!("{:?}", p.c.chains)), 0x3e5b38f1d8bdc738);
+    check("pool", fp(&format!("{:?}", p.c.chains)), 0xf7cbf78c88bff058);
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn pond_golden() {
     for _ in 0..80 {
         p.step(0.02);
     }
-    check("pond", fp(&format!("{:?}", p.vesicles)), 0xa68ae1ad6083937d);
+    check("pond", fp(&format!("{:?}", p.vesicles)), 0x7606b918d81b91f6);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn cell_golden() {
     for _ in 0..80 {
         w.step(0.02);
     }
-    check("cell", fp(&format!("{:?}", w.cells)), 0x64c129c1e9766f14);
+    check("cell", fp(&format!("{:?}", w.cells)), 0xcf9d3bc8809c42ec);
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn coast_golden() {
         c.step(0.02);
     }
     let cells: Vec<String> = c.sites.iter().map(|s| format!("{:?}", s.world.cells)).collect();
-    check("coast", fp(&cells.join("|")), 0x667d2cd46c26274d);
+    check("coast", fp(&cells.join("|")), 0x1f610536b4fddcdd);
 }
 
 #[test]
@@ -88,5 +88,5 @@ fn reef_golden() {
         r.step(0.02);
     }
     let bodies: Vec<String> = r.organisms.iter().map(|o| format!("{} {:?} {:?}", o.id, o.genome, o.cells.iter().map(|c| (c.pos, c.mass)).collect::<Vec<_>>())).collect();
-    check("reef", fp(&bodies.join("|")), 0xcfece02aa680d3ad);
+    check("reef", fp(&bodies.join("|")), 0x956a0beac4fbe309);
 }

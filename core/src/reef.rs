@@ -1328,10 +1328,8 @@ fn live(o: &mut Organism, sh: &Shared, dt: f64, rng: &mut Rng) -> (Vec<usize>, u
         let sig = signals(light, sh.env.kt, &o.store, mates, p[2] as f64 / BODY_HEIGHT, c.open as f64 / 6.0);
         let traits = regulated_traits(&o.info, sig);
         let levels: Vec<f64> = o.info.genes.iter().map(|g| g.promoter.level(sig)).collect();
-        let total: f64 = levels.iter().sum();
-        let pig: f64 = o.info.genes.iter().zip(&levels).filter(|(g, _)| g.func.pigment > 0.0).map(|(_, l)| l).sum();
-        let shade = if total > 0.0 { sh.rp.max_shade * o.info.pigment * pig / total } else { 0.0 };
-        let adh = o.info.genes.iter().zip(&levels).map(|(g, l)| g.func.adhesion * l).fold(0.0, f64::max);
+        let shade = sh.rp.max_shade * o.info.pigment * crate::cell::pigment_share(&o.info, &levels);
+        let adh = crate::cell::combine_cover(o.info.genes.iter().zip(&levels).map(|(g, &l)| (g.func.adhesion, l)));
         c.expr = [traits.0 as f32, traits.1 as f32, traits.2 as f32, shade as f32, adh as f32];
         c.light = light as f32;
         // growth integrates the day's light as it reaches this cell through water and canopy

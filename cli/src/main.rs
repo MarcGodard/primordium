@@ -1283,7 +1283,8 @@ fn reef_goal(args: &[String]) {
     let days: f64 = arg(args, "days", 2000.0);
     let seed: u64 = arg(args, "seed", 1);
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
-    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(data_file("reef_seed.json")).expect("run reef-seed first")).unwrap();
+    let founders: String = arg(args, "founders-file", data_file("reef_seed.json"));
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(&founders).expect("run reef-seed first")).unwrap();
     let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
     let goal = CreatureGoal::default();
     let mut tr = Tracker::default();

@@ -92,12 +92,17 @@ impl LetterPhysics {
 /// kT per unit sqrt(hydropathy product) when two oily groups exclude water together.
 pub const HYDROPHOBIC_CONTACT: f64 = 1.4;
 
-const SQ: [(i32, i32); 4] = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+/// Lattice point of one residue.
+pub type P = (i32, i32, i32);
 
-/// A self-avoiding 2D walk: one lattice point per residue.
+/// Cubic lattice neighbours: a residue meets up to 6 others (4 besides its chain links).
+const NB6: [P; 6] = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+
+/// A self-avoiding walk on the cubic lattice: one point per residue. Folding in 3D lets
+/// oily residues bury into a core and pockets close on more sides, as real chains do.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Fold {
-    pub pos: Vec<(i32, i32)>,
+    pub pos: Vec<P>,
     pub energy: f64,
 }
 
@@ -109,12 +114,15 @@ fn contact(ph: &LetterPhysics, a: u8, b: u8) -> f64 {
     -(hydrophobic + ph.pair[a as usize][b as usize])
 }
 
-fn energy(seq: &[u8], pos: &[(i32, i32)], ph: &LetterPhysics) -> f64 {
+fn adjacent(a: P, b: P) -> bool {
+    (a.0 - b.0).abs() + (a.1 - b.1).abs() + (a.2 - b.2).abs() == 1
+}
+
+fn energy(seq: &[u8], pos: &[P], ph: &LetterPhysics) -> f64 {
     let mut e = 0.0;
     for i in 0..pos.len() {
         for j in (i + 2)..pos.len() {
-            let d = (pos[i].0 - pos[j].0).abs() + (pos[i].1 - pos[j].1).abs();
-            if d == 1 {
+            if adjacent(pos[i], pos[j]) {
                 e += contact(ph, seq[i], seq[j]);
             }
         }
@@ -122,25 +130,38 @@ fn energy(seq: &[u8], pos: &[(i32, i32)], ph: &LetterPhysics) -> f64 {
     e
 }
 
-/// Occupancy grid centred on the chain start; any walk of n steps fits in (2n+1)^2.
+thread_local! {
+    /// Occupancy grids reused per thread: a fresh (2n+3)^3 grid per fold would be mostly memset.
+    static GRIDS: std::cell::RefCell<Vec<Vec<u16>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Occupancy grid centred on the chain start (pivot moves never move residue 0, so every
+/// residue stays within n of it). Cells are left zeroed between uses: fill is always undone.
 struct Occ {
     n: i32,
+    side: i32,
     cells: Vec<u16>,
 }
 
 impl Occ {
     fn new(n: usize) -> Self {
         let n = n as i32 + 1;
-        Self { n, cells: vec![0; ((2 * n + 1) * (2 * n + 1)) as usize] }
+        let side = 2 * n + 1;
+        let need = (side * side * side) as usize;
+        let mut cells = GRIDS.with(|g| g.borrow_mut().pop()).unwrap_or_default();
+        if cells.len() < need {
+            cells = vec![0; need];
+        }
+        Self { n, side, cells }
     }
 
     #[inline]
-    fn idx(&self, p: (i32, i32), origin: (i32, i32)) -> usize {
-        ((p.1 - origin.1 + self.n) * (2 * self.n + 1) + (p.0 - origin.0 + self.n)) as usize
+    fn idx(&self, p: P, o: P) -> usize {
+        (((p.2 - o.2 + self.n) * self.side + (p.1 - o.1 + self.n)) * self.side + (p.0 - o.0 + self.n)) as usize
     }
 
     /// Fills residue index + 1 per cell; false on a collision (leaves grid dirty: call clear).
-    fn fill(&mut self, pos: &[(i32, i32)]) -> bool {
+    fn fill(&mut self, pos: &[P]) -> bool {
         let o = pos[0];
         for (k, &p) in pos.iter().enumerate() {
             let i = self.idx(p, o);
@@ -152,21 +173,24 @@ impl Occ {
         true
     }
 
-    fn clear(&mut self, pos: &[(i32, i32)]) {
+    /// Zeroes only cells this chain owns: a collision's earlier occupant keeps its own mark.
+    fn clear(&mut self, pos: &[P]) {
         let o = pos[0];
-        for &p in pos {
+        for (k, &p) in pos.iter().enumerate() {
             let i = self.idx(p, o);
-            self.cells[i] = 0;
+            if self.cells[i] == k as u16 + 1 {
+                self.cells[i] = 0;
+            }
         }
     }
 
-    /// Energy with the grid filled: each residue looks at 4 neighbours, O(n).
-    fn energy(&self, seq: &[u8], pos: &[(i32, i32)], ph: &LetterPhysics) -> f64 {
+    /// Energy with the grid filled: each residue looks at 6 neighbours, O(n).
+    fn energy(&self, seq: &[u8], pos: &[P], ph: &LetterPhysics) -> f64 {
         let o = pos[0];
         let mut e = 0.0;
-        for (k, &(x, y)) in pos.iter().enumerate() {
-            for (dx, dy) in SQ {
-                let j = self.cells[self.idx((x + dx, y + dy), o)] as usize;
+        for (k, &(x, y, z)) in pos.iter().enumerate() {
+            for (dx, dy, dz) in NB6 {
+                let j = self.cells[self.idx((x + dx, y + dy, z + dz), o)] as usize;
                 if j > k + 2 {
                     e += contact(ph, seq[k], seq[j - 1]);
                 }
@@ -176,18 +200,37 @@ impl Occ {
     }
 }
 
+impl Drop for Occ {
+    fn drop(&mut self) {
+        let cells = std::mem::take(&mut self.cells);
+        GRIDS.with(|g| g.borrow_mut().push(cells));
+    }
+}
+
 #[cfg(test)]
-fn self_avoiding(pos: &[(i32, i32)]) -> bool {
+fn self_avoiding(pos: &[P]) -> bool {
     let mut v: Vec<_> = pos.to_vec();
     v.sort();
     v.windows(2).all(|w| w[0] != w[1])
 }
 
-/// Anneal a fold from a straight chain: pivot moves, Metropolis, cooling to `kt`.
-/// Deterministic per (seq, seed). Cost ~ steps * len^2: fine for len <= 32.
+/// Quarter turn about axis `axis` (0 x, 1 y, 2 z), `k` times.
+fn turn(mut d: P, axis: usize, k: usize) -> P {
+    for _ in 0..k {
+        d = match axis {
+            0 => (d.0, -d.2, d.1),
+            1 => (d.2, d.1, -d.0),
+            _ => (-d.1, d.0, d.2),
+        };
+    }
+    d
+}
+
+/// Anneal a fold from a straight chain: pivot moves (quarter turns about x, y or z through a
+/// residue), Metropolis, cooling to `kt`. Deterministic per (seq, seed).
 pub fn fold(seq: &[u8], ph: &LetterPhysics, kt: f64, steps: usize, seed: u64) -> Fold {
     let n = seq.len();
-    let mut pos: Vec<(i32, i32)> = (0..n as i32).map(|i| (i, 0)).collect();
+    let mut pos: Vec<P> = (0..n as i32).map(|i| (i, 0, 0)).collect();
     if n < 4 {
         let e = energy(seq, &pos, ph);
         return Fold { pos, energy: e };
@@ -200,15 +243,13 @@ pub fn fold(seq: &[u8], ph: &LetterPhysics, kt: f64, steps: usize, seed: u64) ->
     for s in 0..steps {
         let temp = kt * (1.0 + 4.0 * (1.0 - s as f64 / steps as f64));
         let pivot = 1 + rng.below(n - 2);
+        let axis = rng.below(3);
         let rot = 1 + rng.below(3); // 90, 180, 270 degrees
-        let (px, py) = pos[pivot];
+        let pv = pos[pivot];
         cand.copy_from_slice(&pos);
         for p in cand.iter_mut().skip(pivot + 1) {
-            let (mut dx, mut dy) = (p.0 - px, p.1 - py);
-            for _ in 0..rot {
-                (dx, dy) = (-dy, dx);
-            }
-            *p = (px + dx, py + dy);
+            let d = turn((p.0 - pv.0, p.1 - pv.1, p.2 - pv.2), axis, rot);
+            *p = (pv.0 + d.0, pv.1 + d.1, pv.2 + d.2);
         }
         let ok = occ.fill(&cand);
         let ce = if ok { occ.energy(seq, &cand, ph) } else { 0.0 };
@@ -224,22 +265,39 @@ pub fn fold(seq: &[u8], ph: &LetterPhysics, kt: f64, steps: usize, seed: u64) ->
             }
         }
     }
-    let (mut pos, energy) = best;
-    // canonical frame: start at origin, first step +x
-    let (ox, oy) = pos[0];
-    let (fx, fy) = (pos[1].0 - ox, pos[1].1 - oy);
-    for p in pos.iter_mut() {
-        let (mut dx, mut dy) = (p.0 - ox, p.1 - oy);
-        let mut k = 0;
-        let (mut ax, mut ay) = (fx, fy);
-        while (ax, ay) != (1, 0) && k < 4 {
-            (ax, ay) = (ay, -ax);
-            (dx, dy) = (dy, -dx);
-            k += 1;
+    let (pos, energy) = best;
+    Fold { pos: canonical(&pos), energy }
+}
+
+/// Canonical frame: start at the origin, first step +x, first step off the x axis +y.
+fn canonical(pos: &[P]) -> Vec<P> {
+    let o = pos[0];
+    let rel: Vec<P> = pos.iter().map(|p| (p.0 - o.0, p.1 - o.1, p.2 - o.2)).collect();
+    // the 24 rotations of the cube as turn sequences
+    let mut rots: Vec<[(usize, usize); 2]> = Vec::new();
+    for a in 0..3 {
+        for k in 0..4 {
+            for b in 0..3 {
+                for m in 0..4 {
+                    rots.push([(a, k), (b, m)]);
+                }
+            }
         }
-        *p = (dx, dy);
     }
-    Fold { pos, energy }
+    let apply = |d: P, r: &[(usize, usize); 2]| turn(turn(d, r[0].0, r[0].1), r[1].0, r[1].1);
+    let first = rel.get(1).copied().unwrap_or((1, 0, 0));
+    let side = rel.iter().find(|d| d.1 != 0 || d.2 != 0).copied();
+    for r in &rots {
+        if apply(first, r) != (1, 0, 0) {
+            continue;
+        }
+        // x-axis steps never change under these: check the first off-axis one
+        let off = rel.iter().map(|&d| apply(d, r)).find(|d| d.1 != 0 || d.2 != 0);
+        if side.is_none() || off.is_some_and(|d| d.1 > 0 && d.2 == 0) {
+            return rel.iter().map(|&d| apply(d, r)).collect();
+        }
+    }
+    rel
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -293,7 +351,10 @@ impl Function {
 }
 
 /// Folding entropy per residue, kT: what a fold must beat to stay folded.
-pub const UNFOLD_ENTROPY: f64 = 0.35;
+/// Raised from the square lattice's 0.35 with the move to 3D: unfolded chains gain shapes
+/// (walk connective constant 4.68 vs 2.64) as folds gain contacts (~20% more energy per
+/// residue). 0.43 keeps the margin per residue, so a random chain is as often folded as in 2D.
+pub const UNFOLD_ENTROPY: f64 = 0.43;
 /// Barrier cut per kT of reactant grip at a perfect pocket.
 pub const CUT_PER_GRIP: f64 = 1.6;
 
@@ -301,17 +362,18 @@ pub const CUT_PER_GRIP: f64 = 1.6;
 /// A site flanked by chain holds reactants; a bare edge (pocket 0) does not and is omitted.
 pub fn sites(f: &Fold) -> Vec<(usize, usize, f64)> {
     let n = f.pos.len();
-    let occupied: std::collections::HashSet<(i32, i32)> = f.pos.iter().cloned().collect();
-    let walls = |k: usize| SQ.iter().filter(|(dx, dy)| occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy))).count();
-    let exposed = |k: usize| walls(k) < 4;
+    let occupied: std::collections::HashSet<P> = f.pos.iter().cloned().collect();
+    let walls = |k: usize| NB6.iter().filter(|(dx, dy, dz)| occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy, f.pos[k].2 + dz))).count();
+    let exposed = |k: usize| walls(k) < 6;
     let mut out = Vec::new();
     for i in 0..n {
         for j in (i + 2)..n {
-            let d = (f.pos[i].0 - f.pos[j].0).abs() + (f.pos[i].1 - f.pos[j].1).abs();
-            if d != 1 || !exposed(i) || !exposed(j) {
+            if !adjacent(f.pos[i], f.pos[j]) || !exposed(i) || !exposed(j) {
                 continue;
             }
-            let pocket = ((walls(i) + walls(j)) as f64 - 4.0).clamp(0.0, 3.0) / 3.0;
+            // two mid-chain residues in contact wall each other in on 3 sides each (6): an open
+            // cleft; each extra wall up to the exposed limit (5 + 5) closes the pocket further
+            let pocket = ((walls(i) + walls(j)) as f64 - 4.0).clamp(0.0, 6.0) / 6.0;
             if pocket > 0.0 {
                 out.push((i, j, pocket));
             }
@@ -350,10 +412,11 @@ pub fn function_of(seq: &[u8], f: &Fold, ph: &LetterPhysics, kt: f64) -> Functio
     let amphiphile = if n >= 4 { ((h(&seq[half..]) - h(&seq[..half])).abs() * (n as f64 / 8.0).min(1.0)).min(1.0) } else { 0.0 };
     let pigment = seq.iter().map(|&l| ph.absorb[l as usize]).sum::<f64>() / n.max(1) as f64;
     // adhesion: oily residues with open lattice sides, on a fold that holds together
-    let occupied: std::collections::HashSet<(i32, i32)> = f.pos.iter().cloned().collect();
-    let open = |k: usize| SQ.iter().filter(|(dx, dy)| !occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy))).count() as f64;
+    let occupied: std::collections::HashSet<P> = f.pos.iter().cloned().collect();
+    let open = |k: usize| NB6.iter().filter(|(dx, dy, dz)| !occupied.contains(&(f.pos[k].0 + dx, f.pos[k].1 + dy, f.pos[k].2 + dz))).count() as f64;
     let sticky: f64 = (0..n).map(|k| ph.hydropathy[seq[k] as usize].max(0.0) * open(k)).sum();
-    let adhesion = (stability * sticky / (2.0 * n.max(1) as f64)).min(1.0);
+    // a mid-chain residue has 4 free sides on the cubic lattice
+    let adhesion = (stability * sticky / (4.0 * n.max(1) as f64)).min(1.0);
     Function { catalysis, stability, amphiphile, pigment, fold_energy: f.energy, adhesion }
 }
 
@@ -432,8 +495,9 @@ mod tests {
         assert_eq!(a, b);
         assert!(self_avoiding(&a.pos));
         for w in a.pos.windows(2) {
-            assert_eq!((w[0].0 - w[1].0).abs() + (w[0].1 - w[1].1).abs(), 1, "chain stays connected");
+            assert!(adjacent(w[0], w[1]), "chain stays connected");
         }
+        assert!(a.pos.iter().any(|p| p.2 != 0), "a 16-residue fold uses the third dimension");
         assert!(a.energy < 0.0, "some contacts form");
         assert!((0.0..=1.0).contains(&fa.stability));
     }

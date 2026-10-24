@@ -346,12 +346,17 @@ mod tests {
         let specs: Vec<Island> = default_islands().into_iter().take(3).map(|s| Island { width: 6, depth: 6, ..s }).collect();
         let mut a = Archipelago::new(ap, specs, ReefParams::default(), CosmosParams::default(), rates, &rs, 3);
         let m0 = a.matter();
-        let f = &rs.founders[0];
+        // a lone-cell founder: colonial bodies seldom shed spores, so they may not cross in time
+        let f = rs.founders.iter().find(|f| !f.colonial).unwrap_or(&rs.founders[0]);
         let genome: Vec<u8> = f.genome.iter().map(|&l| a.islands[0].canon_letter(l)).collect();
         let (clade, _) = a.release(0, &genome, f.mass.map(|m| m.clamp(0, 40)), 20).expect("release");
-        // 120 days: bigger tables grow slower, a lineage needs longer to send a spore across
-        for _ in 0..6000 {
+        // up to 400 days, stopping once it has crossed: only a spore adrift over the deepest row
+        // leaves, so when a lineage first gets one across varies a lot between founders
+        for k in 0..20000 {
             a.step(0.02);
+            if k % 500 == 0 && a.spread(clade).iter().filter(|&&n| n > 0).count() >= 2 {
+                break;
+            }
         }
         assert_eq!(a.matter(), m0, "matter changed across crossings");
         assert!(a.crossings.iter().flatten().sum::<u64>() > 0, "nothing crossed");

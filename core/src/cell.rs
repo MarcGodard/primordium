@@ -390,15 +390,44 @@ pub fn signals(light: f64, kt: f64, free: &[i64; N_LETTERS], mates: f64, height:
 /// regulation does to fitness.
 pub fn regulated_traits(info: &GenomeInfo, signals: Signals) -> (f64, f64, f64) {
     let ka = bidx(KA).unwrap();
-    let (mut poly, mut synth, mut amph) = (0.0f64, 0.0f64, 0.0f64);
-    for g in &info.genes {
-        let on = g.promoter.level(signals);
-        poly = poly.max(g.func.catalysis[pair(ka, ka)] * on);
-        let s = LETTERS.iter().map(|&z| g.func.catalysis[pair(ka, bidx(z).unwrap())]).sum::<f64>() / N_LETTERS as f64;
-        synth = synth.max(s * on);
-        amph = amph.max(g.func.amphiphile * on);
-    }
+    let on: Vec<f64> = info.genes.iter().map(|g| g.promoter.level(signals)).collect();
+    let poly = combine_cuts(info.genes.iter().zip(&on).map(|(g, &w)| (g.func.catalysis[pair(ka, ka)], w)), 1.0);
+    let synth = combine_cuts(
+        info.genes.iter().zip(&on).map(|(g, &w)| (LETTERS.iter().map(|&z| g.func.catalysis[pair(ka, bidx(z).unwrap())]).sum::<f64>() / N_LETTERS as f64, w)),
+        1.0,
+    );
+    let amph = combine_cover(info.genes.iter().zip(&on).map(|(g, &w)| (g.func.amphiphile, w)));
     (poly, synth, amph)
+}
+
+/// Barrier cut of several enzymes for one reaction, each present at fraction `w`: their rate
+/// boosts add (1 + sum w (e^(cut/kT) - 1)), so a weaker enzyme switched on still speeds the
+/// reaction. Taking only the best one let an always-on gene hide every regulated one.
+pub fn combine_cuts(parts: impl Iterator<Item = (f64, f64)>, kt: f64) -> f64 {
+    kt * (1.0 + parts.map(|(c, w)| w * ((c / kt).exp() - 1.0)).sum::<f64>()).ln()
+}
+
+/// Coverage-like scores (membrane building, stickiness) 0..1 from several products at fraction
+/// `w`: overlapping cover, 1 - prod(1 - x w).
+pub fn combine_cover(parts: impl Iterator<Item = (f64, f64)>) -> f64 {
+    1.0 - parts.map(|(x, w)| 1.0 - (x * w).clamp(0.0, 1.0)).product::<f64>()
+}
+
+/// Share of what a cell expresses that is pigment, 0..1, weighting each gene by how far its
+/// product absorbs past a chain of average letters (every product absorbs a little: counting
+/// any absorber as pigment made shade blind to which genes are on).
+pub fn pigment_share(info: &GenomeInfo, levels: &[f64]) -> f64 {
+    static FLOOR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    let floor = *FLOOR.get_or_init(|| {
+        let ph = polymer::LetterPhysics::new(&crate::element::Table::new());
+        ph.absorb.iter().sum::<f64>() / N_LETTERS as f64
+    });
+    let total: f64 = levels.iter().sum();
+    if total <= 0.0 || info.pigment <= floor {
+        return 0.0;
+    }
+    let pig: f64 = info.genes.iter().zip(levels).map(|(g, l)| ((g.func.pigment - floor) / (info.pigment - floor)).clamp(0.0, 1.0) * l).sum();
+    pig / total
 }
 
 /// Translate a gene span codon by codon.
@@ -677,7 +706,7 @@ fn clip_odds(poly: f64, kt: f64) -> f64 {
 /// Polymerase catalysis actually present: best expressed product, full strength from 3 copies.
 fn present_poly(c: &Cell, info: &GenomeInfo) -> f64 {
     let ka = bidx(KA).unwrap();
-    info.genes.iter().zip(&c.products).map(|(g, &n)| g.func.catalysis[pair(ka, ka)] * (n as f64 / 3.0).min(1.0)).fold(0.0, f64::max)
+    combine_cuts(info.genes.iter().zip(&c.products).map(|(g, &n)| (g.func.catalysis[pair(ka, ka)], (n as f64 / 3.0).min(1.0))), 1.0)
 }
 
 /// Swap mismatched letters of `got` for `want` via the monomer pool. All or nothing.
@@ -1137,7 +1166,7 @@ impl World {
         let ka = bidx(KA).unwrap();
         for (l, &z) in LETTERS.iter().enumerate() {
             let p = pair(ka, bidx(z).unwrap());
-            let cut = info.genes.iter().enumerate().map(|(k, g)| g.func.catalysis[p] * presence(c, k)).fold(0.0, f64::max);
+            let cut = combine_cuts(info.genes.iter().enumerate().map(|(k, g)| (g.func.catalysis[p], presence(c, k))), kt);
             let rate = self.ctx.ka_rate(crate::kinetics::CH_FORM, z, &x) * (cut / kt).exp();
             let make = round_flux(rate * (c.raw_ka * c.raw[l]) as f64 / cells_in * dt * self.ctx.p.sweeps_per_day, rng).clamp(0, c.raw_ka.min(c.raw[l]));
             c.raw_ka -= make;
@@ -1424,17 +1453,13 @@ impl World {
     /// Pigment shade a cell makes for itself: the best pigment times pigment genes' share of
     /// what the cell expresses.
     pub(crate) fn own_shade(&self, c: &Cell, info: &GenomeInfo) -> f64 {
-        if self.lineage_mode {
+        let e: Vec<f64> = if self.lineage_mode {
             // same form as detail's product-copy share, with expression levels for copies
-            let e = self.expression(c, info);
-            let total: f64 = e.iter().sum();
-            if total <= 0.0 {
-                return 0.0;
-            }
-            let pig: f64 = info.genes.iter().zip(&e).filter(|(g, _)| g.func.pigment > 0.0).map(|(_, l)| l).sum();
-            return self.cp.max_shade * info.pigment * pig / total;
-        }
-        self.cp.max_shade * info.pigment * self.expressed_fraction(c, info, |g| g.func.pigment > 0.0)
+            self.expression(c, info)
+        } else {
+            c.products.iter().map(|&n| n as f64).collect()
+        };
+        self.cp.max_shade * info.pigment * pigment_share(info, &e)
     }
 
     /// Per colony: summed member shade and member count.
@@ -1465,7 +1490,7 @@ impl World {
     /// actually expresses. Returns the shared colony id (the parent joins it too).
     pub(crate) fn stick(&mut self, c: &mut Cell, info: &GenomeInfo, rng: &mut Rng) -> Option<u64> {
         let e = self.expression(c, info);
-        let adh = info.genes.iter().zip(&e).map(|(g, l)| g.func.adhesion * l).fold(0.0, f64::max);
+        let adh = combine_cover(info.genes.iter().zip(&e).map(|(g, &l)| (g.func.adhesion, l)));
         let p = ((adh - self.cp.stick_floor) / self.cp.stick_span).clamp(0.0, 1.0);
         if !rng.chance(p) {
             return None;
@@ -1500,7 +1525,7 @@ impl World {
             }
             let info = self.info(&cells[i].genome);
             let e = self.expression(&cells[i], &info);
-            let adh = info.genes.iter().zip(&e).map(|(g, l)| g.func.adhesion * l).fold(0.0, f64::max);
+            let adh = combine_cover(info.genes.iter().zip(&e).map(|(g, &l)| (g.func.adhesion, l)));
             let drive = ((adh - self.cp.eat_floor) / self.cp.eat_span).clamp(0.0, 1.0);
             if drive <= 0.0 {
                 continue;

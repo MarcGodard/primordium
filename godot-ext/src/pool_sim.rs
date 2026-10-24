@@ -17,13 +17,13 @@ const AREA: (f32, f32) = (220.0, 140.0);
 pub struct PoolSim {
     pool: Option<Pool>,
     layout: HashMap<u64, (Vector2, Vector2)>,
-    folds: HashMap<Vec<u8>, Vec<(i32, i32)>>,
+    folds: HashMap<Vec<u8>, Vec<primordium_core::polymer::P>>,
     rng: Option<Rng>,
     base: Base<Node>,
 }
 
 impl PoolSim {
-    fn fold_of(&mut self, seq: &[u8]) -> Vec<(i32, i32)> {
+    fn fold_of(&mut self, seq: &[u8]) -> Vec<primordium_core::polymer::P> {
         if let Some(f) = self.folds.get(seq) {
             return f.clone();
         }
@@ -58,10 +58,9 @@ impl PoolSim {
         self.layout = next;
     }
 
-    fn centroid(fold: &[(i32, i32)]) -> Vector2 {
+    fn centroid(fold: &[primordium_core::polymer::P]) -> Vector2 {
         let n = fold.len().max(1) as f32;
-        let (sx, sy) = fold.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0 as f32, a.1 + p.1 as f32));
-        Vector2::new(sx / n, sy / n)
+        fold.iter().fold(Vector2::ZERO, |a, &p| a + crate::fold_2d(p)) / n
     }
 }
 
@@ -145,10 +144,14 @@ impl PoolSim {
             let c = Self::centroid(&fold);
             let at = self.layout.get(&id).map(|x| x.0).unwrap_or_default();
             let hl = if id as i64 == selected { 1.0 } else { 0.0 };
-            for (k, (&l, &(x, y))) in seq.iter().zip(&fold).enumerate() {
-                let p = at + Vector2::new(x as f32, y as f32) - c;
+            let zs = fold.iter().map(|q| q.2).fold((i32::MAX, i32::MIN), |m, z| (m.0.min(z), m.1.max(z)));
+            for (k, (&l, &q)) in seq.iter().zip(&fold).enumerate() {
+                let p = at + crate::fold_2d(q) - c;
+                // nearer the viewer (higher z) brighter: depth reads without a 3D camera
+                let depth = if zs.1 > zs.0 { (q.2 - zs.0) as f32 / (zs.1 - zs.0) as f32 } else { 1.0 };
+                let b = 0.55 + 0.45 * depth;
                 v.extend_from_slice(&[1.0, 0.0, 0.0, p.x, 0.0, 1.0, 0.0, p.y]);
-                v.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]);
+                v.extend_from_slice(&[b, b, b, 1.0]);
                 v.extend_from_slice(&[LETTERS[l as usize] as f32, 2.0, hl, (id as f32 * 0.37 + k as f32 * 0.11).fract()]);
             }
         }
@@ -164,9 +167,20 @@ impl PoolSim {
             let fold = self.fold_of(&seq);
             let c = Self::centroid(&fold);
             let at = self.layout.get(&id).map(|x| x.0).unwrap_or_default();
-            for w in fold.windows(2) {
-                v.push(at + Vector2::new(w[0].0 as f32, w[0].1 as f32) - c);
-                v.push(at + Vector2::new(w[1].0 as f32, w[1].1 as f32) - c);
+            // Catmull-Rom through the residues: a chain bends, the lattice is only the model's grid
+            let pts: Vec<Vector2> = fold.iter().map(|&q| at + crate::fold_2d(q) - c).collect();
+            let n = pts.len();
+            for i in 0..n.saturating_sub(1) {
+                let (p0, p1, p2, p3) = (pts[i.saturating_sub(1)], pts[i], pts[i + 1], pts[(i + 2).min(n - 1)]);
+                let mut prev = p1;
+                for s in 1..=4 {
+                    let t = s as f32 / 4.0;
+                    let (t2, t3) = (t * t, t * t * t);
+                    let q = (p1 * 2.0 + (p2 - p0) * t + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2 + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * t3) * 0.5;
+                    v.push(prev);
+                    v.push(q);
+                    prev = q;
+                }
             }
         }
         PackedVector2Array::from(v.as_slice())
@@ -199,11 +213,12 @@ impl PoolSim {
         let Some(c) = found.cloned() else { return d };
         let id = c.id as i64;
         let fold = self.fold_of(&c.seq);
-        let pos: Vec<Vector2> = fold.iter().map(|&(x, y)| Vector2::new(x as f32, y as f32)).collect();
+        let pos: Vec<Vector2> = fold.iter().map(|&p| crate::fold_2d(p)).collect();
         d.set("id", id);
         d.set("seq", seq_string(&c.seq));
         d.set("letters", &PackedByteArray::from(c.seq.as_slice()));
         d.set("fold", &PackedVector2Array::from(pos.as_slice()));
+        d.set("fold3", &crate::fold_3d(&fold));
         d.set("generation", c.generation as i64);
         d.set("parent", c.parent.map_or(-1, |p| p as i64));
         d.set("age_days", self.pool.as_ref().unwrap().t_days - c.born);
@@ -223,11 +238,15 @@ impl PoolSim {
         d.set("backbone_cut", c.func.catalysis.get(primordium_core::kinetics::pair(ka, ka)).copied().unwrap_or(0.0));
         let f = polymer::Fold { pos: fold, energy: 0.0 };
         let mut sites = PackedVector2Array::new();
+        let mut site_idx = PackedInt32Array::new();
         for (i, j, _) in polymer::sites(&f) {
             sites.push(pos[i]);
             sites.push(pos[j]);
+            site_idx.push(i as i32);
+            site_idx.push(j as i32);
         }
         d.set("sites", &sites);
+        d.set("site_idx", &site_idx);
         d
     }
 
