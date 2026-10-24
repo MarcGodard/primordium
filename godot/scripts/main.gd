@@ -146,6 +146,14 @@ func _ready() -> void:
 					view.cam.zoom = Vector2(float(kv[1]), float(kv[1]))
 				else:
 					view.dist = float(kv[1])
+			"orbit":
+				# 3D views: camera yaw,pitch in radians
+				var yp := kv[1].split(",")
+				if "yaw" in view and yp.size() == 2:
+					view.yaw = float(yp[0])
+					view.pitch = float(yp[1])
+					if "auto_orbit" in view:
+						view.auto_orbit = false
 			"focus":
 				var xy := kv[1].split(",")
 				if view.cam is Camera2D:

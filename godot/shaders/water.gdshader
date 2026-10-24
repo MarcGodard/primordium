@@ -8,6 +8,8 @@ uniform vec3 shallow : source_color = vec3(0.12, 0.5, 0.52);
 uniform vec3 deep : source_color = vec3(0.01, 0.07, 0.16);
 uniform float swell = 0.4;
 uniform float daylight = 1.0;
+// far from here the mesh is coarse: vertex swell fades out before it would alias
+uniform vec2 calm_center = vec2(0.0);
 
 varying vec3 wpos;
 
@@ -27,7 +29,7 @@ float waves(vec2 p, float t) {
 
 void vertex() {
 	vec3 w = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	VERTEX.y += waves(w.xz, TIME);
+	VERTEX.y += waves(w.xz, TIME) * (1.0 - smoothstep(500.0, 700.0, distance(w.xz, calm_center)));
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 

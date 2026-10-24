@@ -153,7 +153,7 @@ func _ready() -> void:
 	cam = Camera3D.new()
 	cam.fov = 50.0
 	cam.near = 0.3
-	cam.far = 4000.0
+	cam.far = 12000.0
 	add_child(cam)
 	_build_overlay()
 	ff = load("res://scripts/ff_panel.gd").new()
@@ -167,34 +167,49 @@ func _build_environment() -> void:
 	rig = load("res://scripts/sky_rig.gd").new()
 	add_child(rig)
 
-## Rock from the sim's height grid; a seafloor apron runs out under the open sea.
+## Rock from the sim's height grid, inside a wider made-up shore so the reef looks whole from
+## any angle: the coast runs on along the shore, the seafloor falls away, hills rise inland.
+## One mesh: the grid is exact over the reef and coarsens outward, so the seams cannot crack.
 func _build_terrain() -> void:
 	var h: PackedFloat32Array = sim.heights()
 	var w := int(extent.x)
 	var d := int(extent.y)
 	if h.size() != (w + 1) * (d + 1):
 		return
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var idx := PackedInt32Array()
-	verts.resize((w + 1) * (d + 1))
-	norms.resize(verts.size())
+	var hmin := INF
+	for v in h:
+		hmin = min(hmin, v)
+	# mean height of each row up the beach: what the coast looks like away from the reef
+	var row := PackedFloat32Array()
+	row.resize(d + 1)
 	for y in d + 1:
+		var sum := 0.0
 		for x in w + 1:
-			var i := y * (w + 1) + x
-			verts[i] = Vector3(x, h[i], -y)
-			var hl: float = h[y * (w + 1) + max(x - 1, 0)]
-			var hr: float = h[y * (w + 1) + min(x + 1, w)]
-			var hd: float = h[max(y - 1, 0) * (w + 1) + x]
-			var hu: float = h[min(y + 1, d) * (w + 1) + x]
-			norms[i] = Vector3(hl - hr, 2.0, hu - hd).normalized()
-	for y in d:
-		for x in w:
-			var a := y * (w + 1) + x
-			var b := a + 1
-			var c := a + w + 1
-			var e := c + 1
-			idx.append_array([a, c, b, b, c, e])
+			sum += h[y * (w + 1) + x]
+		row[y] = sum / (w + 1)
+	ground = [h, row, w, d, hmin]
+	var xs := _axis(w, SURROUND, SURROUND)
+	var ys := _axis(d, SURROUND, SURROUND * 0.7)
+	var nx := xs.size()
+	var ny := ys.size()
+	var verts := PackedVector3Array()
+	verts.resize(nx * ny)
+	for j in ny:
+		for i in nx:
+			verts[j * nx + i] = Vector3(xs[i], _ground(xs[i], ys[j], h, row, w, d, hmin), -ys[j])
+	var norms := PackedVector3Array()
+	norms.resize(verts.size())
+	for j in ny:
+		for i in nx:
+			var ex: Vector3 = verts[j * nx + min(i + 1, nx - 1)] - verts[j * nx + max(i - 1, 0)]
+			var ey: Vector3 = verts[min(j + 1, ny - 1) * nx + i] - verts[max(j - 1, 0) * nx + i]
+			norms[j * nx + i] = ex.cross(ey).normalized()
+	var idx := PackedInt32Array()
+	for j in ny - 1:
+		for i in nx - 1:
+			var a := j * nx + i
+			var c := a + nx
+			idx.append_array([a, c, a + 1, a + 1, c, c + 1])
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
@@ -208,21 +223,118 @@ func _build_terrain() -> void:
 	mi.mesh = mesh
 	mi.material_override = rock_mat
 	add_child(mi)
-	# seafloor beyond the reef's deep edge and along its sides
-	var floor_y: float = h[0] - 3.0
-	var apron := PlaneMesh.new()
-	apron.size = Vector2(3000, 3000)
-	var ai := MeshInstance3D.new()
-	ai.mesh = apron
-	ai.position = Vector3(extent.x * 0.5, floor_y, -extent.y * 0.5)
-	ai.material_override = rock_mat
-	add_child(ai)
 
+## [heights, row profile, w, d, lowest]: what `_ground` needs, kept for the camera.
+var ground := []
+
+## How far the made-up shore runs past the reef, world units.
+const SURROUND := 1100.0
+
+## Grid lines along one axis: every unit over the reef (0..n), then steps growing outward to
+## `lo` before it and `hi` after it.
+func _axis(n: int, lo: float, hi: float) -> PackedFloat32Array:
+	var before := []
+	var t := 0.0
+	var step := 1.0
+	while t < lo:
+		t += step
+		before.push_front(-t)
+		step = min(step * 1.18, 60.0)
+	var out := PackedFloat32Array(before)
+	for k in n + 1:
+		out.append(float(k))
+	t = float(n)
+	step = 1.0
+	while t < n + hi:
+		t += step
+		out.append(t)
+		step = min(step * 1.18, 60.0)
+	return out
+
+## Ground height anywhere: the sim's own over the reef; outside, the nearest edge blended toward
+## the coast's mean profile along the shore, falling to deep floor seaward, rising inland.
+func _ground(x: float, y: float, h: PackedFloat32Array, row: PackedFloat32Array, w: int, d: int, hmin: float) -> float:
+	var cx: float = clamp(x, 0.0, w)
+	var cy: float = clamp(y, 0.0, d)
+	# bilinear: the mesh only asks at integer corners, the camera anywhere
+	var x0 := mini(int(cx), w - 1)
+	var y0 := mini(int(cy), d - 1)
+	var tx := cx - x0
+	var ty := cy - y0
+	var r0: float = lerp(h[y0 * (w + 1) + x0], h[y0 * (w + 1) + x0 + 1], tx)
+	var r1: float = lerp(h[(y0 + 1) * (w + 1) + x0], h[(y0 + 1) * (w + 1) + x0 + 1], tx)
+	var base: float = lerp(r0, r1, ty)
+	if x >= 0.0 and x <= w and y >= 0.0 and y <= d:
+		return base
+	var prof: float = lerp(row[y0], row[y0 + 1], ty)
+	var dx: float = max(-x, x - w, 0.0)
+	var dy_sea: float = max(-y, 0.0)
+	var dy_land: float = max(y - d, 0.0)
+	var far: float = max(dx, max(dy_sea, dy_land))
+	# rolling relief grows with distance so the edge of the reef never shows as a line
+	var relief := (_vnoise(x * 0.012, y * 0.012) - 0.5) * 14.0 + (_vnoise(x * 0.04, y * 0.04) - 0.5) * 4.0
+	var g: float = lerp(base, prof, smoothstep(0.0, 120.0, dx))
+	g += relief * smoothstep(0.0, 80.0, far)
+	g = lerp(g, hmin - 30.0 + relief * 0.5, smoothstep(0.0, 260.0, dy_sea))
+	g += 18.0 * smoothstep(0.0, 400.0, dy_land) + relief * 0.8 * smoothstep(0.0, 120.0, dy_land)
+	# the far rim sinks under the sea: an island, never a cut edge
+	var rim: float = max(dx / SURROUND, dy_land / (SURROUND * 0.7))
+	return lerp(g, hmin - 30.0, smoothstep(0.6, 0.95, rim))
+
+static func _hash(i: int, j: int) -> float:
+	var n := (i * 374761393 + j * 668265263) & 0x7fffffff
+	n = ((n ^ (n >> 13)) * 1274126177) & 0x7fffffff
+	return float(n & 0xffff) / 65535.0
+
+## Value noise 0..1.
+static func _vnoise(x: float, y: float) -> float:
+	var i := floori(x)
+	var j := floori(y)
+	var fx := x - i
+	var fy := y - j
+	fx = fx * fx * (3.0 - 2.0 * fx)
+	fy = fy * fy * (3.0 - 2.0 * fy)
+	var a: float = lerp(_hash(i, j), _hash(i + 1, j), fx)
+	var b: float = lerp(_hash(i, j + 1), _hash(i + 1, j + 1), fx)
+	return lerp(a, b, fy)
+
+## Sea to the horizon: fine near the reef (the swell is vertex motion), coarsening outward.
 func _build_water() -> void:
-	var pm := PlaneMesh.new()
-	pm.size = Vector2(1400, 1400)
-	pm.subdivide_width = 160
-	pm.subdivide_depth = 160
+	var line := PackedFloat32Array()
+	var t := 0.0
+	var step := 8.0
+	var pos := [0.0]
+	while t < 9000.0:
+		t += step
+		pos.append(t)
+		if t > 700.0:
+			step = min(step * 1.25, 800.0)
+	for k in range(pos.size() - 1, 0, -1):
+		line.append(-pos[k])
+	for v in pos:
+		line.append(v)
+	var n := line.size()
+	var verts := PackedVector3Array()
+	verts.resize(n * n)
+	var norms := PackedVector3Array()
+	norms.resize(n * n)
+	for j in n:
+		for i in n:
+			verts[j * n + i] = Vector3(line[i], 0.0, line[j])
+			norms[j * n + i] = Vector3.UP
+	var idx := PackedInt32Array()
+	for j in n - 1:
+		for i in n - 1:
+			var a := j * n + i
+			var c := a + n
+			idx.append_array([a, c, a + 1, a + 1, c, c + 1])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_INDEX] = idx
+	var pm := ArrayMesh.new()
+	pm.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	water_mat = ShaderMaterial.new()
 	water_mat.shader = load("res://shaders/water.gdshader")
 	water = MeshInstance3D.new()
@@ -230,6 +342,8 @@ func _build_water() -> void:
 	water.material_override = water_mat
 	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	water.position = Vector3(extent.x * 0.5, 0.0, -extent.y * 0.5)
+	water.custom_aabb = AABB(Vector3(-9000, -10, -9000), Vector3(18000, 20, 18000))
+	water_mat.set_shader_parameter("calm_center", Vector2(extent.x * 0.5, -extent.y * 0.5))
 	add_child(water)
 
 func _build_cells() -> void:
@@ -659,6 +773,7 @@ func pick_longest() -> void:
 func _process(delta: float) -> void:
 	if not ok:
 		return
+	_place_profile()
 	if sim.busy():
 		var r: Dictionary = sim.poll_fast_forward()
 		if r.is_empty():
@@ -843,11 +958,25 @@ func _update_bites() -> void:
 		bites_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(s, s, s)), Vector3(b[i * 4], b[i * 4 + 1], b[i * 4 + 2])))
 		bites_mm.set_instance_color(i, Color(1.0, 0.25, 0.15, clamp(1.0 - age / 0.6, 0.0, 1.0) * 0.55))
 
+## The body panel goes under the HUD's left panel, whose height changes with its text.
+func _place_profile() -> void:
+	var hud = get_tree().current_scene.get("hud") if get_tree().current_scene else null
+	var lp = hud.get("left_panel") if hud else null
+	if lp is Control and lp.is_visible_in_tree():
+		profile.position.y = min(lp.get_global_rect().end.y + 10.0, get_viewport().get_visible_rect().size.y - profile.size.y - 8.0)
+	else:
+		profile.position.y = 12.0
+
 func _update_camera() -> void:
 	pitch = clamp(pitch, -1.45, 0.25)
 	dist = clamp(dist, 6.0, 900.0)
 	var off := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)) * dist
-	cam.position = target + off
+	var p := target + off
+	if not ground.is_empty():
+		# never under the ground, reef rock included
+		var gy: float = _ground(p.x, -p.z, ground[0], ground[1], ground[2], ground[3], ground[4])
+		p.y = max(p.y, gy + 4.0)
+	cam.position = p
 	cam.look_at(target, Vector3.UP)
 
 func _unhandled_input(e: InputEvent) -> void:
