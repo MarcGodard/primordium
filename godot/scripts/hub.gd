@@ -14,7 +14,7 @@ const SCALES := [
 	["Cells", "Genomes, a genetic code, mutation and the first predators.", Color(0.55, 0.95, 0.5)],
 	["Coast", "Twelve beaches along an Earth-sized planet adapt to their climate.", Color(0.4, 0.7, 1.0)],
 	["Reef", "Many-celled bodies in 3D: plants, crawlers, lineages, evolution.", Color(1.0, 0.5, 0.65)],
-	["Archipelago", "Islands linked by drifting spores: one lineage, two shores, two kinds.", Color(0.45, 0.85, 1.0)],
+	["Archipelago", "Seven islands linked by drifting spores: spread life to every one.", Color(0.45, 0.85, 1.0)],
 	["Your world", "Your own reef: the creatures you kept live, compete and keep evolving.", Color(0.75, 1.0, 0.55)],
 ]
 const GARDEN := 8

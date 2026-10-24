@@ -116,13 +116,13 @@ const ARCH_LEVERS := [
 ]
 const ARCH_EXPLAIN := """[b]Scale 6: an archipelago[/b]
 
-[b]What you see.[/b] Three small islands under one sky, each with its own shore: a calm [b]Lagoon[/b], a surf-beaten [b]Surf Point[/b], and the sunlit, shallow [b]Sun Flats[/b]. You see one at a time (I for the next island). The creatures you kept start on the Lagoon.
+[b]What you see.[/b] Seven islands of different sizes under one sky, each with its own shore: the calm [b]Lagoon[/b], surf-beaten [b]Surf Point[/b], the sunlit shallow [b]Sun Flats[/b], dark [b]Deepwater[/b] and more, out to tiny [b]Lone Stack[/b]. You stand on one at a time; the others sit on the horizon where they lie on the map (I sails to the next). The creatures you kept start on the Lagoon.
 
-[b]What happens.[/b] Spores that drift off an island's deep edge are sometimes carried by the current to another island. A few arrivals start a new population: the [b]founder effect[/b]. From then on each island's population mutates on its own and its shore selects different bodies: calm water lets them grow tall, surf keeps them low.
+[b]What happens.[/b] Spores that drift off an island's deep edge are sometimes carried to another island, most often a near one: a long crossing is a long time adrift, and few survive it. A few arrivals start a new population (the [b]founder effect[/b]); each island's shore then keeps different bodies.
 
-[b]Goal.[/b] One lineage ends up as two kinds on two islands: their genomes differ by %.1f%% beyond the variety inside each island, and stay that far apart for %d days. That is how new species begin ([b]allopatric speciation[/b]), like Darwin's finches.
+[b]Goal.[/b] Life on every island at once. Small, far and harsh islands fill last and empty most easily: life spreads by stepping stones ([b]island biogeography[/b]).
 
-[b]Try.[/b] L opens the Currents lever. Strong currents carry so many spores that the islands stay one population ([b]gene flow[/b]); weak ones let them split. A plan that works: strong currents until every island has settlers, then weak ones. Which island is reached first, and by whom, is luck (N: a new archipelago). T fast-forwards.""" % [ARCH_GOAL * 100.0, int(ARCH_HOLD)]
+[b]Try.[/b] L opens the Currents lever: strong currents carry more spores further. Weak ones leave islands isolated, and an isolated lineage can split into two kinds (a discovery for the codex). T fast-forwards, N starts a new archipelago."""
 var campaign: Node
 ## Garden lineage number -> creature name.
 var names := {}
@@ -311,6 +311,8 @@ func _ground(x: float, y: float, h: PackedFloat32Array, row: PackedFloat32Array,
 	if x >= 0.0 and x <= w and y >= 0.0 and y <= d:
 		return base
 	var prof: float = lerp(row[y0], row[y0 + 1], ty)
+	if arch:
+		return _island_ground(x, y, base, w, d, hmin)
 	var dx: float = max(-x, x - w, 0.0)
 	var dy_sea: float = max(-y, 0.0)
 	var dy_land: float = max(y - d, 0.0)
@@ -324,6 +326,112 @@ func _ground(x: float, y: float, h: PackedFloat32Array, row: PackedFloat32Array,
 	# the far rim sinks under the sea: an island, never a cut edge
 	var rim: float = max(dx / SURROUND, dy_land / (SURROUND * 0.7))
 	return lerp(g, hmin - 30.0, smoothstep(0.6, 0.95, rim))
+
+## Archipelago: the reef strip is one shore of a small round island. Land rises to a hill
+## inland; past the coast the seafloor falls to the deep. The edge of the strip blends in.
+func _island_ground(x: float, y: float, base: float, w: int, d: int, hmin: float) -> float:
+	var R: float = max(w, d) * 1.6
+	var c := Vector2(w * 0.5, d * 0.55 + R * 0.55)
+	var v := Vector2(x, y) - c
+	# a wobbly coastline, not a circle
+	var ang := atan2(v.y, v.x)
+	var wob: float = 0.85 + 0.3 * _vnoise(cos(ang) * 2.0 + 7.0, sin(ang) * 2.0 + 3.0)
+	var r: float = v.length() / (R * wob)
+	var relief := (_vnoise(x * 0.02, y * 0.02) - 0.5) * 10.0
+	var hill: float = lerp(hmin - 40.0, hmin + 70.0, smoothstep(1.15, 0.2, r)) + relief * smoothstep(1.2, 0.6, r)
+	var dx: float = max(-x, x - w, 0.0)
+	var dy: float = max(-y, y - d, 0.0)
+	return lerp(base, hill, smoothstep(0.0, 70.0, max(dx, dy)))
+
+## The other islands on the horizon: low-poly rock with a name and population label.
+var far_islands := []
+## World units per km of the archipelago's map (the nearest island sits ~800 units off).
+const KM := 65.0
+
+func _build_far_islands() -> void:
+	for f in far_islands:
+		f.queue_free()
+	far_islands.clear()
+	var isl: Array = arch_state.get("islands", [])
+	var n := isl.size()
+	var here: int = sim.focus()
+	if here >= n:
+		return
+	# the island in view sits at its map place; the rest at theirs, KM world units per km
+	var R: float = max(extent.x, extent.y) * 1.6
+	var c0 := Vector3(extent.x * 0.5, 0.0, -(extent.y * 0.55 + R * 0.55))
+	for k in n:
+		if k == here:
+			continue
+		var off := Vector2(float(isl[k].x) - float(isl[here].x), float(isl[k].y) - float(isl[here].y)) * KM
+		var node := Node3D.new()
+		node.position = c0 + Vector3(off.x, 0.0, off.y)
+		add_child(node)
+		node.add_child(_island_mesh(k, max(int(isl[k].width), int(isl[k].depth)) * 6.0 * 1.4))
+		var lab := Label3D.new()
+		lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		# one size on screen at any distance
+		lab.fixed_size = true
+		lab.pixel_size = 0.0012
+		lab.font_size = 28
+		lab.outline_size = 8
+		lab.no_depth_test = true
+		lab.modulate = Color(1.0, 0.9, 0.6)
+		lab.position = Vector3(0, 230, 0)
+		lab.name = "Label"
+		node.add_child(lab)
+		node.set_meta("island", k)
+		far_islands.append(node)
+	_label_far_islands()
+
+func _label_far_islands() -> void:
+	var isl: Array = arch_state.get("islands", [])
+	for node in far_islands:
+		var k: int = node.get_meta("island")
+		if k < isl.size():
+			var lab: Label3D = node.get_node("Label")
+			var alive: PackedInt64Array = arch_state.get("alive", PackedInt64Array())
+			var life: bool = k < alive.size() and alive[k] == 1
+			lab.text = "%s\n%s" % [isl[k].name, ("%s cells" % _short(int(isl[k].cells))) if int(isl[k].cells) > 0 else "no life yet"]
+			lab.modulate = Color(0.6, 1.0, 0.6) if life else Color(1.0, 0.85, 0.55)
+
+func _island_mesh(k: int, radius: float) -> MeshInstance3D:
+	var n := 48
+	var verts := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var span := radius * 1.4
+	for j in n + 1:
+		for i in n + 1:
+			var x: float = -span + 2.0 * span * i / n
+			var z: float = -span + 2.0 * span * j / n
+			var ang := atan2(z, x)
+			var wob: float = 0.8 + 0.4 * _vnoise(cos(ang) * 2.0 + k * 11.0, sin(ang) * 2.0 + k * 5.0)
+			var r: float = Vector2(x, z).length() / (radius * wob)
+			var y: float = lerp(-45.0, 60.0 + 40.0 * _vnoise(k * 3.0, 1.0), smoothstep(1.1, 0.15, r)) + (_vnoise(x * 0.02 + k, z * 0.02) - 0.5) * 18.0 * smoothstep(1.1, 0.5, r)
+			verts.append(Vector3(x, y, z))
+	for j in n:
+		for i in n:
+			var a := j * (n + 1) + i
+			var c := a + n + 1
+			idx.append_array([a, c, a + 1, a + 1, c, c + 1])
+	var norms := PackedVector3Array()
+	norms.resize(verts.size())
+	for j in n + 1:
+		for i in n + 1:
+			var ex: Vector3 = verts[j * (n + 1) + min(i + 1, n)] - verts[j * (n + 1) + max(i - 1, 0)]
+			var ez: Vector3 = verts[min(j + 1, n) * (n + 1) + i] - verts[max(j - 1, 0) * (n + 1) + i]
+			norms[j * (n + 1) + i] = ez.cross(ex).normalized()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_INDEX] = idx
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = rock_mat
+	return mi
 
 static func _hash(i: int, j: int) -> float:
 	var n := (i * 374761393 + j * 668265263) & 0x7fffffff
@@ -564,6 +672,8 @@ func activate(on: bool) -> void:
 			var isl: Array = arch_state.get("islands", [])
 			if sim.focus() < isl.size():
 				wave_mult = float(isl[sim.focus()].waves)
+		if far_islands.is_empty():
+			_build_far_islands()
 		if campaign:
 			_arch_release()
 
@@ -599,36 +709,59 @@ func _set_island(k: int) -> void:
 	skins.clear()
 	history = PackedFloat32Array()
 	lever_marks.clear()
+	# islands differ in size: the reef, its rock, the sea and the camera follow the new one
+	extent = sim.extent()
+	target = Vector3(extent.x * 0.5, 30.0, -extent.y * 0.35)
+	water.position = Vector3(extent.x * 0.5, water.position.y, -extent.y * 0.5)
+	water_mat.set_shader_parameter("calm_center", Vector2(extent.x * 0.5, -extent.y * 0.5))
 	_build_terrain()
-	var isl: Array = sim.archipelago().get("islands", [])
+	arch_state = sim.archipelago()
+	var isl: Array = arch_state.get("islands", [])
 	if k < isl.size():
 		wave_mult = float(isl[k].waves)
+	_build_far_islands()
 	timer = 0.0
+
+## Bonus: one lineage split into two kinds across islands (archipelago.rs SPLIT_GOAL held
+## SPLIT_HOLD days, checked daily in the sim). Once per save, a toast and a codex page.
+func _check_two_kinds(a: Dictionary) -> void:
+	if campaign == null or campaign.state.get("two_kinds", false):
+		return
+	if float(a.get("held", 0.0)) < float(a.get("hold", ARCH_HOLD)):
+		return
+	var isl: Array = a.get("islands", [])
+	var sa: int = a.get("split_a", -1)
+	var sb: int = a.get("split_b", -1)
+	if sa < 0 or sb < 0 or sa >= isl.size() or sb >= isl.size():
+		return
+	campaign.state["two_kinds"] = true
+	var nm: String = names.get(int(a.split_lineage), "one lineage")
+	var page := "[b]Two kinds.[/b] %s's descendants on %s and on %s have grown apart: their genomes now differ by %.1f letters in 100 beyond the variety inside each island, and have for %d days. Isolation first, then difference: how new species begin." % [nm, isl[sa].name, isl[sb].name, float(a.divergence) * 100.0, int(ARCH_HOLD)]
+	campaign.field_note("Discovery: two kinds", page)
+	campaign.toast.emit("Discovery: two kinds", "%s on %s and %s have split apart. Saved in the codex (J)." % [nm, isl[sa].name, isl[sb].name], Color(0.6, 0.95, 1.0))
 
 func _island_name() -> String:
 	var isl: Array = arch_state.get("islands", [])
 	var k: int = sim.focus()
 	return isl[k].name if k < isl.size() else "the islands"
 
-## Archipelago HUD: every island's shore and population, the one in view marked.
+## Archipelago HUD: the island in view, then every island as a dot (filled: alive).
 func _arch_text() -> String:
 	var isl: Array = arch_state.get("islands", [])
 	if isl.is_empty():
 		return ""
-	var n := isl.size()
-	var cross: PackedInt64Array = arch_state.get("crossings", PackedInt64Array())
-	var t := "[b]Islands[/b] (I next)\n"
-	for k in n:
+	var alive: PackedInt64Array = arch_state.get("alive", PackedInt64Array())
+	var k: int = sim.focus()
+	var t := ""
+	if k < isl.size():
 		var e: Dictionary = isl[k]
-		var arrived := 0
-		for f in n:
-			if f * n + k < cross.size():
-				arrived += cross[f * n + k]
-		var top := ""
-		var lin: PackedInt64Array = e.lineages
-		if lin.size() >= 2:
-			top = ", mostly " + names.get(int(lin[0]), "#%d" % lin[0])
-		t += "%s[b]%s[/b] waves x%s uv x%s: %d cells%s, %d spores arrived\n" % ["> " if k == sim.focus() else "   ", e.name, _mult(e.waves), _mult(e.uv), e.cells, top, arrived]
+		t += "[color=#9ab]%dx%d tiles, waves x%s, UV x%s, food x%s[/color]\n" % [e.width, e.depth, _mult(e.waves), _mult(e.uv), _mult(e.food)]
+	var dots := []
+	for j in isl.size():
+		var on: bool = j < alive.size() and alive[j] == 1
+		var nm: String = isl[j].name
+		dots.append(("[color=#7f7]●[/color] " if on else "[color=#776]○[/color] ") + ("[b]%s[/b]" % nm if j == k else nm))
+	t += "[font_size=13]" + "  ".join(PackedStringArray(dots)) + "[/font_size]\n"
 	return t
 
 static func _mult(v: float) -> String:
@@ -919,10 +1052,16 @@ func _new_archipelago() -> void:
 	arch_state = {}
 	history = PackedFloat32Array()
 	lever_marks.clear()
+	# a new archipelago starts on the Lagoon: its size, not the last island's
+	extent = sim.extent()
+	target = Vector3(extent.x * 0.5, 30.0, -extent.y * 0.35)
+	water.position = Vector3(extent.x * 0.5, water.position.y, -extent.y * 0.5)
+	water_mat.set_shader_parameter("calm_center", Vector2(extent.x * 0.5, -extent.y * 0.5))
 	_build_terrain()
 	sim.step(1, DT)
 	arch_state = sim.archipelago()
 	wave_mult = float(arch_state.islands[0].waves)
+	_build_far_islands()
 	_arch_release()
 	_show_levers()
 
@@ -1004,6 +1143,7 @@ func _process(delta: float) -> void:
 		stats = sim.stats()
 		if arch:
 			arch_state = sim.archipelago()
+			_label_far_islands()
 		history = sim.history()
 		var rows := history.size() / 11
 		if rows > 0:
@@ -1322,22 +1462,23 @@ func goal_progress() -> Dictionary:
 		var a: Dictionary = arch_state
 		if a.is_empty():
 			return {}
-		var dv: float = a.get("divergence", 0.0)
 		var isl: Array = a.get("islands", [])
-		var now := "no lineage on two islands yet: stronger currents (L) carry more spores across"
-		var who := ""
-		if int(a.get("split_lineage", -1)) >= 0 and int(a.split_a) < isl.size() and int(a.split_b) < isl.size():
-			var nm: String = names.get(int(a.split_lineage), "lineage %d" % a.split_lineage)
-			now = "%s: %s vs %s, %.2f%% apart" % [nm, isl[int(a.split_a)].name, isl[int(a.split_b)].name, max(dv, 0.0) * 100.0]
-			who = "%s, on %s and %s" % [nm, isl[int(a.split_a)].name, isl[int(a.split_b)].name]
-		# the sim checks the split once a day, fast-forward included: no gaps to jump
-		var goal: float = a.get("goal", ARCH_GOAL)
-		var hold: float = a.get("hold", ARCH_HOLD)
-		var held: float = a.get("held", 0.0)
-		if held > 0.0:
-			now += ", held %d of %d days" % [int(held), int(hold)]
-		var p: float = 0.6 * clamp(dv / goal, 0.0, 1.0) + 0.4 * clamp(held / hold, 0.0, 1.0)
-		return {"p": p, "done": held >= hold, "args": [], "now": now, "who": who}
+		var alive: PackedInt64Array = a.get("alive", PackedInt64Array())
+		var n := isl.size()
+		var got := 0
+		var empty := []
+		for k in n:
+			if k < alive.size() and alive[k] == 1:
+				got += 1
+			else:
+				empty.append(isl[k].name)
+		_check_two_kinds(a)
+		var now := "life on %d of %d islands" % [got, n]
+		if not empty.is_empty() and empty.size() <= 3:
+			now += "; still empty: " + ", ".join(PackedStringArray(empty))
+		if got < 2:
+			now += " (stronger currents, L, carry more spores across)"
+		return {"p": float(got) / max(n, 1), "done": n > 0 and got == n, "args": [n], "now": now, "who": "your creatures' descendants"}
 	if garden:
 		var who: String = names.get(int(g.won_lineage), "lineage %d" % g.won_lineage)
 		var lead: String = names.get(int(g.best_lineage), "none yet")

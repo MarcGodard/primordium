@@ -1489,7 +1489,9 @@ fn archipelago(args: &[String]) {
     let m0 = a.matter();
     let got = a.release(home, &genome, mass, 12);
     println!("released on {} as {:?}", a.specs[home].name, got);
-    let Some((clade, _)) = got else { return };
+    if got.is_none() {
+        return;
+    }
     let mut next = 50.0;
     // --calm=DAY:CROSSING: change the currents mid-run (open to settle, then calm to isolate)
     let calm: Option<(f64, f64)> = args.iter().find_map(|a| a.strip_prefix("--calm=")).and_then(|v| v.split_once(':')).and_then(|(d, c)| Some((d.parse().ok()?, c.parse().ok()?)));
@@ -1503,14 +1505,11 @@ fn archipelago(args: &[String]) {
         }
         if a.t_days() >= next {
             next += 50.0;
-            let names: Vec<String> = a.specs.iter().map(|s| s.name.to_string()).collect();
             let cells: Vec<usize> = a.islands.iter().map(|r| r.cells()).collect();
-            let pairs: Vec<String> = (0..3).flat_map(|i| (i + 1..3).map(move |j| (i, j))).map(|(i, j)| format!("{}-{} {}", i, j, a.divergence(clade, i, j, 30).map_or("-".into(), |d| format!("{:.4}", d)))).collect();
-            let heights: Vec<String> = a.islands.iter().map(|r| {
-                let st: Vec<_> = r.organisms.iter().filter(|o| o.settled() && o.clade == clade).collect();
-                format!("{:.2}", st.iter().map(|o| o.height() as f64).sum::<f64>() / st.len().max(1) as f64)
-            }).collect();
-            println!("t={:5.0} {:?} cells {:?} lineage cells {:?} height {:?} | crossings {:?} | divergence {} | ledger {}", a.t_days(), names, cells, a.spread(clade), heights, a.crossings, pairs.join(" "), if a.matter() == m0 { "exact" } else { "DRIFT" });
+            let alive = a.alive();
+            let arrived: Vec<u64> = (0..a.islands.len()).map(|j| a.crossings.iter().map(|row| row[j]).sum()).collect();
+            let split = a.watch.last.map(|b| format!("{} {}-{} {:.4}", b.0, b.1, b.2, b.3)).unwrap_or("-".into());
+            println!("t={:5.0} alive {}/{} cells {:?} arrived {:?} | best split {} held {:.0} | ledger {}", a.t_days(), alive.iter().filter(|&&x| x).count(), alive.len(), cells, arrived, split, a.split_held(), if a.matter() == m0 { "exact" } else { "DRIFT" });
         }
     }
 }

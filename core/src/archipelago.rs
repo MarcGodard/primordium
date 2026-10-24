@@ -1,6 +1,6 @@
-//! Scale 5b: several small reefs (islands) under one sky, each with its own shore, linked only
-//! by spores that drift off one island's deep edge and wash up on another. Isolation plus
-//! different shores pull one founder's descendants apart: the start of species.
+//! Scale 6: islands of different sizes under one sky, each with its own shore, linked only by
+//! spores that drift off one island's deep edge and wash up on another. Near islands trade
+//! spores often, far ones rarely (a long crossing is a long time adrift): island biogeography.
 //!
 //! Matter stays closed across the whole archipelago: a crossing spore takes its atoms with it.
 use crate::cosmos::CosmosParams;
@@ -9,7 +9,8 @@ use crate::reef::{Organism, Reef, ReefParams, ReefSeed};
 use crate::rng::Rng;
 use crate::surrogate::RateTable;
 
-/// One island's shore: multipliers on the base reef's rates, and its slope.
+/// One island: its shore (multipliers on the base reef's rates, slope), its size in tiles and
+/// where it lies (km on the archipelago's map).
 #[derive(Clone, Debug)]
 pub struct Island {
     pub name: &'static str,
@@ -18,33 +19,43 @@ pub struct Island {
     pub food: f64,
     /// Elevation of its deepest and highest rows (tide units).
     pub elev: (f64, f64),
+    pub width: usize,
+    pub depth: usize,
+    pub at: (f64, f64),
 }
 
-/// Calm deep lagoon, surf-beaten point, sunlit shallow flats.
+/// Seven islands, big to tiny, near to far. Kept creatures land on the first.
 pub fn default_islands() -> Vec<Island> {
     vec![
-        Island { name: "Lagoon", waves: 0.25, uv: 0.5, food: 1.0, elev: (0.0, 0.8) },
-        Island { name: "Surf Point", waves: 4.0, uv: 1.0, food: 1.5, elev: (0.05, 0.95) },
-        Island { name: "Sun Flats", waves: 1.0, uv: 4.0, food: 1.0, elev: (0.2, 1.0) },
+        Island { name: "Lagoon", waves: 0.25, uv: 0.5, food: 1.0, elev: (0.0, 0.8), width: 16, depth: 14, at: (0.0, 0.0) },
+        Island { name: "Surf Point", waves: 4.0, uv: 1.0, food: 1.5, elev: (0.05, 0.95), width: 12, depth: 10, at: (12.0, -4.0) },
+        Island { name: "Sun Flats", waves: 1.0, uv: 4.0, food: 1.0, elev: (0.2, 1.0), width: 12, depth: 10, at: (-10.0, 6.0) },
+        Island { name: "Twin Isles", waves: 1.0, uv: 1.0, food: 1.0, elev: (0.05, 0.95), width: 10, depth: 10, at: (6.0, 16.0) },
+        Island { name: "Deepwater", waves: 0.5, uv: 0.25, food: 0.6, elev: (0.0, 0.6), width: 10, depth: 8, at: (22.0, 9.0) },
+        Island { name: "Far Shoal", waves: 2.0, uv: 2.0, food: 1.2, elev: (0.15, 1.0), width: 10, depth: 8, at: (-24.0, -10.0) },
+        Island { name: "Lone Stack", waves: 3.0, uv: 1.5, food: 0.8, elev: (0.05, 0.95), width: 6, depth: 6, at: (34.0, -14.0) },
     ]
 }
 
 #[derive(Clone, Debug)]
 pub struct ArchParams {
-    /// Island size in tiles (each smaller than the full reef).
-    pub width: usize,
-    pub depth: usize,
     /// Chance per day that a drifter over an island's deep edge is carried out to sea.
     pub crossing: f64,
-    /// Days at sea before an arrival can settle.
+    /// Days adrift per km crossed: a far island is a long time at sea (adrift bodies die at the
+    /// reef's `drift_death` rate), so fewer arrive.
+    pub days_per_km: f64,
+    /// Days adrift at the least, however near.
     pub travel_days: f64,
 }
 
 impl Default for ArchParams {
     fn default() -> Self {
-        Self { width: 16, depth: 14, crossing: 0.01, travel_days: 2.0 }
+        Self { crossing: 0.01, days_per_km: 0.15, travel_days: 1.0 }
     }
 }
+
+/// An island counts as alive while it holds this many settled cells.
+pub const ALIVE_CELLS: usize = 40;
 
 /// Net genome divergence that counts as two kinds, and the days it must hold. Calibrated with
 /// `primordium archipelago` over 6 seeds: the split is mostly a founder effect when an island is
@@ -89,10 +100,10 @@ impl Archipelago {
             .enumerate()
             .map(|(k, s)| {
                 // the ocean reservoir scales with the island so food per tile matches the reef
-                let area = (ap.width * ap.depth) as f64 / (d.width * d.depth) as f64;
+                let area = (s.width * s.depth) as f64 / (d.width * d.depth) as f64;
                 let rp = ReefParams {
-                    width: ap.width,
-                    depth: ap.depth,
+                    width: s.width,
+                    depth: s.depth,
                     founders: 0,
                     elev_lo: s.elev.0,
                     elev_hi: s.elev.1,
@@ -129,9 +140,24 @@ impl Archipelago {
             }
         }
         for (from, o) in sea {
-            let to = (from + 1 + self.rng.below(n - 1)) % n;
+            // nearer islands catch more: destination weighted by 1/distance
+            let dist = |a: usize, b: usize| {
+                let (p, q) = (self.specs[a].at, self.specs[b].at);
+                ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2)).sqrt().max(1.0)
+            };
+            let w: Vec<f64> = (0..n).map(|j| if j == from { 0.0 } else { 1.0 / dist(from, j) }).collect();
+            let mut pick = self.rng.f64() * w.iter().sum::<f64>();
+            let mut to = (from + 1) % n;
+            for (j, wj) in w.iter().enumerate() {
+                if pick < *wj {
+                    to = j;
+                    break;
+                }
+                pick -= wj;
+            }
             self.crossings[from][to] += 1;
-            self.islands[to].immigrate(o, self.ap.travel_days);
+            let days = self.ap.travel_days + self.ap.days_per_km * dist(from, to);
+            self.islands[to].immigrate(o, days);
         }
         self.watch_split();
     }
@@ -190,6 +216,11 @@ impl Archipelago {
             ka += b;
         }
         (m, ka)
+    }
+
+    /// Islands holding at least ALIVE_CELLS settled cells now.
+    pub fn alive(&self) -> Vec<bool> {
+        self.islands.iter().map(|r| r.organisms.iter().filter(|o| o.settled()).map(|o| o.cells.len()).sum::<usize>() >= ALIVE_CELLS).collect()
     }
 
     /// Cells of lineage `clade` on each island.
@@ -267,8 +298,9 @@ mod tests {
         let dir = format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), crate::element::data_dir());
         let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(format!("{dir}rates0.json")).unwrap()).unwrap();
         let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(format!("{dir}reef_seed.json")).unwrap()).unwrap();
-        let ap = ArchParams { width: 6, depth: 6, crossing: 2.0, travel_days: 0.5 };
-        let mut a = Archipelago::new(ap, default_islands(), ReefParams::default(), CosmosParams::default(), rates, &rs, 3);
+        let ap = ArchParams { crossing: 2.0, travel_days: 0.5, ..Default::default() };
+        let specs: Vec<Island> = default_islands().into_iter().take(3).map(|s| Island { width: 6, depth: 6, ..s }).collect();
+        let mut a = Archipelago::new(ap, specs, ReefParams::default(), CosmosParams::default(), rates, &rs, 3);
         let m0 = a.matter();
         let f = &rs.founders[0];
         let genome: Vec<u8> = f.genome.iter().map(|&l| a.islands[0].canon_letter(l)).collect();

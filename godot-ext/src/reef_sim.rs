@@ -323,8 +323,9 @@ impl ReefSim {
     }
 
     /// Archipelago state (empty on a single reef or while busy): `islands` as [{name, waves, uv,
-    /// food, cells, lineages: [lineage, cells] pairs}], `crossings` flattened n x n [from][to],
-    /// and the lineage grown furthest apart: `split_lineage`, `split_a`, `split_b`, `divergence`
+    /// food, cells, width, depth (tiles), x, y (km on the map), lineages: [lineage, cells]
+    /// pairs}], `alive` per island (1: at least `alive_cells` settled cells), `crossings`
+    /// flattened n x n [from][to], and the lineage grown furthest apart: `split_lineage`, `split_a`, `split_b`, `divergence`
     /// (net share of genome letters differing between the two islands; -1 lineage before any),
     /// `held` days it has stayed past `goal`, which must reach `hold`.
     #[func]
@@ -339,6 +340,10 @@ impl ReefSim {
             e.set("uv", spec.uv);
             e.set("food", spec.food);
             e.set("cells", r.cells() as i64);
+            e.set("width", spec.width as i64);
+            e.set("depth", spec.depth as i64);
+            e.set("x", spec.at.0);
+            e.set("y", spec.at.1);
             let mut lin = PackedInt64Array::new();
             for (c, n) in r.clades() {
                 lin.push(c as i64);
@@ -348,6 +353,9 @@ impl ReefSim {
             isl.push(&e.to_variant());
         }
         d.set("islands", &isl);
+        let alive = a.alive();
+        d.set("alive", &alive.iter().map(|&x| x as i64).collect::<PackedInt64Array>());
+        d.set("alive_cells", primordium_core::archipelago::ALIVE_CELLS as i64);
         let cross: PackedInt64Array = a.crossings.iter().flatten().map(|&v| v as i64).collect();
         d.set("crossings", &cross);
         // checked once a sim day inside the archipelago, fast-forward included
