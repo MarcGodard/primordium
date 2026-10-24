@@ -64,7 +64,9 @@ func save_path() -> String:
 ## Save the choice and restart on it.
 func switch(k: String) -> void:
 	_save(k)
-	var args := Array(OS.get_cmdline_args())
+	# get_cmdline_args drops --path: without it the restart opens no project
+	var args := ["--path", ProjectSettings.globalize_path("res://")]
+	args.append_array(OS.get_cmdline_args())
 	var user := Array(OS.get_cmdline_user_args()).filter(func(a: String) -> bool: return not a.begins_with("--table="))
 	if not user.is_empty():
 		args.append("--")

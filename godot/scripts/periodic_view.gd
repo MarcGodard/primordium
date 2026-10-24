@@ -229,7 +229,7 @@ func load_universe(shells: Array) -> void:
 	var t: Array = Tables.for_shells(Array(s))
 	if not summary.this_world:
 		var cur: Array = Tables.current()
-		txt += "  (Preview: you are playing %s, %s.)" % [cur[2], ", ".join(PackedStringArray(cur[1].map(str)))]
+		txt += "  (Preview: you are playing %s, %s.%s)" % [cur[2], ", ".join(PackedStringArray(cur[1].map(str))), " Its recipe opens once you play it." if not Tables.for_shells(Array(s)).is_empty() else ""]
 	if Tables.missing != "":
 		txt += "  " + Tables.missing
 	title.text = txt
