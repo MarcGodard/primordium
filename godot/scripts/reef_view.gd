@@ -1092,8 +1092,27 @@ func _update_rings() -> void:
 	creatures = sim.creatures()
 	rings_mm.instance_count = creatures.size()
 	for i in creatures.size():
-		var c: Vector3 = sim.organism_center(creatures[i])
-		rings_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 9.0), c + Vector3(0, 4.0, 0)))
+		# flat on the rock around the body's footprint: a circle from above, a ring at its
+		# feet from the side (a camera-facing ring floated like a halo from low angles)
+		var pts: PackedVector3Array = sim.body_points(creatures[i])
+		if pts.is_empty():
+			rings_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ZERO), Vector3.ZERO))
+			continue
+		var c := Vector3.ZERO
+		var low := INF
+		for p in pts:
+			c += p
+			low = min(low, p.y)
+		c /= pts.size()
+		var reach := 0.0
+		for p in pts:
+			reach = max(reach, Vector2(p.x - c.x, p.z - c.z).length())
+		# ring at 0.87-0.98 of the quad's half size: the quad spans the footprint plus a margin
+		var size: float = (reach + 2.5) * 2.0 / 0.9
+		# flat at its feet; drawn over the rock (ring.gdshader), which is too bumpy to lay it on
+		var b := Basis(Vector3.RIGHT, -PI / 2.0).scaled(Vector3(size, size, size))
+		var base_y := low - 0.35
+		rings_mm.set_instance_transform(i, Transform3D(b, Vector3(c.x, base_y, c.z)))
 
 ## Step until a creature exists (at most `max_steps`), then fly to it. Captures only.
 func hunt(max_steps: int) -> void:
@@ -1306,7 +1325,9 @@ func goal_progress() -> Dictionary:
 			"now": "best: %s, creatures on %d of the last %d days" % [lead, g.best_days, int(g.window_days)], "who": who + " in your world"}
 	var body: float = 0.5 * min(1.0, float(near_c) / g.min_cells) + 0.5 * min(1.0, float(near_j) / g.min_jobs)
 	var now := "best crawler %d cells, %d jobs" % [near_c, near_j]
-	if g.qualifying > 0:
+	if not organism.is_empty() and organism.get("creature", false):
+		now = "[color=#ffd166][b]Press K to keep this creature[/b][/color]" + ("  (paused: space plays on)" if speed_idx == 0 else "")
+	elif g.qualifying > 0:
 		now = "%d creature(s) on the reef now: G to find one, K to keep it" % g.qualifying
 	return {"p": 0.9 * body, "done": false, "args": [g.min_cells, g.min_jobs], "now": now}
 
