@@ -64,7 +64,7 @@ fn cell_golden() {
     for _ in 0..80 {
         w.step(0.02);
     }
-    check("cell", fp(&format!("{:?}", w.cells)), 0x3dca4bd08202fd2d);
+    check("cell", fp(&format!("{:?}", w.cells)), 0x64c129c1e9766f14);
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn coast_golden() {
         c.step(0.02);
     }
     let cells: Vec<String> = c.sites.iter().map(|s| format!("{:?}", s.world.cells)).collect();
-    check("coast", fp(&cells.join("|")), 0xdccc6fba11c33bba);
+    check("coast", fp(&cells.join("|")), 0x667d2cd46c26274d);
 }
 
 #[test]

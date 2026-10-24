@@ -8,7 +8,7 @@ const SPEEDS := [0, 1, 2, 4, 8]
 const DT := 0.02
 const EXPLAIN := """[b]Scale 3: cells[/b]
 
-[b]What you see.[/b] Cells on the beach, sea on the left. Each cell has a [b]genome[/b] (one long chain) and makes products from it. Tint shows what a cell's genes do: [color=#40ccd9]teal copying enzymes (polymerase)[/color], [color=#59cc4d]green metabolism[/color], [color=#f2e0b8]cream membrane builders[/color], [color=#f2a633]amber pigment[/color].
+[b]What you see.[/b] Cells on the beach, sea on the left. The strip is a loop: its top and bottom edges are the same place. Clumps are families: a daughter starts right beside its mother, and only cells in the water drift away. Each cell has a [b]genome[/b] (one long chain) and makes products from it. Tint shows what a cell's genes do: [color=#40ccd9]teal copying enzymes (polymerase)[/color], [color=#59cc4d]green metabolism[/color], [color=#f2e0b8]cream membrane builders[/color], [color=#f2a633]amber pigment[/color].
 
 [b]A genetic code, forced by chemistry.[/b] When a chain is copied twice, only two letters (Li and Fl) come back as themselves; the others get rewritten. So genes here are written in [b]binary[/b], and cells read them three letters at a time (a codon) to build products from all five letters, the way our cells read DNA to build proteins.
 

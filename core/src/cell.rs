@@ -138,6 +138,8 @@ pub struct CellParams {
     pub max_cells: usize,
     /// Chance per day a cell drifts to a neighbouring patch (wet only).
     pub drift: f64,
+    /// Furthest a drifting cell moves along the shore per drift (y is 0..1, wraps).
+    pub drift_along: f64,
     pub genome_max: usize,
     /// Adhesion below `stick_floor` never holds a daughter; at floor + span it always does.
     pub stick_floor: f64,
@@ -188,6 +190,7 @@ impl Default for CellParams {
             divide_area: 80,
             max_cells: 500,
             drift: 0.3,
+            drift_along: 0.15,
             genome_max: 160,
             stick_floor: 0.2,
             stick_span: 0.2,
@@ -929,6 +932,9 @@ impl World {
             if site.wet && c.colony.is_none() && rng.chance((self.cp.drift * dt).min(1.0)) {
                 let np = if rng.chance(0.5) { c.patch.saturating_sub(1) } else { (c.patch + 1).min(self.cp.patches - 1) };
                 c.patch = np;
+                // the same water carries it along the shore too: without this, clones spread only
+                // across patches at their birth y and the shore fills in stripes
+                c.y = (c.y + (rng.f64() - 0.5) * 2.0 * self.cp.drift_along).rem_euclid(1.0);
             }
         }
         // divide (indices stable: we only append)
