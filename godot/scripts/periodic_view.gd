@@ -161,8 +161,16 @@ func _build_recipe() -> void:
 	var names: PackedStringArray = ElementsSim.element_names()
 	for z in range(1, names.size()):
 		defs.append([str(z), names[z], "How common %s is in your world's cloud, against the default mix." % names[z]])
+	# what the multipliers come to: each element's share of the atoms, and what life's letters
+	# get against the usual mix (the total is renormalised, so x0.1 everywhere is not a tenth)
+	recipe_panel.fmt = func(key: String, name: String, m: float) -> String:
+		var comp: PackedFloat64Array = ElementsSim.recipe_composition()
+		var i := int(key) - 1
+		var pct: float = comp[i] * 100.0 if i < comp.size() else 0.0
+		return "%s x%s %s%%" % [name, ("%.2f" % m).trim_suffix("0").trim_suffix("0").trim_suffix("."), ("%.0f" % pct) if pct >= 1.0 else ("%.1f" % pct)]
+	recipe_panel.read_line = _recipe_line
 	recipe_panel.setup("Your recipe: how common each element is", defs, _apply_recipe, _read_recipe,
-		"Total atoms stay fixed: more of one means less of the rest. Every scale above builds its world from this mix; worlds already built rebuild when you next visit them.")
+		"Total fixed: more of one is less of the rest. Worlds above rebuild from this mix.")
 	var reset := Button.new()
 	reset.text = "Default mix"
 	reset.focus_mode = Control.FOCUS_NONE
@@ -175,6 +183,26 @@ func _build_recipe() -> void:
 	recipe_panel.get_child(0).add_child(reset)
 	recipe_panel.position = Vector2(12, 440)
 	layer.add_child(recipe_panel)
+
+## One line on what the recipe does to life's material: letters and backbone against the
+## usual sea, and how much of the cloud is inert noble gas.
+func _recipe_line() -> String:
+	var sea: PackedFloat64Array = ElementsSim.recipe_sea()
+	if sea.is_empty():
+		return ""
+	var comp: PackedFloat64Array = ElementsSim.recipe_composition()
+	var els: Array = sim.elements() if sim else []
+	var inert := 0.0
+	for i in min(comp.size(), els.size()):
+		if els[i].valence == 0:
+			inert += comp[i]
+	var lo := 1e9
+	var hi := 0.0
+	for k in sea.size() - 1:
+		lo = min(lo, sea[k])
+		hi = max(hi, sea[k])
+	var letters := ("%.0f%%" % (lo * 100.0)) if hi - lo < 0.02 else ("%.0f-%.0f%%" % [lo * 100.0, hi * 100.0])
+	return "Life's material: letters at %s of the usual sea, backbone at %.0f%%. Inert noble gas: %.0f%% of atoms." % [letters, sea[sea.size() - 1] * 100.0, inert * 100.0]
 
 func _read_recipe() -> Dictionary:
 	var m: PackedFloat64Array = ElementsSim.recipe()

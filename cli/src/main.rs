@@ -223,7 +223,9 @@ fn pool(args: &[String]) {
     let dt: f64 = arg(args, "dt", 0.01);
     let every: f64 = arg(args, "every", 2.0);
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
-    let mut p = Pool::new(PoolParams::default(), Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
+    let mut pp = PoolParams::default();
+    recipe_arg(args).apply_pool(&mut pp);
+    let mut p = Pool::new(pp, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
     let start = Instant::now();
     let steps = (days / dt) as u64;
     let per = (every / dt) as u64;
@@ -380,7 +382,7 @@ fn pond(args: &[String]) {
     let auto: bool = arg(args, "auto", false);
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
     let mut p =
-        Pond::new(PoolParams::default(), PondParams { auto, ..Default::default() }, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
+        Pond::new(PoolParams::default(), { let mut pp = PondParams { auto, ..Default::default() }; recipe_arg(args).apply_pond(&mut pp); pp }, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
     let start = Instant::now();
     let steps = (days / dt) as u64;
     let per = (every / dt) as u64;
@@ -621,9 +623,11 @@ fn cells(args: &[String]) {
     let auto: bool = arg(args, "auto", true);
     let founders: usize = arg(args, "founders", 200);
     let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).unwrap()).unwrap();
+    let mut cp = CellParams { auto, ..Default::default() };
+    recipe_arg(args).apply_cell(&mut cp);
     let mut w = World::new(
         PoolParams::default(),
-        CellParams { auto, ..Default::default() },
+        cp,
         Cosmos::new(CosmosParams { seed, ..Default::default() }),
         rates,
         seed,

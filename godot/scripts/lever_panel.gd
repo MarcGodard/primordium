@@ -6,6 +6,11 @@ extends PanelContainer
 var levers: Array = []
 ## Slider reach in doublings each way (2: x1/4 .. x4). Set before `setup`.
 var span := 2.0
+## Optional label text per lever, fmt.call(key, name, mult) -> String; default "name  xM".
+var fmt: Callable
+## Optional line under the levers, refreshed with them (read_line.call() -> String).
+var read_line: Callable
+var line_label: Label
 ## Levers side by side (2 for a long list, e.g. a 20-element recipe). Set before `setup`.
 var columns := 1
 var apply: Callable
@@ -60,6 +65,13 @@ func setup(title: String, defs: Array, apply_fn: Callable, read_fn: Callable, no
 		grid.add_child(sl)
 		sliders[key] = sl
 		labels[key] = l
+	if read_line.is_valid():
+		line_label = Label.new()
+		line_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line_label.custom_minimum_size = Vector2(300, 0)
+		line_label.add_theme_font_size_override("font_size", 12)
+		line_label.add_theme_color_override("font_color", Color(1.0, 0.82, 0.5))
+		box.add_child(line_label)
 	var n := Label.new()
 	n.text = note
 	n.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -77,8 +89,13 @@ func refresh() -> void:
 		return
 	for x in levers:
 		var m: float = lv.get(x[0], 1.0)
-		labels[x[0]].text = "%s  x%s" % [x[1], ("%.2f" % m).trim_suffix("0").trim_suffix("0").trim_suffix(".")]
+		if fmt.is_valid():
+			labels[x[0]].text = fmt.call(x[0], x[1], m)
+		else:
+			labels[x[0]].text = "%s  x%s" % [x[1], ("%.2f" % m).trim_suffix("0").trim_suffix("0").trim_suffix(".")]
 		sliders[x[0]].set_value_no_signal(log(m) / log(2.0))
+	if line_label and read_line.is_valid():
+		line_label.text = read_line.call()
 
 func lock(on: bool) -> void:
 	for sl in sliders.values():
