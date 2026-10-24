@@ -51,6 +51,11 @@ var rings_mm: MultiMesh
 ## Smooth skins (BodySkin) over the selected body and the creatures, id -> MeshInstance3D.
 var skins := {}
 var skin_mat: StandardMaterial3D
+## Creatures' skins: their own colours with a gold glow along the silhouette.
+var creature_mat: ShaderMaterial
+## Where each creature's marker floats (above its top), set on the half-second tick; scaled
+## every frame to one size on screen.
+var marker_at := PackedVector3Array()
 ## S: skins on every body of SKIN_MIN+ cells, not only the selected one and the creatures.
 var skin_all := false
 const SKIN_MIN := 4
@@ -987,6 +992,7 @@ func _process(delta: float) -> void:
 	if auto_orbit and not orbiting and not panning:
 		yaw += delta * 0.03
 	_update_camera()
+	_place_markers()
 	timer -= delta
 	if timer <= 0.0:
 		timer = 0.5
@@ -1093,38 +1099,40 @@ func _build_skin(id: int) -> void:
 	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	if not skins.has(id):
 		var mi := MeshInstance3D.new()
-		mi.material_override = skin_mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		skins[id] = mi
+	if creature_mat == null:
+		creature_mat = ShaderMaterial.new()
+		creature_mat.shader = load("res://shaders/creature_skin.gdshader")
+	skins[id].material_override = creature_mat if creatures.has(id) else skin_mat
 	skins[id].mesh = am
 
-## Gold rings over bodies that meet the creature goal right now.
+## Gold markers over bodies that meet the creature goal right now (their skins glow too).
 func _update_rings() -> void:
 	creatures = sim.creatures()
-	rings_mm.instance_count = creatures.size()
-	for i in creatures.size():
-		# flat on the rock around the body's footprint: a circle from above, a ring at its
-		# feet from the side (a camera-facing ring floated like a halo from low angles)
-		var pts: PackedVector3Array = sim.body_points(creatures[i])
+	marker_at = PackedVector3Array()
+	for id in creatures:
+		var pts: PackedVector3Array = sim.body_points(id)
 		if pts.is_empty():
-			rings_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ZERO), Vector3.ZERO))
 			continue
 		var c := Vector3.ZERO
-		var low := INF
+		var top := -INF
 		for p in pts:
 			c += p
-			low = min(low, p.y)
+			top = max(top, p.y)
 		c /= pts.size()
-		var reach := 0.0
-		for p in pts:
-			reach = max(reach, Vector2(p.x - c.x, p.z - c.z).length())
-		# ring at 0.87-0.98 of the quad's half size: the quad spans the footprint plus a margin
-		var size: float = (reach + 2.5) * 2.0 / 0.9
-		# flat at its feet; drawn over the rock (ring.gdshader), which is too bumpy to lay it on
-		var b := Basis(Vector3.RIGHT, -PI / 2.0).scaled(Vector3(size, size, size))
-		var base_y := low - 0.35
-		rings_mm.set_instance_transform(i, Transform3D(b, Vector3(c.x, base_y, c.z)))
+		marker_at.append(Vector3(c.x, top + 2.5, c.z))
+	rings_mm.instance_count = marker_at.size()
+	_place_markers()
+
+## One size on screen at any distance: scale with the camera's distance to each marker.
+func _place_markers() -> void:
+	if cam == null:
+		return
+	for i in marker_at.size():
+		var s: float = clamp(cam.global_position.distance_to(marker_at[i]) * 0.06, 1.5, 60.0)
+		rings_mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(s, s, s)), marker_at[i] + Vector3(0, s * 0.5, 0)))
 
 ## Step until a creature exists (at most `max_steps`), then fly to it. Captures only.
 func hunt(max_steps: int) -> void:

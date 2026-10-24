@@ -529,6 +529,9 @@ func _build_card(parent: CanvasLayer) -> void:
 	card_body.scroll_active = false
 	card_body.add_theme_font_size_override("normal_font_size", 16)
 	card_body.add_theme_font_size_override("bold_font_size", 17)
+	# a fixed width: measured before layout, the text wrapped at a character per line and the
+	# card grew taller than the screen with its text off the top
+	card_body.custom_minimum_size = Vector2(700, 0)
 	box.add_child(card_body)
 	card_hint = Label.new()
 	card_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -551,7 +554,7 @@ func show_card(title: String, body: String, hint: String, next: int) -> void:
 	card.visible = true
 	# fit the height to the text once it has laid out
 	await get_tree().process_frame
-	var h: float = card.get_combined_minimum_size().y
+	var h: float = min(card.get_combined_minimum_size().y, get_viewport().get_visible_rect().size.y - 40.0)
 	card.offset_top = -h * 0.5
 	card.offset_bottom = h * 0.5
 
