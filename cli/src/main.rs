@@ -1422,6 +1422,26 @@ fn garden(args: &[String]) {
             let big3 = g.organisms.iter().filter(|o| o.settled() && o.cells.len() >= goal.min_cells && jobs(o, goal.split) >= goal.min_jobs).count();
             println!("t={:5.0} cells {:5} lineages {:?} | 20+ cells & 3 jobs {big3} (crawling {ok}) | best window {:?} won {:?} ledger {}", g.t_days, g.cells(), g.clades(), tr.best(), tr.won, if g.matter() == m0 { "exact" } else { "DRIFT" });
             println!("        days qualifying in window (3 jobs, 2 jobs) by lineage: {:?}", qd);
+            // adaptation readout: what the settled population looks like now
+            let st: Vec<&primordium_core::reef::Organism> = g.organisms.iter().filter(|o| o.settled()).collect();
+            let n = st.iter().map(|o| o.cells.len()).sum::<usize>().max(1) as f32;
+            let mut ex = [0f32; 5];
+            for o in &st {
+                for c in &o.cells {
+                    for k in 0..5 {
+                        ex[k] += c.expr[k] / n;
+                    }
+                }
+            }
+            let nb = st.len().max(1) as f32;
+            println!(
+                "        traits poly {:.3} meta {:.3} memb {:.3} pigm {:.3} glue {:.3} | mean height {:.2} cells/body {:.1} crawling {:.0}% genome {:.0}",
+                ex[0], ex[1], ex[2], ex[3], ex[4],
+                st.iter().map(|o| o.height() as f32).sum::<f32>() / nb,
+                n / nb,
+                100.0 * st.iter().filter(|o| o.speed > 0.0).count() as f32 / nb,
+                st.iter().map(|o| o.genome.len() as f32).sum::<f32>() / nb
+            );
             qd.clear();
         }
     }

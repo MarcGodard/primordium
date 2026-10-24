@@ -118,6 +118,9 @@ func _ready() -> void:
 					if kv2.size() == 2:
 						view._set_lever(kv2[0], float(kv2[1]))
 					view._show_levers()
+			"traits":
+				if "chart_traits" in view:
+					view.chart_traits = kv[1] == "1"
 			"skins":
 				if "skin_all" in view:
 					view.skin_all = kv[1] == "1"

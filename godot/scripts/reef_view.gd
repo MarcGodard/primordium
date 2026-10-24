@@ -128,6 +128,10 @@ const LEVERS := [
 	["uv", "UV", "How deadly unshaded sunlight is. Pigment protects."],
 ]
 var lever_panel: PanelContainer
+## Chart page: false population, true mean traits. Click the chart to switch.
+var chart_traits := false
+## Lever changes this session as [day, text, key], drawn as markers on the chart.
+var lever_marks := []
 var wave_mult := 1.0
 ## Unnamed lineages a garden save keeps (biggest first); named ones are always kept.
 const GARDEN_KEEP := 32
@@ -297,7 +301,14 @@ func _build_overlay() -> void:
 	chart.offset_right = 330
 	chart.offset_top = -132
 	chart.offset_bottom = -12
-	chart.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# PASS: only the accepted left click is eaten; wheel and drags still reach the camera
+	chart.mouse_filter = Control.MOUSE_FILTER_PASS
+	chart.tooltip_text = "Click: population / traits"
+	chart.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			chart_traits = not chart_traits
+			chart.queue_redraw()
+			chart.accept_event())
 	chart.draw.connect(_draw_chart)
 	layer.add_child(chart)
 
@@ -317,11 +328,29 @@ func _build_levers() -> void:
 func _apply_lever(key: String, mult: float) -> bool:
 	if not ok or sim.busy():
 		return false
+	var was: float = sim.levers().get(key, 1.0)
 	sim.set_lever(key, mult)
+	var now: float = sim.levers().get(key, 1.0)
+	if abs(now - was) > 0.001:
+		_mark_lever(key, now)
 	if campaign:
 		campaign.state["levers"] = sim.levers()
 	wave_mult = sim.levers().get("waves", 1.0)
 	return true
+
+## One marker per lever per day: a slider dragged through several stops keeps only where it ended.
+func _mark_lever(key: String, mult: float) -> void:
+	var day := sim.t_days()
+	var name: String = key
+	for lv in LEVERS:
+		if lv[0] == key:
+			name = lv[1].to_lower()
+	var text := "%s x%s" % [name, ("%.2f" % mult).trim_suffix("0").trim_suffix("0").trim_suffix(".")]
+	if not lever_marks.is_empty() and lever_marks[-1][2] == key and day - lever_marks[-1][0] < 1.0:
+		lever_marks[-1] = [day, text, key]
+	else:
+		lever_marks.append([day, text, key])
+	chart.queue_redraw()
 
 ## Set one lever and show it (capture flag --levers=key:mult).
 func _set_lever(key: String, mult: float) -> void:
@@ -586,6 +615,7 @@ func _restart(run_seed: int) -> void:
 	selected = -1
 	organism = {}
 	history = PackedFloat32Array()
+	lever_marks.clear()
 	if ok:
 		sim.step(1, DT)
 
@@ -998,20 +1028,85 @@ func _draw_chart() -> void:
 	var font := ThemeDB.fallback_font
 	var sz := chart.size
 	chart.draw_rect(Rect2(Vector2.ZERO, sz), Color(0.03, 0.05, 0.08, 0.82))
-	chart.draw_string(font, Vector2(8, 14), "Reef over time: cells (white), mean body size (gold), tallest body (cyan), lineages alive (violet)", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.75))
+	var title := "Reef over time: cells (white), mean body size (gold), tallest body (cyan), lineages alive (violet)"
+	if chart_traits:
+		title = "What its cells do, on average: polymerase, metabolism, membrane, pigment, glue"
+	chart.draw_string(font, Vector2(8, 14), title, HORIZONTAL_ALIGNMENT_LEFT, sz.x - 108, 11, Color(1, 1, 1, 0.75))
+	chart.draw_string(font, Vector2(sz.x - 98, 14), "click: " + ("population" if chart_traits else "traits"), HORIZONTAL_ALIGNMENT_RIGHT, 90, 10, Color(0.6, 0.75, 0.85))
 	var rows := history.size() / 11
 	if rows < 2:
 		return
-	var area := Rect2(8, 22, sz.x - 16, sz.y - 30)
+	# traits leave room on the right for their current values
+	var area := Rect2(8, 22, sz.x - (60 if chart_traits else 16), sz.y - 30)
+	var t0: float = history[0]
+	var t1: float = history[(rows - 1) * 11]
+	for m in lever_marks:
+		if t1 > t0 and m[0] >= t0 and m[0] <= t1:
+			var x: float = area.position.x + area.size.x * (m[0] - t0) / (t1 - t0)
+			chart.draw_dashed_line(Vector2(x, area.position.y), Vector2(x, area.end.y), Color(1, 1, 1, 0.45), 1.0, 3.0)
+			chart.draw_string(font, Vector2(x + 3, area.end.y - 2), m[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1, 1, 1, 0.7))
 	var series := [[1, Color(1, 1, 1, 0.85)], [3, Color(1.0, 0.75, 0.2, 0.9)], [4, Color(0.4, 0.9, 1.0, 0.9)], [10, Color(0.8, 0.5, 1.0, 0.9)]]
+	# traits share one range (empty days skipped), so their sizes compare; zoomed to it, since
+	# selection moves the means by hundredths
+	var lo := 0.0
+	var top_t := 0.0
+	var labels := []
+	if chart_traits:
+		var tc := [ROLE_COLORS[0], ROLE_COLORS[1], ROLE_COLORS[2], ROLE_COLORS[3], ROLE_COLORS[5]]
+		series = []
+		lo = INF
+		top_t = -INF
+		for k in 5:
+			series.append([5 + k, tc[k]])
+			for i in rows:
+				if history[i * 11 + 1] > 0.0:
+					lo = min(lo, history[i * 11 + 5 + k])
+					top_t = max(top_t, history[i * 11 + 5 + k])
+		if lo > top_t:
+			return
+		var pad: float = max((top_t - lo) * 0.08, 0.005)
+		lo -= pad
+		top_t += pad
+		chart.draw_string(font, Vector2(area.end.x + 6, area.position.y + 8), "%.2f" % top_t, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(1, 1, 1, 0.45))
+		chart.draw_string(font, Vector2(area.end.x + 6, area.end.y), "%.2f" % lo, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(1, 1, 1, 0.45))
 	for s in series:
 		var k: int = s[0]
 		var top := 1.0
-		for i in rows:
-			top = max(top, history[i * 11 + k])
+		if not chart_traits:
+			for i in rows:
+				top = max(top, history[i * 11 + k])
 		var pts := PackedVector2Array()
 		for i in rows:
-			var x: float = area.position.x + area.size.x * i / (rows - 1)
-			var y: float = area.position.y + area.size.y * (1.0 - history[i * 11 + k] / top)
+			if chart_traits and history[i * 11 + 1] <= 0.0:
+				continue
+			var x: float = area.position.x + area.size.x * ((history[i * 11] - t0) / (t1 - t0) if t1 > t0 else float(i) / (rows - 1))
+			var v: float = history[i * 11 + k]
+			if chart_traits:
+				# 5-day mean: light-switched genes make single days jump
+				var sum := 0.0
+				var cnt := 0
+				for j in range(max(0, i - 4), i + 1):
+					if history[j * 11 + 1] > 0.0:
+						sum += history[j * 11 + k]
+						cnt += 1
+				v = sum / cnt
+			var y: float = area.position.y + area.size.y * (1.0 - ((v - lo) / (top_t - lo) if chart_traits else v / top))
 			pts.append(Vector2(x, y))
-		chart.draw_polyline(pts, s[1], 1.5, true)
+		if pts.size() > 1:
+			chart.draw_polyline(pts, s[1], 1.5, true)
+		if chart_traits and not pts.is_empty():
+			var last := rows - 1
+			while last > 0 and history[last * 11 + 1] <= 0.0:
+				last -= 1
+			labels.append([pts[-1].y, history[last * 11 + k], s[1]])
+	# current values at the right end, pushed apart so they never overlap
+	labels.sort_custom(func(a, b): return a[0] < b[0])
+	var ys := []
+	var last_y := -INF
+	for l in labels:
+		last_y = max(l[0] + 4, last_y + 10)
+		ys.append(last_y)
+	# pushed past the bottom: slide the whole stack back up
+	var over: float = ys.back() - area.end.y if not ys.is_empty() else 0.0
+	for i in labels.size():
+		chart.draw_string(font, Vector2(area.end.x + 6, ys[i] - max(over, 0.0)), "%.3f" % labels[i][1], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, labels[i][2])
