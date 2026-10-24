@@ -816,8 +816,20 @@ func save_garden() -> void:
 	campaign.save()
 
 ## Keep the selected body: its genome goes to the player's world.
-func keep_selected() -> void:
+func keep_selected(any := false) -> void:
 	if campaign == null or organism.is_empty() or sim.busy():
+		return
+	# before the reef goal is met, K is for creatures: keeping a small body by mistake looked
+	# like progress and was not (Shift+K keeps any body)
+	if not any and not garden and not campaign.is_done(6) and not organism.get("creature", false):
+		var why := []
+		if int(organism.cells) < 20:
+			why.append("%d cells (needs 20+)" % organism.cells)
+		if int(organism.jobs) < 3:
+			why.append("%d job%s (needs 3)" % [organism.jobs, "" if int(organism.jobs) == 1 else "s"])
+		if float(organism.get("speed", 0.0)) <= 0.0:
+			why.append("not crawling")
+		campaign.toast.emit("Not a creature yet", "This body has " + ", ".join(PackedStringArray(why)) + ". Shift+G finds a creature (gold ring); Shift+K keeps this one anyway.", Color(1.0, 0.55, 0.45))
 		return
 	var org := organism.duplicate()
 	if garden and genera.has(int(organism.lineage)):
@@ -1253,7 +1265,7 @@ func _unhandled_input(e: InputEvent) -> void:
 				pick_longest()
 			KEY_K:
 				if not e.echo:
-					keep_selected()
+					keep_selected(e.shift_pressed)
 			KEY_N:
 				if not e.echo:
 					if e.shift_pressed:
@@ -1325,7 +1337,7 @@ func goal_progress() -> Dictionary:
 			"now": "best: %s, creatures on %d of the last %d days" % [lead, g.best_days, int(g.window_days)], "who": who + " in your world"}
 	var body: float = 0.5 * min(1.0, float(near_c) / g.min_cells) + 0.5 * min(1.0, float(near_j) / g.min_jobs)
 	var now := "best crawler %d cells, %d jobs" % [near_c, near_j]
-	if not organism.is_empty() and organism.get("creature", false):
+	if not organism.is_empty() and organism.get("creature", false) and campaign and not campaign.is_done(6):
 		now = "[color=#ffd166][b]Press K to keep this creature[/b][/color]" + ("  (paused: space plays on)" if speed_idx == 0 else "")
 	elif g.qualifying > 0:
 		now = "%d creature(s) on the reef now: G to find one, K to keep it" % g.qualifying
@@ -1378,7 +1390,7 @@ func hud_text() -> String:
 		for d in stats.discoveries:
 			t += "[color=#cbf]" + d + "[/color]\n"
 	t += "[/details]"
-	t += "[keys]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), Shift+G search for one, K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/keys]" % [", N new archipelago" if arch else ("" if garden else ", N new run\nShift+N today's expedition (the same reef for everyone today)"), "\nL environment levers" if garden else ("\nI next island, L currents" if arch else "")]
+	t += "[keys]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), Shift+G search for one, K keep the selected body (Shift+K any body)%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/keys]" % [", N new archipelago" if arch else ("" if garden else ", N new run\nShift+N today's expedition (the same reef for everyone today)"), "\nL environment levers" if garden else ("\nI next island, L currents" if arch else "")]
 	return t
 
 ## The one thing worth saying about the reef right now.
