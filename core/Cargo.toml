@@ -8,6 +8,8 @@ version.workspace = true
 shells-266 = []
 # 20 elements, [2, 6, 6, 6]. Pick at most one table feature.
 shells-2666 = []
+# Our own octets, [2, 8, 8]: tetravalent backbone, each link one letter plus an Hy cap.
+shells-288 = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

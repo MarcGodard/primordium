@@ -13,12 +13,14 @@ use serde::Serialize;
 /// letters below all follow from it at compile time. `primordium elements --shells=2,6,6`
 /// previews a table before switching; the `shells-266` feature builds the whole sim on that
 /// table (data in its own folder, `data_dir`).
-#[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
+#[cfg(not(any(feature = "shells-266", feature = "shells-2666", feature = "shells-288")))]
 pub const SHELLS: [u8; 2] = [2, 6];
 #[cfg(feature = "shells-266")]
 pub const SHELLS: [u8; 3] = [2, 6, 6];
 #[cfg(feature = "shells-2666")]
 pub const SHELLS: [u8; 4] = [2, 6, 6, 6];
+#[cfg(feature = "shells-288")]
+pub const SHELLS: [u8; 3] = [2, 8, 8];
 
 /// Where this table's learned data lives, relative to the repo root: `data/` for [2, 6], a
 /// folder per table otherwise (`data/shells-2-6-6/`), so tables never read each other's files.
@@ -264,12 +266,12 @@ mod tests {
 
     #[test]
     fn shell_rule_gives_expected_valences() {
-        let v: Vec<u8> = (1..=8).map(|z| element(z).valence).collect();
+        let v: Vec<u8> = (1..=8).map(|z| element_in(&[2, 6], z).valence).collect();
         assert_eq!(v, vec![1, 0, 1, 2, 3, 2, 1, 0]);
     }
 
     // pins below are values of the [2, 6] world
-    #[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
+    #[cfg(not(any(feature = "shells-266", feature = "shells-2666", feature = "shells-288")))]
     #[test]
     fn derived_constants_match_the_shell_rule() {
         assert_eq!(N_ELEMENTS, 8);
@@ -283,7 +285,7 @@ mod tests {
     }
 
     // pins below are values of the [2, 6] world
-    #[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
+    #[cfg(not(any(feature = "shells-266", feature = "shells-2666", feature = "shells-288")))]
     #[test]
     fn universe_reads_our_table_as_the_sim_does() {
         let u = Universe::new(&SHELLS);
@@ -295,12 +297,13 @@ mod tests {
     #[test]
     fn bonds_symmetric_and_nobles_inert() {
         let t = Table::new();
-        for a in 1..=8 {
-            for b in 1..=8 {
+        for a in 1..=N_ELEMENTS {
+            for b in 1..=N_ELEMENTS {
                 assert_eq!(t.bond[a][b], t.bond[b][a]);
+                if element(b as u8).valence == 0 {
+                    assert_eq!(t.bond[b][a], 0, "noble {b} bonds");
+                }
             }
-            assert_eq!(t.bond[2][a], 0);
-            assert_eq!(t.bond[8][a], 0);
         }
     }
 }

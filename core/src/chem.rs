@@ -180,7 +180,7 @@ impl ChemWorld {
                 r -= f;
             }
             grid[c] = atoms.len() as u32;
-            atoms.push(Atom { z, nb: 0, x: (c % w) as u16, y: (c / w) as u16, bonds: [NONE; 3], weak: NONE, excite: 0 });
+            atoms.push(Atom { z, nb: 0, x: (c % w) as u16, y: (c / w) as u16, bonds: [NONE; MAX_BONDS], weak: NONE, excite: 0 });
         }
         let cosmos = Cosmos::new(cp);
         let t0 = 0.25; // dawn of day 0
@@ -761,7 +761,7 @@ pub struct Census {
 mod tests {
     /// Derived formula order reproduces the hand-written one for [2, 6]: Ka Bo Ox Li Fl Hy Ne Ar.
     // pins below are values of the [2, 6] world
-    #[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
+    #[cfg(not(any(feature = "shells-266", feature = "shells-2666", feature = "shells-288")))]
     #[test]
     fn formula_order_is_hill_like() {
         assert_eq!(formula(&[1; N_ELEMENTS]), "KaBoOxLiFlHyNeAr");

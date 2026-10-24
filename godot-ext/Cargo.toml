@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 [features]
 shells-266 = ["primordium-core/shells-266"]
 shells-2666 = ["primordium-core/shells-2666"]
+shells-288 = ["primordium-core/shells-288"]
 
 [dependencies]
 primordium-core = { path = "../core" }

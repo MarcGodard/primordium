@@ -1758,7 +1758,7 @@ mod tests {
     /// The derived code is the one the [2, 6] world was written with: codons 0-4 the letters in
     /// order, 5 a synonym for Li (the food letter), 6-7 stops; Li and Fl the heritable pair.
     // pins below are values of the [2, 6] world
-    #[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
+    #[cfg(not(any(feature = "shells-266", feature = "shells-2666", feature = "shells-288")))]
     #[test]
     fn derived_code_matches_the_original() {
         let gc = genetic_code();
@@ -1776,7 +1776,7 @@ mod tests {
     }
 
     // pins below are values of the [2, 6] world
-    #[cfg(not(any(feature = "shells-266", feature = "shells-2666")))]
+    #[cfg(not(any(feature = "shells-266", feature = "shells-2666", feature = "shells-288")))]
     #[test]
     fn code_is_heritable_and_genes_parse() {
         let ctx = Ctx::new(PoolParams::default(), crate::kinetics::new_table(), 1);

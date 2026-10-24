@@ -35,6 +35,24 @@ var card_body: RichTextLabel
 var card_hint: Label
 ## World the graduation card leads to on Enter (-1: just close).
 var card_next := -1
+var card_go: Button
+var card_stay: Button
+## Clickable twins of each world's keys (bottom right), rebuilt per world.
+var actions: VBoxContainer
+const SHARED := [["Hub", KEY_M, false, "Back to the hub (M)"], ["Next scale", KEY_TAB, false, "Next open world (Tab)"], ["Codex", KEY_J, false, "Your codex and creatures (J)"], ["Guide", KEY_H, false, "What am I looking at? (H)"]]
+const REEF_ACTS := [["Next creature", KEY_G, false, "Select the next creature (G)"], ["Search", KEY_G, true, "Run until a creature appears (Shift+G)"], ["Keep", KEY_K, false, "Keep the selected creature (K)"], ["Fly to it", KEY_F, false, "Fly to the selected body (F)"], ["Biggest", KEY_B, false, "Select the biggest body (B)"], ["Skins", KEY_S, false, "Smooth skins on every body (S)"], ["+100 days", KEY_T, false, "Fast-forward 100 days (T)"], ["+500 days", KEY_T, true, "Fast-forward 500 days (Shift+T)"], ["Lineages", KEY_C, false, "Colour bodies by lineage (C)"], ["Orbit", KEY_O, false, "Auto-orbit the camera (O)"]]
+## Per world (views order): [label, key, shift, tooltip].
+var ACTS := [
+	[],
+	[["Auto detail", KEY_A, false, "Let the sim pick atoms or surrogate (A)"], ["New beach", KEY_R, false, "Start a fresh beach (R)"]],
+	[["Levers", KEY_L, false, "Pool levers (L)"]],
+	[["Auto detail", KEY_A, false, "Auto resolution (A)"], ["Levers", KEY_L, false, "Environment levers (L)"]],
+	[["Auto detail", KEY_A, false, "Auto resolution (A)"], ["Levers", KEY_L, false, "Environment levers (L)"], ["3D beach", KEY_V, false, "The beach in 3D (V)"]],
+	[["Auto detail", KEY_A, false, "Auto resolution (A)"], ["Levers", KEY_L, false, "Ocean current (L)"], ["Send up", KEY_U, false, "Send this coast's survivors up to the reef (U)"]],
+	REEF_ACTS + [["New run", KEY_N, false, "A new reef (N)"], ["Expedition", KEY_N, true, "Today's shared reef (Shift+N)"]],
+	REEF_ACTS + [["Next island", KEY_I, false, "Show the next island (I)"], ["Currents", KEY_L, false, "Currents between islands (L)"], ["New archipelago", KEY_N, false, "Start the islands again (N)"]],
+	REEF_ACTS + [["Levers", KEY_L, false, "Environment levers (L)"]],
+]
 
 func _ready() -> void:
 	campaign = load("res://scripts/campaign.gd").new()
@@ -64,6 +82,7 @@ func _ready() -> void:
 	add_child(hub)
 	hub.chosen.connect(travel)
 	_build_bar()
+	_build_actions()
 	_build_warp()
 	_build_campaign_ui()
 	campaign.toast.connect(show_toast)
@@ -158,6 +177,12 @@ func _ready() -> void:
 			"traits":
 				if "chart_traits" in view:
 					view.chart_traits = kv[1] == "1"
+			"press":
+				# a button press, as the action buttons send it (the window has no focus, so
+				# re-enabling the view's input cannot take the user's keys)
+				view.set_process_unhandled_input(true)
+				var shift: bool = kv[1].begins_with("Shift+")
+				press_key(OS.find_keycode_from_string(kv[1].trim_prefix("Shift+")), shift)
 			"skins":
 				if "skin_all" in view:
 					view.skin_all = kv[1] == "1"
@@ -220,6 +245,7 @@ func switch_to(k: int) -> void:
 	hud.set_process_unhandled_input(true)
 	bar.visible = true
 	_color_bar()
+	_fill_actions(vi)
 
 ## Current world in its colour, open ones grey, locked ones dim.
 func _color_bar() -> void:
@@ -243,6 +269,8 @@ func enter_hub() -> void:
 	hud.set_process(false)
 	hud.set_process_unhandled_input(false)
 	bar.visible = false
+	if actions:
+		actions.visible = false
 
 ## Travel to scale k (or the hub when k < 0) through a warp: streaks rush outward when
 ## climbing to a bigger scale, inward when diving smaller or in from the hub.
@@ -287,6 +315,71 @@ func travel(k: int) -> void:
 	tw.tween_callback(func() -> void:
 		warp.visible = false
 		travelling = false)
+
+## A key press from a button: the world's own key handler does the work.
+func press_key(code: Key, shift := false) -> void:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.physical_keycode = code
+	ev.shift_pressed = shift
+	ev.pressed = true
+	Input.parse_input_event(ev)
+	var up: InputEventKey = ev.duplicate()
+	up.pressed = false
+	Input.parse_input_event(up)
+
+func _build_actions() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 9
+	add_child(layer)
+	actions = VBoxContainer.new()
+	actions.anchor_left = 1.0
+	actions.anchor_right = 1.0
+	actions.anchor_top = 1.0
+	actions.anchor_bottom = 1.0
+	actions.offset_left = -150
+	actions.offset_right = -10
+	actions.offset_bottom = -10
+	actions.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	actions.alignment = BoxContainer.ALIGNMENT_END
+	actions.add_theme_constant_override("separation", 3)
+	actions.visible = false
+	layer.add_child(actions)
+
+func _action_button(a: Array) -> Button:
+	var b := Button.new()
+	b.text = a[0]
+	b.tooltip_text = a[3]
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 13)
+	var code: Key = a[1]
+	var shift: bool = a[2]
+	b.pressed.connect(func() -> void: press_key(code, shift))
+	return b
+
+func _fill_actions(vi: int) -> void:
+	if not actions:
+		return
+	for c in actions.get_children():
+		c.queue_free()
+	for a in ACTS[vi] if vi < ACTS.size() else []:
+		actions.add_child(_action_button(a))
+	if vi > 0:
+		# speed 1..5 and pause on one row
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 2)
+		var pause := _action_button(["||", KEY_SPACE, false, "Pause (Space)"])
+		row.add_child(pause)
+		for n in 5:
+			var sp := _action_button([str(n + 1), KEY_1 + n, false, "Speed %d (%d)" % [n + 1, n + 1]])
+			sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			row.add_child(sp)
+		actions.add_child(row)
+	var sep := HSeparator.new()
+	actions.add_child(sep)
+	for a in SHARED:
+		actions.add_child(_action_button(a))
+	actions.visible = true
 
 func _build_bar() -> void:
 	var layer := CanvasLayer.new()
@@ -544,10 +637,26 @@ func _build_card(parent: CanvasLayer) -> void:
 	# card grew taller than the screen with its text off the top
 	card_body.custom_minimum_size = Vector2(700, 0)
 	box.add_child(card_body)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 16)
+	box.add_child(row)
+	card_go = Button.new()
+	card_go.add_theme_font_size_override("font_size", 18)
+	card_go.custom_minimum_size = Vector2(220, 44)
+	card_go.focus_mode = Control.FOCUS_NONE
+	card_go.pressed.connect(_card_accept)
+	row.add_child(card_go)
+	card_stay = Button.new()
+	card_stay.add_theme_font_size_override("font_size", 16)
+	card_stay.custom_minimum_size = Vector2(180, 44)
+	card_stay.focus_mode = Control.FOCUS_NONE
+	card_stay.pressed.connect(func() -> void: card.visible = false)
+	row.add_child(card_stay)
 	card_hint = Label.new()
 	card_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	card_hint.add_theme_font_size_override("font_size", 17)
-	card_hint.add_theme_color_override("font_color", Color(0.75, 0.85, 1.0))
+	card_hint.add_theme_font_size_override("font_size", 12)
+	card_hint.add_theme_color_override("font_color", Color(0.55, 0.62, 0.72))
 	box.add_child(card_hint)
 	card.visible = false
 	parent.add_child(card)
@@ -555,12 +664,16 @@ func _build_card(parent: CanvasLayer) -> void:
 ## New players: start at the smallest scale with a word on what the game is.
 func welcome() -> void:
 	switch_to(0)
-	show_card("Welcome to Primordium", "Everything alive is built from atoms, and every atom here comes from one rule about electron shells. You start at the smallest scale. Reach each scale's goal (top of the screen) to graduate to the next: molecules, chains that copy themselves, cells, a coastline of life, and finally many-celled creatures you can breed in a world of your own.\n\nH explains any screen. J opens your codex.", "Enter: begin", -1)
+	show_card("Welcome to Primordium", "Everything alive is built from atoms, and every atom here comes from one rule about electron shells. You start at the smallest scale. Reach each scale's goal (top of the screen) to graduate to the next: molecules, chains that copy themselves, cells, a coastline of life, and finally many-celled creatures you can breed in a world of your own.\n\nThe buttons at the bottom right do what the keys do: Guide explains any screen, Codex keeps what you learn.", "Begin", -1)
 
-func show_card(title: String, body: String, hint: String, next: int) -> void:
+## `go`: the main button; `stay`: a second button that just closes ("" for none).
+func show_card(title: String, body: String, go: String, next: int, stay := "") -> void:
 	card_title.text = title
 	card_body.text = body
-	card_hint.text = hint
+	card_go.text = go
+	card_stay.text = stay
+	card_stay.visible = stay != ""
+	card_hint.text = "Enter: %s%s" % [go.to_lower(), ("   Esc: " + stay.to_lower()) if stay != "" else ""]
 	card_next = next
 	card.visible = true
 	# fit the height to the text once it has laid out
@@ -575,23 +688,29 @@ func show_graduation(k: int, page: String) -> void:
 	var body := page + "\n\n"
 	if last:
 		body += "[b]The campaign is complete.[/b] Explore mode is open: E in the hub opens every world. Your world keeps evolving whenever you come back."
-		show_card("You bred a new kind of animal", body, "Enter: continue", -1)
+		show_card("You bred a new kind of animal", body, "Continue", -1)
 		return
 	var nk := k + 1
 	body += "[b]Next: %s.[/b] %s\n[color=#ffd36b]Goal there: %s[/color]" % [hub.SCALES[nk][0], hub.SCALES[nk][1], campaign.goal_title(nk)]
 	var here: bool = not in_hub and views.find(view) == nk
-	show_card("Goal reached: " + campaign.goal_title(k), body, "Enter: continue" if here else "Enter: go to %s now      Esc: stay here a while" % hub.SCALES[nk][0], -1 if here else nk)
+	if here:
+		show_card("Goal reached: " + campaign.goal_title(k), body, "Continue", -1)
+	else:
+		show_card("Goal reached: " + campaign.goal_title(k), body, "Go to %s now" % hub.SCALES[nk][0], nk, "Stay here a while")
 
 func _input(e: InputEvent) -> void:
 	if not card.visible or not (e is InputEventKey and e.pressed and not e.echo):
 		return
 	if e.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
-		card.visible = false
-		if card_next >= 0:
-			travel(card_next)
+		_card_accept()
 	elif e.keycode == KEY_ESCAPE:
 		card.visible = false
 	get_viewport().set_input_as_handled()
+
+func _card_accept() -> void:
+	card.visible = false
+	if card_next >= 0:
+		travel(card_next)
 
 func show_toast(title: String, body: String, color: Color) -> void:
 	toast_label.text = title + "\n" + body

@@ -3,7 +3,7 @@
 //!
 //! Backbone atom Ka is trivalent: two backbone bonds plus one side group, so a
 //! chain is a sequence of side-group letters. Letters are scale-0 elements
-//! bonded to Ka (valence-2 letters carry an Hy cap). Everything a letter does
+//! bonded to Ka (each bond past the one to Ka carries an Hy cap). Everything a letter does
 //! here (stickiness, pairing, water preference, colour) is read from the
 //! scale-0 table.
 //!
@@ -80,8 +80,9 @@ impl LetterPhysics {
                 bind[i][k] = t.weak[zi as usize][zk as usize] as f64 / KT + burial;
             }
             let e = t.get(zi);
-            // valence-2 letters carry an Hy cap: average the two atoms' water preference
-            hydropathy[i] = if e.valence == 2 { 0.5 * (e.hydropathy + t.get(1).hydropathy) } else { e.hydropathy };
+            // a letter's bonds past the one to the backbone carry Hy caps: average over its atoms
+            let caps = e.valence.saturating_sub(1) as f64;
+            hydropathy[i] = (e.hydropathy + caps * t.get(1).hydropathy) / (1.0 + caps);
             absorb[i] = e.absorb;
         }
         Self { pair, bind, hydropathy, absorb }

@@ -15,7 +15,7 @@ const EXPLAIN := """[b]Scale -1: the periodic table[/b]
 
 [b]Electronegativity[/b] is how hard an atom pulls on shared electrons. Two atoms that pull very differently form strong, partly ionic bonds; atoms that pull alike stay oily and avoid water.
 
-[b]Difficulty is the table.[/b] Hard adds a third shell of 6 and Very hard a fourth: more elements, so more rival atoms dilute the useful ones, and a longer genetic code makes every gene longer and easier to break. Press a button to preview a table, then play it. Each table keeps its own campaign. Our own octets (2, 8, 8) only preview: carbon-like atoms bond four ways and chains branch.
+[b]Difficulty is the table.[/b] Hard adds a third shell of 6 and Very hard a fourth: more elements, so more rival atoms dilute the useful ones, and a longer genetic code makes every gene longer and easier to break. Press a button to preview a table, then play it. Each table keeps its own campaign. Our own octets (2, 8, 8) are the hardest: the backbone atom bonds four ways like carbon, so each link carries a side group and a Hy cap (as our proteins do), and 13 letters need a longer genetic code.
 
 [b]Try.[/b] Click any element. Then press a table button to see what changes: more elements, a different backbone, a different genetic alphabet."""
 const SCALE_NAME := "scale -1: elements"
@@ -26,7 +26,7 @@ const ROLE_COL := {
 	"rival": Color(1.0, 0.5, 0.25),
 	"noble": Color(0.6, 0.5, 0.85),
 }
-## Playable tables (Tables.TABLES) are difficulty levels; octets only preview (chains branch).
+## Playable tables (Tables.TABLES) are difficulty levels.
 const UNIVERSES := [[[2, 6], "Normal (2, 6)"], [[2, 6, 6], "Hard (2, 6, 6)"], [[2, 6, 6, 6], "Very hard (2, 6, 6, 6)"], [[2, 8, 8], "Our octets (2, 8, 8)"]]
 const TILE := 2.7
 
@@ -131,7 +131,10 @@ func _build_overlay() -> void:
 	play.offset_top = 196
 	play.focus_mode = Control.FOCUS_NONE
 	play.visible = false
-	play.pressed.connect(func() -> void: Tables.switch(play_key))
+	play.pressed.connect(func() -> void:
+		var err: String = Tables.switch(play_key)
+		if err != "":
+			title.text += "  " + err)
 	layer.add_child(play)
 	bars = Control.new()
 	bars.anchor_left = 0.5
@@ -225,7 +228,7 @@ func load_universe(shells: Array) -> void:
 		else:
 			txt += ".  Letters: %s.  Genes written in: %s." % [names.call(summary.letters), names.call(summary.heritable)]
 			if b.valence > 3:
-				txt += "  Chains branch (%d side groups per link)." % (b.valence - 2)
+				txt += "  Each link carries a letter and %d Hy cap%s, as our proteins do." % [b.valence - 3, "" if b.valence == 4 else "s"]
 	var t: Array = Tables.for_shells(Array(s))
 	if not summary.this_world:
 		var cur: Array = Tables.current()
@@ -237,7 +240,7 @@ func load_universe(shells: Array) -> void:
 	if play:
 		play.visible = play_key != ""
 		if play_key != "":
-			play.text = "Play this world (%s): restarts, keeps each world's campaign" % t[2]
+			play.text = "Play this world (%s): every scale rebuilds on it" % t[2]
 	if recipe_panel:
 		recipe_panel.visible = summary.get("this_world", false)
 		recipe_panel.refresh()
@@ -263,8 +266,8 @@ func _build_table() -> void:
 	for c in s:
 		maxcap = max(maxcap, c)
 	var origin := Vector3(-(maxcap - 1) * TILE * 0.5 - 6.0, (s.size() - 1) * TILE * 0.5, 0.0)
-	# a 4th row reaches down into the recipe panel (bottom left): shrink toward the top right
-	var k := 1.0 if s.size() <= 3 else 0.8
+	# a 4th row or 8 columns reach into the recipe panel (bottom left): shrink toward the top right
+	var k := 1.0 if s.size() <= 3 and maxcap <= 6 else 0.8
 	table_root.scale = Vector3.ONE * k
 	table_root.position = Vector3((origin.x + (maxcap - 1) * TILE) * (1.0 - k), origin.y * (1.0 - k) + 0.7 * (1.0 - k) * TILE, 0.0)
 	for i in elements.size():

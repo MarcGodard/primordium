@@ -172,10 +172,21 @@ struct FfDone {
 }
 
 struct FastForward {
-    handle: std::thread::JoinHandle<FfDone>,
+    handle: Option<std::thread::JoinHandle<FfDone>>,
     /// Days done, x1000 (the worker's progress for the bar).
     done: Arc<AtomicU64>,
     days: f64,
+    /// Set when the sim is freed mid-run: the worker must not outlive the library (table switch).
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for FastForward {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
 }
 
 #[derive(GodotClass)]
@@ -475,11 +486,13 @@ impl ReefSim {
         let goal = self.goal.clone();
         let done = Arc::new(AtomicU64::new(0));
         let progress = done.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let halt = stop.clone();
         let handle = std::thread::spawn(move || {
             let before = Snapshot::of(run.shore.reef(focus));
             let end = run.shore.reef(focus).t_days + days;
             let (mut peak, mut cdays) = (0, 0);
-            while run.shore.reef(focus).t_days < end {
+            while run.shore.reef(focus).t_days < end && !halt.load(Ordering::Relaxed) {
                 run.shore.step(dt);
                 let r = run.shore.reef(focus);
                 push_history(r, &mut run.history);
@@ -492,7 +505,7 @@ impl ReefSim {
             let after = Snapshot::of(run.shore.reef(focus));
             FfDone { run, before, after, peak_creatures: peak, creature_days: cdays }
         });
-        self.ff = Some(FastForward { handle, done, days });
+        self.ff = Some(FastForward { handle: Some(handle), done, days, stop });
         true
     }
 
@@ -510,11 +523,11 @@ impl ReefSim {
     #[func]
     fn poll_fast_forward(&mut self) -> VarDictionary {
         let mut d = VarDictionary::new();
-        if !self.ff.as_ref().is_some_and(|f| f.handle.is_finished()) {
+        if !self.ff.as_ref().is_some_and(|f| f.handle.as_ref().is_some_and(|h| h.is_finished())) {
             return d;
         }
-        let f = self.ff.take().unwrap();
-        let Ok(out) = f.handle.join() else {
+        let mut f = self.ff.take().unwrap();
+        let Ok(out) = f.handle.take().unwrap().join() else {
             // the worker panicked: the reef is gone, say so rather than pretend
             d.set("failed", true);
             return d;
