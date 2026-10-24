@@ -483,4 +483,8 @@ func rebuild_world() -> bool:
 	selected = -1
 	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1, auto)
 	levers.refresh()
-	return true
+	# the goal check reads these: stale numbers from the old world must not count for the new one
+	if ok:
+		env = sim.env()
+		stats = sim.stats()
+	return ok

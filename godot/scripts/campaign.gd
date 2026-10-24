@@ -7,6 +7,15 @@ signal changed
 signal toast(title: String, body: String, color: Color)
 ## A goal was reached: main shows the graduation card that leads to the next world.
 signal graduated(k: int, page: String)
+## A scale ran out of time before its goal: k, days spent, the likely cause.
+signal out_of_time(k: int, days: float, cause: String)
+
+## Sim days each goal may take before the run is out of time (none: no limit). About twice
+## the default world's time, measured with the CLI (polymers ~12, protocells 15-20, cells
+## ~120 days): a starved or crowded recipe takes 2-5x as long or never gets there.
+const BUDGET := {2: 30.0, 3: 45.0, 4: 200.0}
+## Scales whose current run is out of time: the goal cannot complete until the world restarts.
+var spent := {}
 
 var save_path: String = Tables.save_path()
 ## Index = view index (0 elements .. 6 reef, 7 archipelago, 8 garden). Title, what to do, codex page on success.
@@ -126,8 +135,20 @@ func check(k: int, view: Node) -> void:
 	var p: Dictionary = view.goal_progress()
 	if p.is_empty():
 		return
+	var days: float = view.env.get("t_days", 0.0) if "env" in view and view.env is Dictionary else 0.0
+	if BUDGET.has(k) and not is_done(k):
+		var b: float = BUDGET[k]
+		# a world that started again (rebuilt, restarted) is back inside its budget
+		if days < b:
+			spent.erase(k)
+		p["now"] = "%s   ·   day %d of %d" % [p.get("now", ""), int(days), int(b)]
+		if days >= b and not spent.has(k) and not p.get("done", false):
+			spent[k] = true
+			out_of_time.emit(k, days, recipe_cause())
+	if spent.has(k):
+		p["now"] = "[color=#f99]out of time: try again, or change what this world is built from[/color]"
 	progress[k] = p
-	if p.get("done", false) and not is_done(k):
+	if p.get("done", false) and not is_done(k) and not spent.has(k):
 		complete(k, p.get("who", ""))
 
 func complete(k: int, who: String) -> void:
@@ -140,6 +161,33 @@ func complete(k: int, who: String) -> void:
 	save()
 	graduated.emit(k, page)
 	changed.emit()
+
+## The most likely reason a recipe is slow, from the material life gets: a scarce backbone or
+## letter, a crowding noble gas, a flood of caps. "" when the mix is near the default.
+func recipe_cause() -> String:
+	var sea: PackedFloat64Array = ElementsSim.recipe_sea()
+	if sea.is_empty():
+		return ""
+	var names: PackedStringArray = ElementsSim.letter_names()
+	var why := []
+	var bb: float = sea[sea.size() - 1]
+	if bb < 0.6:
+		why.append("the backbone atom is at %d%% of the usual sea, so chains are short and few" % int(bb * 100.0))
+	var lo := 0
+	for i in sea.size() - 1:
+		if sea[i] < sea[lo]:
+			lo = i
+	if sea[lo] < 0.6 and bb >= 0.6:
+		why.append("%s is at %d%% of the usual sea, and every copy needs it" % [names[lo], int(sea[lo] * 100.0)])
+	elif sea[lo] < 0.6:
+		why.append("life's letters are down to %d%%" % int(sea[lo] * 100.0))
+	var hi := 0
+	for i in sea.size() - 1:
+		if sea[i] > sea[hi]:
+			hi = i
+	if sea[hi] > 2.5:
+		why.append("%s floods the sea at %d%%, crowding out the rest" % [names[hi], int(sea[hi] * 100.0)])
+	return "; ".join(PackedStringArray(why))
 
 ## The world recipe (element abundance multipliers, index Z - 1). Each change bumps
 ## `recipe_version`, so worlds built from an older recipe rebuild when next visited.

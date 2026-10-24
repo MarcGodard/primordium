@@ -35,6 +35,9 @@ var card_body: RichTextLabel
 var card_hint: Label
 ## World the graduation card leads to on Enter (-1: just close).
 var card_next := -1
+## Instead of travelling: what the main and second card buttons do (out-of-time card).
+var card_go_action: Callable
+var card_stay_action: Callable
 var card_go: Button
 var card_stay: Button
 ## Clickable twins of each world's keys (bottom right), rebuilt per world.
@@ -87,6 +90,7 @@ func _ready() -> void:
 	_build_campaign_ui()
 	campaign.toast.connect(show_toast)
 	campaign.graduated.connect(show_graduation)
+	campaign.out_of_time.connect(_on_out_of_time)
 	enter_hub()
 	# a new player starts at the smallest scale; the hub comes once there is somewhere to go
 	var capture := false
@@ -231,6 +235,8 @@ func switch_to(k: int) -> void:
 	var vi := views.find(view)
 	var stale: bool = view.is_stale() if view.has_method("is_stale") else view.get_meta("built", 0) != campaign.recipe_version()
 	if vi > 0 and stale and view.has_method("rebuild_world") and view.rebuild_world():
+		# a fresh world is back inside its budget
+		campaign.spent.erase(vi)
 		if view.has_method("mark_built"):
 			view.mark_built()
 		else:
@@ -247,6 +253,10 @@ func switch_to(k: int) -> void:
 	bar.visible = true
 	_color_bar()
 	_fill_actions(vi)
+	# back in a world that ran out of time: offer the way out again (nothing else restarts it)
+	var days: float = view.env.get("t_days", 0.0) if "env" in view and view.env is Dictionary else 0.0
+	if campaign.spent.has(vi) and shot == "" and days >= campaign.BUDGET.get(vi, INF):
+		_on_out_of_time(vi, days, campaign.recipe_cause())
 
 ## Current world in its colour, open ones grey, locked ones dim.
 func _color_bar() -> void:
@@ -292,6 +302,8 @@ func travel(k: int) -> void:
 			switch_to(k)
 		return
 	travelling = true
+	# a card belongs to the world it was shown in
+	card.visible = false
 	# climbing to a bigger world (or out to the hub) the old one shrinks into it; diving, we fly in
 	var climbing := k < 0 or (from >= 0 and k > from)
 	var m: ShaderMaterial = warp.material
@@ -697,7 +709,7 @@ func _build_card(parent: CanvasLayer) -> void:
 	card_stay.add_theme_font_size_override("font_size", 16)
 	card_stay.custom_minimum_size = Vector2(180, 44)
 	card_stay.focus_mode = Control.FOCUS_NONE
-	card_stay.pressed.connect(func() -> void: card.visible = false)
+	card_stay.pressed.connect(_card_stay)
 	row.add_child(card_stay)
 	card_hint = Label.new()
 	card_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -713,7 +725,9 @@ func welcome() -> void:
 	show_card("Welcome to Primordium", "Everything alive is built from atoms, and every atom here comes from one rule about electron shells. You start at the smallest scale. Reach each scale's goal (top of the screen) to graduate to the next: molecules, chains that copy themselves, cells, a coastline of life, and finally many-celled creatures you can breed in a world of your own.\n\nThe buttons at the bottom right do what the keys do: Guide explains any screen, Codex keeps what you learn.", "Begin", -1)
 
 ## `go`: the main button; `stay`: a second button that just closes ("" for none).
-func show_card(title: String, body: String, go: String, next: int, stay := "") -> void:
+func show_card(title: String, body: String, go: String, next: int, stay := "", go_action := Callable(), stay_action := Callable()) -> void:
+	card_go_action = go_action
+	card_stay_action = stay_action
 	card_title.text = title
 	card_body.text = body
 	card_go.text = go
@@ -751,13 +765,35 @@ func _input(e: InputEvent) -> void:
 	if e.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
 		_card_accept()
 	elif e.keycode == KEY_ESCAPE:
-		card.visible = false
+		_card_stay()
 	get_viewport().set_input_as_handled()
 
 func _card_accept() -> void:
 	card.visible = false
-	if card_next >= 0:
+	if card_go_action.is_valid():
+		card_go_action.call()
+	elif card_next >= 0:
 		travel(card_next)
+
+func _card_stay() -> void:
+	card.visible = false
+	if card_stay_action.is_valid():
+		card_stay_action.call()
+
+## A scale ran out of its day budget: say why, and offer a fresh world or the elements screen.
+func _on_out_of_time(k: int, days: float, cause: String) -> void:
+	var body := "%d days passed and %s did not get there: [i]%s[/i].\n\n" % [int(days), hub.SCALES[k][0], campaign.goal_title(k)]
+	if cause != "":
+		body += "Likely why: %s.\n\nChange the mix on the elements screen, or try this world again (chance plays a part)." % cause
+	else:
+		body += "Your mix is close to the usual one, so chance or the levers held it back: try again, or move the levers (L) to help it along."
+	# the world that ran out, not whichever is showing when the button is pressed
+	var v: Node = views[k]
+	show_card("Out of time: " + hub.SCALES[k][0], body, "Try again", -1, "Back to Elements",
+		func() -> void:
+			if v.has_method("rebuild_world") and v.rebuild_world():
+				campaign.spent.erase(k),
+		func() -> void: travel(0))
 
 func show_toast(title: String, body: String, color: Color) -> void:
 	toast_label.text = title + "\n" + body
