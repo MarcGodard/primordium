@@ -61,7 +61,8 @@ const SKIN_BUDGET_US := 6000
 var skin_turn := 0
 const Gallery := preload("res://scripts/gallery.gd")
 var creatures := PackedInt64Array()
-## Shift+G: run at full speed until a creature appears (day the search began, -1: off).
+## Shift+G: run at full speed until a creature appears (days searched so far, -1: off). A count,
+## not a start day: new runs and fast-forwards move the clock.
 var search_from := -1.0
 ## Days a search runs before it gives up.
 const SEARCH_DAYS := 400.0
@@ -583,6 +584,7 @@ func _arch_release() -> void:
 func _set_island(k: int) -> void:
 	if not sim.set_focus(k):
 		return
+	had_creature = false
 	selected = -1
 	organism = {}
 	creatures = PackedInt64Array()
@@ -693,6 +695,7 @@ func _release_kept() -> void:
 func start_ff(days: float, title: String) -> void:
 	if not ok or sim.busy():
 		return
+	search_from = -1.0
 	if sim.fast_forward(days, DT):
 		# the reef is on the worker: levers cannot reach it until it is back
 		_lock_levers(true)
@@ -853,6 +856,8 @@ func start_expedition() -> void:
 	campaign.toast.emit("Expedition of %s" % _date_text(day), ("A new reef appears every day, the same for every player. " if first else "Back on today's reef, from its start. ") + "Find its creatures and keep them.", Color(0.5, 0.85, 1.0))
 
 func _restart(run_seed: int) -> void:
+	search_from = -1.0
+	had_creature = false
 	for id in skins:
 		skins[id].queue_free()
 	skins.clear()
@@ -879,6 +884,8 @@ func new_run() -> void:
 ## Archipelago: the same islands with new dice, the kept creatures landing on the Lagoon again.
 ## Which island is reached first, and by whom, is luck: that luck is the founder effect.
 func _new_archipelago() -> void:
+	search_from = -1.0
+	had_creature = false
 	arch_seed += 1
 	for id in skins:
 		skins[id].queue_free()
@@ -1107,14 +1114,16 @@ func start_search() -> void:
 	if not creatures.is_empty():
 		next_creature()
 		return
-	search_from = sim.t_days()
+	search_from = 0.0
 	campaign_toast("Searching for a creature", "The reef runs fast until one appears (Shift+G again to stop).", Color(1.0, 0.82, 0.4))
 
 func _search_step() -> void:
 	# a day a frame, checked at noon: jobs come from light-switched genes, so creatures are a
 	# midday thing and a check at night would skip them
 	var t: float = sim.t_days()
-	sim.step(max(1, int(round((floor(t - 0.5) + 1.5 - t) / DT))), DT)
+	var n: int = max(1, int(round((floor(t - 0.5) + 1.5 - t) / DT)))
+	sim.step(n, DT)
+	search_from += n * DT
 	if not sim.creatures().is_empty():
 		search_from = -1.0
 		_update_rings()
@@ -1122,7 +1131,7 @@ func _search_step() -> void:
 		had_creature = true
 		next_creature()
 		campaign_toast("Found one", "Paused on it. K keeps it; space plays on.", Color(1.0, 0.82, 0.4))
-	elif sim.t_days() - search_from > SEARCH_DAYS:
+	elif search_from > SEARCH_DAYS:
 		search_from = -1.0
 		campaign_toast("No creature in %d days" % int(SEARCH_DAYS), "This run may not make one soon: N starts a new run with different dice.", Color(0.8, 0.85, 0.95))
 
@@ -1237,6 +1246,7 @@ func _unhandled_input(e: InputEvent) -> void:
 					if e.shift_pressed:
 						if search_from >= 0.0:
 							search_from = -1.0
+							campaign_toast("Search stopped", "", Color(0.8, 0.85, 0.95))
 						else:
 							start_search()
 					else:
@@ -1353,7 +1363,7 @@ func hud_text() -> String:
 ## The one thing worth saying about the reef right now.
 func _now_line() -> String:
 	if search_from >= 0.0:
-		return "[color=#ffd166]searching for a creature... %d days so far[/color]" % int(sim.t_days() - search_from)
+		return "[color=#ffd166]searching for a creature... %d days so far[/color]" % int(search_from)
 	if creatures.size() > 0 and not garden:
 		return "[color=#ffd166]%d creature%s here now: G to find one, K to keep it[/color]" % [creatures.size(), "" if creatures.size() == 1 else "s"]
 	if not garden and not arch and campaign and not campaign.is_done(6):
