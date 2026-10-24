@@ -1,7 +1,6 @@
 //! GDExtension bridge. Godot owns visuals only; all state lives in primordium-core.
 use godot::prelude::*;
 use primordium_core::chem::{ChemParams, ChemWorld, NONE};
-use primordium_core::cosmos::CosmosParams;
 use primordium_core::element::{KT, N_ELEMENTS};
 use primordium_core::hybrid::Mode;
 use primordium_core::surrogate::RateTable;
@@ -29,7 +28,9 @@ pub struct ChemSim {
 #[godot_api]
 impl INode for ChemSim {
     fn init(base: Base<Node>) -> Self {
-        Self { world: ChemWorld::new(ChemParams::default(), CosmosParams::default(), 1), base }
+        // the campaign has set the world recipe before any view builds its sim
+        let p = ChemParams { composition: crate::elements_sim::recipe().composition(), ..Default::default() };
+        Self { world: ChemWorld::new(p, crate::elements_sim::cosmos(1), 1), base }
     }
 }
 
@@ -43,7 +44,12 @@ impl ChemSim {
     #[func]
     fn reset(&mut self, seed: i64, width: i64, height: i64) {
         let p = ChemParams { width: width as u16, height: height as u16, composition: crate::elements_sim::recipe().composition(), ..Default::default() };
-        self.world = ChemWorld::new(p, CosmosParams { seed: seed as u64, ..Default::default() }, seed as u64);
+        // a new beach keeps the learned table and resolution mode the old one had
+        let rates = self.world.hybrid.rates.take();
+        let auto = self.world.hybrid.hp.auto;
+        self.world = ChemWorld::new(p, crate::elements_sim::cosmos(seed as u64), seed as u64);
+        self.world.hybrid.rates = rates;
+        self.world.hybrid.hp.auto = auto;
     }
 
     #[func]

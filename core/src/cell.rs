@@ -774,11 +774,15 @@ impl World {
                     need[l as usize] += FOUNDER_COPIES;
                 }
             }
-            // take matter from the ocean so the ledger closes
+            // take matter from the ocean so the ledger closes; a sea too thin in some letter (the
+            // world recipe) skips founders it cannot pay for rather than going negative
+            let take: [i64; N_LETTERS] = std::array::from_fn(|l| need[l] + membrane[l] + free[l] + genome.iter().filter(|&&g| g as usize == l).count() as i64);
+            if (0..N_LETTERS).any(|l| self.ocean[l] < take[l]) || self.ocean_ka < take.iter().sum::<i64>() {
+                continue;
+            }
             for l in 0..N_LETTERS {
-                let n = need[l] + membrane[l] + free[l] + genome.iter().filter(|&&g| g as usize == l).count() as i64;
-                self.ocean[l] -= n;
-                self.ocean_ka -= n;
+                self.ocean[l] -= take[l];
+                self.ocean_ka -= take[l];
             }
             let patch = rng.below(self.cp.patches);
             let id = self.ctx.next_id();

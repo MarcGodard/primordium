@@ -46,6 +46,9 @@ var bars: Control
 var title: Label
 var world_env: WorldEnvironment
 var environment: Environment
+var campaign: Node
+## The world recipe panel (this world's table only).
+var recipe_panel: PanelContainer
 var target := Vector3(1.5, 0.0, 0.0)
 var dist := 30.0
 var yaw := 0.0
@@ -122,6 +125,56 @@ func _build_overlay() -> void:
 	bars.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bars.draw.connect(_draw_bars)
 	layer.add_child(bars)
+	_build_recipe()
+
+## Your recipe: how common each element is. One slider per element, x1/10 .. x10 against the
+## default mix, total fixed. Every scale above builds its world from it.
+func _build_recipe() -> void:
+	recipe_panel = load("res://scripts/lever_panel.gd").new()
+	recipe_panel.span = 3.25
+	var defs := []
+	var names: PackedStringArray = ElementsSim.element_names()
+	for z in range(1, names.size()):
+		defs.append([str(z), names[z], "How common %s is in your world's cloud, against the default mix." % names[z]])
+	recipe_panel.setup("Your recipe: how common each element is", defs, _apply_recipe, _read_recipe,
+		"Total atoms stay fixed: more of one means less of the rest. Every scale above builds its world from this mix; worlds already built rebuild when you next visit them.")
+	var reset := Button.new()
+	reset.text = "Default mix"
+	reset.focus_mode = Control.FOCUS_NONE
+	reset.pressed.connect(func() -> void:
+		var m: PackedFloat64Array = ElementsSim.recipe()
+		for v in m:
+			if abs(v - 1.0) > 1e-6:
+				_set_recipe([])
+				return)
+	recipe_panel.get_child(0).add_child(reset)
+	recipe_panel.position = Vector2(12, 440)
+	layer.add_child(recipe_panel)
+
+func _read_recipe() -> Dictionary:
+	var m: PackedFloat64Array = ElementsSim.recipe()
+	var d := {}
+	for i in m.size():
+		d[str(i + 1)] = m[i]
+	return d
+
+func _apply_recipe(key: String, mult: float) -> bool:
+	var m: Array = Array(ElementsSim.recipe())
+	var i := int(key) - 1
+	if i < 0 or i >= m.size() or abs(m[i] - mult) < 1e-6:
+		return true
+	m[i] = mult
+	_set_recipe(m)
+	return true
+
+func _set_recipe(m: Array) -> void:
+	if campaign:
+		campaign.set_recipe(m)
+	else:
+		ElementsSim.set_recipe(PackedFloat64Array(m))
+	elements = sim.elements()
+	recipe_panel.refresh()
+	bars.queue_redraw()
 
 func load_universe(shells: Array) -> void:
 	sim.load(PackedByteArray(shells))
@@ -154,6 +207,9 @@ func load_universe(shells: Array) -> void:
 	if not summary.this_world:
 		txt += "  (Preview: the simulation runs on 2, 6.)"
 	title.text = txt
+	if recipe_panel:
+		recipe_panel.visible = summary.get("this_world", false)
+		recipe_panel.refresh()
 	bars.queue_redraw()
 
 ## Rows are shells; a shell's last element (full shell, a noble) sits in the far-right column.
@@ -321,6 +377,8 @@ func _build_atom() -> void:
 
 func activate(on: bool) -> void:
 	visible = on
+	if on and recipe_panel:
+		recipe_panel.visible = summary.get("this_world", false)
 	set_process(on)
 	set_process_unhandled_input(on)
 	layer.visible = on
@@ -345,6 +403,9 @@ func selected_info() -> Dictionary:
 
 func _process(delta: float) -> void:
 	t += delta
+	if recipe_panel and recipe_panel.visible:
+		# bottom-left corner: the table owns the middle, the bond bars the bottom centre
+		recipe_panel.position.y = get_viewport().get_visible_rect().size.y - recipe_panel.size.y - 12.0
 	if nucleus:
 		nucleus.rotate_y(delta * 0.4)
 	for e in electrons:
@@ -414,7 +475,25 @@ func hud_text() -> String:
 	t += "bonds it makes (valence): [b]%d[/b]\n" % e.valence
 	t += "electronegativity: %.2f   %s\n" % [e.chi, "likes water" if e.hydropathy > 0.15 else ("oily" if e.hydropathy < -0.05 else "neutral")]
 	if e.has("abundance"):
-		t += "share of atoms on the beach: %.0f%%\n" % (e.abundance * 100.0)
+		var comp: PackedFloat64Array = ElementsSim.recipe_composition()
+		var m: PackedFloat64Array = ElementsSim.recipe()
+		var share: float = comp[e.z - 1] if e.z - 1 < comp.size() else e.abundance
+		t += "share of atoms on the beach: %.1f%%" % (share * 100.0)
+		if abs(share - e.abundance) > 0.0005:
+			t += " [color=#9ab](default %.1f%%, your recipe x%.2f)[/color]" % [e.abundance * 100.0, m[e.z - 1]]
+		t += "\n"
+		var sea: PackedFloat64Array = ElementsSim.recipe_sea()
+		var lz: PackedByteArray = ElementsSim.letters_z()
+		var k := Array(lz).find(e.z)
+		var up := -1.0
+		if k >= 0:
+			up = sea[k]
+		elif e.role == "backbone":
+			up = sea[sea.size() - 1]
+		if e.z == ElementsSim.food_z():
+			t += "[color=#ffd080][b]Food.[/b] Every cell eats %s. How much of it the sea holds caps how much life it can carry: the scarcest need sets the limit, not the total (Liebig's law of the minimum). At x0.2 a reef holds a third as many cells; at x5 it fills three times faster.[/color]\n" % e.name
+		if up >= 0.0 and abs(up - 1.0) > 0.01:
+			t += "[color=#ffd080]In every sea above: x%.2f of it. %s[/color]\n" % [up, "Genomes and bodies are built from it: a thin sea slows every scale that needs it." if up < 1.0 else "More of it for every chain, cell and body that uses it."]
 	t += "\n"
 	match e.role:
 		"backbone":

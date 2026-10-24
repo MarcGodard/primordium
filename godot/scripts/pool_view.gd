@@ -17,6 +17,13 @@ const EXPLAIN := """[b]Scale 1: chains (polymers)[/b]
 
 [b]Try.[/b] Click a chain to see its fold; click a letter in the close-up to see its atoms."""
 const SCALE_NAME := "scale 1: polymers"
+## Environment levers (L): the pool's place and size, real quantities in the model.
+const LEVERS := [
+	["height", "Pool height", "How high on the beach the pool sits. Higher: the tide floods it less often, so it spends longer drying, and drying is when chains copy. Too high and fresh monomers rarely arrive."],
+	["size", "Pool size", "How much water the pool holds. The same monomers in a smaller pool are more concentrated: chains meet partners more often."],
+]
+var levers: PanelContainer
+var levers_open := false
 
 var sim: PoolSim
 var world: Node2D
@@ -90,6 +97,13 @@ func _ready() -> void:
 	inset.size = Vector2(330, 500)
 	inset.visible = false
 	layer.add_child(inset)
+	levers = load("res://scripts/lever_panel.gd").new()
+	levers.span = 1.0
+	levers.setup("The pool (L to hide)", LEVERS, func(k: String, m: float) -> bool: return sim.set_lever(k, m), func() -> Dictionary: return sim.levers(), "Run an experiment: move one, watch copies, copy error and generation depth.")
+	levers.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	levers.offset_left = -180
+	levers.offset_top = 124
+	layer.add_child(levers)
 	if ok:
 		sim.step(1, DT)
 
@@ -188,7 +202,7 @@ func hud_text() -> String:
 		t += "\n[b]Chain %d[/b]  gen %d  age %.1f d  %s\n[color=#dde]%s[/color]\nstability %.2f  amphiphile %.2f  pigment %.2f  conf %.2f\n" % [
 			info.id, info.generation, info.age_days, "paired" if info.paired else "free", info.seq, info.stability, info.amphiphile, info.pigment, info.confidence]
 		t += "catalysis: " + ", ".join(PackedStringArray(info.catalysis.slice(0, 4))) + "\n"
-	t += "\n[color=#789]Tab: switch scale   click a chain to inspect\nclick a residue in the close-up for its atoms[/color]"
+	t += "\n[color=#789]Tab: switch scale   click a chain to inspect\nclick a residue in the close-up for its atoms\nL the pool's height and size[/color]"
 	return t
 
 func screen_to_world(sp: Vector2) -> Vector2:
@@ -223,6 +237,18 @@ func _unhandled_input(e: InputEvent) -> void:
 				speed_idx = 0 if speed_idx != 0 else 2
 			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
 				speed_idx = e.keycode - KEY_1
+			KEY_L:
+				if not e.echo:
+					levers_open = not levers_open
+					levers.visible = levers_open
+					levers.refresh()
 
 func warm(n: int) -> void:
 	sim.step(n, DT)
+
+## The recipe changed: the pool starts again from water of the new mix.
+func rebuild_world() -> bool:
+	selected = -1
+	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1)
+	levers.refresh()
+	return true

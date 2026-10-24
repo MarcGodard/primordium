@@ -5,7 +5,6 @@ use crate::cell_sim::role;
 use godot::prelude::*;
 use primordium_core::cell::Signal;
 use primordium_core::archipelago::{ArchParams, Archipelago, default_islands};
-use primordium_core::cosmos::CosmosParams;
 use primordium_core::goal::{CreatureGoal, Tracker, jobs};
 use primordium_core::polymer::{N_LETTERS, seq_string};
 use primordium_core::reef::{CELL_RISE, Organism, Reef, ReefParams, ReefSeed, TILE};
@@ -243,7 +242,7 @@ impl ReefSim {
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
         let Ok(text) = std::fs::read_to_string(seed_path.to_string()) else { return false };
         let Ok(rs) = serde_json::from_str::<ReefSeed>(&text) else { return false };
-        let cosmos = CosmosParams { seed: seed as u64, ..Default::default() };
+        let cosmos = crate::elements_sim::cosmos(seed as u64);
         let shore = if founders == Some(usize::MAX) {
             let mut base = ReefParams::default();
             crate::elements_sim::recipe().apply_reef(&mut base);
@@ -326,7 +325,8 @@ impl ReefSim {
     /// Archipelago state (empty on a single reef or while busy): `islands` as [{name, waves, uv,
     /// food, cells, lineages: [lineage, cells] pairs}], `crossings` flattened n x n [from][to],
     /// and the lineage grown furthest apart: `split_lineage`, `split_a`, `split_b`, `divergence`
-    /// (net share of genome letters differing between the two islands; -1 lineage before any).
+    /// (net share of genome letters differing between the two islands; -1 lineage before any),
+    /// `held` days it has stayed past `goal`, which must reach `hold`.
     #[func]
     fn archipelago(&self) -> VarDictionary {
         let mut d = VarDictionary::new();
@@ -350,7 +350,11 @@ impl ReefSim {
         d.set("islands", &isl);
         let cross: PackedInt64Array = a.crossings.iter().flatten().map(|&v| v as i64).collect();
         d.set("crossings", &cross);
-        let best = a.best_split(30);
+        // checked once a sim day inside the archipelago, fast-forward included
+        let best = a.watch.last;
+        d.set("held", a.split_held());
+        d.set("goal", primordium_core::archipelago::SPLIT_GOAL);
+        d.set("hold", primordium_core::archipelago::SPLIT_HOLD);
         d.set("split_lineage", best.map_or(-1, |b| b.0 as i64));
         d.set("split_a", best.map_or(-1, |b| b.1 as i64));
         d.set("split_b", best.map_or(-1, |b| b.2 as i64));

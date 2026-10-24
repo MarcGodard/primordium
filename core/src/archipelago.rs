@@ -46,8 +46,33 @@ impl Default for ArchParams {
     }
 }
 
+/// Net genome divergence that counts as two kinds, and the days it must hold. Calibrated with
+/// `primordium archipelago` over 6 seeds: the split is mostly a founder effect when an island is
+/// first reached (islands settle in ~200-400 days and sit at 0.7-1.0%); x4 currents jump past
+/// 1% at colonisation, then gene flow erodes them to 0.3-0.6% within ~100 days.
+pub const SPLIT_GOAL: f64 = 0.008;
+pub const SPLIT_HOLD: f64 = 150.0;
+
+/// The best split, checked once a sim day (fast-forward included): how long one lineage on one
+/// pair of islands has stayed past SPLIT_GOAL.
+#[derive(Clone, Debug)]
+pub struct SplitWatch {
+    /// Last check: (lineage, island a, island b, divergence).
+    pub last: Option<(u32, usize, usize, f64)>,
+    /// Day the current pair rose past the goal and has stayed there since (-1: not now).
+    pub since: f64,
+    next: f64,
+}
+
+impl Default for SplitWatch {
+    fn default() -> Self {
+        Self { last: None, since: -1.0, next: 0.0 }
+    }
+}
+
 pub struct Archipelago {
     pub ap: ArchParams,
+    pub watch: SplitWatch,
     pub specs: Vec<Island>,
     pub islands: Vec<Reef>,
     /// Arrivals so far, [from][to].
@@ -82,7 +107,7 @@ impl Archipelago {
             })
             .collect();
         let n = specs.len();
-        Self { ap, specs, islands, crossings: vec![vec![0; n]; n], rng: Rng::new(seed ^ 0xA2C1) }
+        Self { ap, watch: SplitWatch::default(), specs, islands, crossings: vec![vec![0; n]; n], rng: Rng::new(seed ^ 0xA2C1) }
     }
 
     pub fn t_days(&self) -> f64 {
@@ -108,6 +133,37 @@ impl Archipelago {
             self.crossings[from][to] += 1;
             self.islands[to].immigrate(o, self.ap.travel_days);
         }
+        self.watch_split();
+    }
+
+    /// Once a sim day: is the best split past the goal, and since when? Another lineage taking
+    /// the lead starts its own count; the same lineage on another island pair keeps it (with two
+    /// pairs close, sampling noise swaps the leader from day to day).
+    fn watch_split(&mut self) {
+        let t = self.t_days();
+        if t < self.watch.next {
+            return;
+        }
+        self.watch.next = t.floor() + 1.0;
+        let b = self.best_split(30);
+        let same = match (b, self.watch.last) {
+            (Some(x), Some(y)) => x.0 == y.0,
+            _ => false,
+        };
+        match b {
+            Some(x) if x.3 >= SPLIT_GOAL => {
+                if self.watch.since < 0.0 || !same {
+                    self.watch.since = t;
+                }
+            }
+            _ => self.watch.since = -1.0,
+        }
+        self.watch.last = b;
+    }
+
+    /// Days the current split has held past SPLIT_GOAL (0 when it is not past it).
+    pub fn split_held(&self) -> f64 {
+        if self.watch.since < 0.0 { 0.0 } else { self.t_days() - self.watch.since }
     }
 
     /// Release a creature on island `k` as a new lineage; the lineage number is shared by every

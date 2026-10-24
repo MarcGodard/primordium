@@ -23,7 +23,7 @@ const GOALS := [
 		"[b]Cells.[/b] Genomes now write genes through a genetic code. Promoters switch genes on with light, cold or crowding. Mutation, predators and the tide sort genomes: this is evolution by natural selection, running on its own."],
 	["Travellers", "Let %d cells ride the ocean current from one beach to another.",
 		"[b]Biogeography.[/b] Each beach has its own climate by latitude. Lineages that drift on the current to a new beach either fit or die, so beaches end up with their own kinds, like islands with their own birds."],
-	["Find a creature", "Find a body of %d+ cells with %d+ different cell jobs that crawls (gold rings, G jumps to one) and keep it with K.",
+	["Find a creature", "Find a body of %d+ cells with %d+ different cell jobs that crawls (gold rings; Shift+G searches for one) and keep it with K.",
 		"[b]Multicellular life.[/b] Cells of one body share a genome but switch it differently by where they sit: some hold on, some feed, some shade. A body that divides labour and moves is an animal in all but name. On the open reef they appear now and then and are gone again."],
 	["Two kinds", "On the islands, let one lineage split into two kinds whose genomes differ by 0.8 letters in 100 beyond the variety inside each island, and stay that far apart for 150 days.",
 		"[b]New species.[/b] Spores that reach another island start a population of their own. Each island mutates on its own and its shore keeps different bodies, while too few spores cross to mix them again. Two kinds from one ancestor is how species begin: isolation first, then difference."],
@@ -55,6 +55,8 @@ func _ready() -> void:
 			persist = true
 	if persist:
 		load_state()
+	ElementsSim.set_recipe(PackedFloat64Array(state.get("recipe", [])))
+	ElementsSim.set_planet(PackedFloat64Array(state.get("planet", [])))
 
 func load_state() -> void:
 	if not FileAccess.file_exists(save_path):
@@ -137,6 +139,24 @@ func complete(k: int, who: String) -> void:
 	save()
 	graduated.emit(k, page)
 	changed.emit()
+
+## The world recipe (element abundance multipliers, index Z - 1). Each change bumps
+## `recipe_version`, so worlds built from an older recipe rebuild when next visited.
+func set_recipe(mult: Array) -> void:
+	state["recipe"] = mult
+	state["recipe_version"] = int(state.get("recipe_version", 0)) + 1
+	ElementsSim.set_recipe(PackedFloat64Array(mult))
+	save()
+
+## Your sun and moons (orbit, tilt, tides, flares multipliers): the sky of every scale above.
+func set_planet(mult: Array) -> void:
+	state["planet"] = mult
+	state["recipe_version"] = int(state.get("recipe_version", 0)) + 1
+	ElementsSim.set_planet(PackedFloat64Array(mult))
+	save()
+
+func recipe_version() -> int:
+	return int(state.get("recipe_version", 0))
 
 ## Every goal reached: explore mode (all worlds, any order) is the reward.
 func finished() -> bool:

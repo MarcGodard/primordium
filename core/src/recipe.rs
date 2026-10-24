@@ -34,7 +34,7 @@ impl Default for Recipe {
 
 impl Recipe {
     pub fn new(mult: &[f64]) -> Self {
-        Self { mult: std::array::from_fn(|i| mult.get(i).copied().unwrap_or(1.0).clamp(MULT_MIN, MULT_MAX)) }
+        Self { mult: std::array::from_fn(|i| mult.get(i).copied().filter(|v| v.is_finite()).unwrap_or(1.0).clamp(MULT_MIN, MULT_MAX)) }
     }
 
     /// Relative abundance per element, summing to 1: what chemistry seeds its atoms from.
@@ -120,5 +120,59 @@ mod tests {
         assert!(sea[0] > 2.0);
         assert!(sea[1..].iter().all(|&s| s < 1.0) && r.backbone() < 1.0);
         assert!((r.composition().iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod sea_tests {
+    use super::*;
+    use crate::cosmos::{Cosmos, CosmosParams};
+    use crate::reef::{Reef, ReefSeed};
+    use crate::surrogate::RateTable;
+
+    fn load() -> (RateTable, ReefSeed) {
+        let dir = format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), crate::element::data_dir());
+        (serde_json::from_str(&std::fs::read_to_string(format!("{dir}rates0.json")).unwrap()).unwrap(), serde_json::from_str(&std::fs::read_to_string(format!("{dir}reef_seed.json")).unwrap()).unwrap())
+    }
+
+    /// The thinnest sea a recipe allows (one letter at the floor, the rest at the ceiling): cells
+    /// and reef found what they can afford, no reservoir goes negative, matter stays exact.
+    #[test]
+    fn thinnest_sea_keeps_ledgers() {
+        let (rates, rs) = load();
+        let mut m = [MULT_MAX; N_ELEMENTS];
+        m[LETTERS[0] as usize - 1] = MULT_MIN;
+        let r = Recipe::new(&m);
+        let mut cp = CellParams::default();
+        r.apply_cell(&mut cp);
+        let mut w = crate::cell::World::new(PoolParams::default(), cp, Cosmos::new(CosmosParams::default()), rates.clone(), 1, 200);
+        let m0 = w.matter();
+        for _ in 0..40 {
+            w.step(0.02);
+        }
+        assert_eq!(w.matter(), m0);
+        assert!(w.ocean.iter().all(|&v| v >= 0) && w.ocean_ka >= 0);
+        let mut rp = ReefParams { width: 8, depth: 8, founders: 60, ..Default::default() };
+        r.apply_reef(&mut rp);
+        let mut reef = Reef::new(rp, CosmosParams::default(), rates, &rs, 2);
+        assert!(reef.ocean.iter().all(|&v| v >= 0) && reef.ocean_ka >= 0);
+        let m0 = reef.matter();
+        for _ in 0..200 {
+            reef.step(0.02);
+        }
+        assert_eq!(reef.matter(), m0);
+        // release until the thin letter runs out: spores the sea cannot pay for are not planted
+        let f = &rs.founders[0];
+        let genome: Vec<u8> = f.genome.iter().map(|&l| reef.canon_letter(l)).collect();
+        let mut refused = false;
+        for _ in 0..400 {
+            if reef.release(&genome, f.mass.map(|v| v.clamp(0, 40)), (0.0, 1.0), 50).is_none() {
+                refused = true;
+                break;
+            }
+        }
+        assert!(refused, "the thin sea never ran out");
+        assert!(reef.ocean.iter().all(|&v| v >= 0) && reef.ocean_ka >= 0);
+        assert_eq!(reef.matter(), m0);
     }
 }

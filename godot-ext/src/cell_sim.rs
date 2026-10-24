@@ -1,7 +1,7 @@
 //! Scale-3 bridge: cells on the beach. Patch = elevation band; position within a patch is viewer-only.
 use godot::prelude::*;
 use primordium_core::cell::{CellParams, GenomeInfo, Signal, World};
-use primordium_core::cosmos::{Cosmos, CosmosParams};
+use primordium_core::cosmos::Cosmos;
 use primordium_core::hybrid::Mode;
 use primordium_core::kinetics::{BONDABLE, N_PAIRS, bidx, pair, pair_members};
 use primordium_core::polymer::{self, LETTERS, seq_string};
@@ -83,7 +83,7 @@ impl CellSim {
     fn start(&mut self, rates_path: GString, seed: i64, auto: bool) -> bool {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
-        let cosmos = Cosmos::new(CosmosParams { seed: seed as u64, ..Default::default() });
+        let cosmos = Cosmos::new(crate::elements_sim::cosmos(seed as u64));
         let r = crate::elements_sim::recipe();
         let mut cp = CellParams { auto, ..Default::default() };
         r.apply_cell(&mut cp);

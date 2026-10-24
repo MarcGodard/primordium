@@ -61,6 +61,12 @@ const SKIN_BUDGET_US := 6000
 var skin_turn := 0
 const Gallery := preload("res://scripts/gallery.gd")
 var creatures := PackedInt64Array()
+## Shift+G: run at full speed until a creature appears (day the search began, -1: off).
+var search_from := -1.0
+## Days a search runs before it gives up.
+const SEARCH_DAYS := 400.0
+## A creature was on the reef at the last tick: a new one stops the clock once per sighting.
+var had_creature := false
 var creature_at := 0
 var speed_idx := 2
 var env := {}
@@ -95,16 +101,10 @@ var arch_released := {}
 ## Seed of the current archipelago (N starts the next).
 var arch_seed := 11
 var terrain_mi: MeshInstance3D
-## Net genome divergence between two islands that counts as two kinds; campaign GOALS[7] says
-## the same number in words. Calibrated with `primordium archipelago` over 6 seeds: mostly a
-## founder effect when an island is first reached (islands settle in ~200-400 days at default
-## currents and sit at 0.7-1.0% for hundreds of days).
+## Two kinds: core archipelago.rs SPLIT_GOAL and SPLIT_HOLD (campaign GOALS[7] says them in
+## words). Mirrored here for the guide text; the goal reads them from the sim.
 const ARCH_GOAL := 0.008
-## Days the split must hold: a founder effect under strong currents jumps past ARCH_GOAL for a
-## while, then gene flow erodes it (x4 currents: 1.3% at day 300, 0.5% by day 400).
 const ARCH_HOLD := 150.0
-## Sim day the split last rose past ARCH_GOAL and has stayed there since (-1: not now).
-var arch_since := -1.0
 const ARCH_LEVERS := [
 	["currents", "Currents", "How often a drifting spore is carried to another island. Strong currents mix the islands; weak ones leave them isolated."],
 ]
@@ -768,6 +768,10 @@ func _ff_done(r: Dictionary) -> void:
 	if garden or arch:
 		_lock_levers(false)
 		_show_levers()
+	if arch:
+		# the goal reads this: never pair a stale split with the new day
+		arch_state = sim.archipelago()
+	# the report names the run's lineages: write it before any rebuild renames them
 	var text := _ff_report(r)
 	ff.show_report(text + "\n[color=#9ab]Any key to close. Saved in the codex (J).[/color]")
 	timer = 0.0
@@ -776,6 +780,10 @@ func _ff_done(r: Dictionary) -> void:
 	if garden:
 		_release_kept()
 		save_garden()
+	# the recipe or sky changed while this world was on the worker: rebuild it now
+	if campaign and has_meta("built") and get_meta("built") != campaign.recipe_version() and rebuild_world():
+		set_meta("built", campaign.recipe_version())
+		campaign.toast.emit("Rebuilt from your new recipe and sky", "The world below changed while this one ran ahead, so it started over.", Color(1.0, 0.8, 0.45))
 
 ## Garden: the surviving lineages, one representative each, to come back next session.
 func save_garden() -> void:
@@ -884,7 +892,6 @@ func _new_archipelago() -> void:
 	organism = {}
 	names.clear()
 	arch_released.clear()
-	arch_since = -1.0
 	arch_state = {}
 	history = PackedFloat32Array()
 	lever_marks.clear()
@@ -933,7 +940,9 @@ func _process(delta: float) -> void:
 			ff.show_progress("%s   %d%%" % [ff_title, int(sim.fast_forward_progress() * 100.0)], sim.fast_forward_progress())
 			return
 		_ff_done(r)
-	if speed() > 0:
+	if search_from >= 0.0:
+		_search_step()
+	elif speed() > 0:
 		acc += speed() * DAYS_PER_UNIT * delta
 		var n := int(acc / DT)
 		if n > 0:
@@ -981,6 +990,7 @@ func _process(delta: float) -> void:
 			if organism.is_empty():
 				selected = -1
 		_update_rings()
+		_announce_creature()
 		_update_skins()
 		profile.queue_redraw()
 		chart.queue_redraw()
@@ -1090,11 +1100,50 @@ func hunt(max_steps: int) -> void:
 	_update_rings()
 	next_creature()
 
+## Shift+G: run the reef fast, checking each frame, until a creature appears.
+func start_search() -> void:
+	if not ok or sim.busy() or garden:
+		return
+	if not creatures.is_empty():
+		next_creature()
+		return
+	search_from = sim.t_days()
+	campaign_toast("Searching for a creature", "The reef runs fast until one appears (Shift+G again to stop).", Color(1.0, 0.82, 0.4))
+
+func _search_step() -> void:
+	# a day a frame, checked at noon: jobs come from light-switched genes, so creatures are a
+	# midday thing and a check at night would skip them
+	var t: float = sim.t_days()
+	sim.step(max(1, int(round((floor(t - 0.5) + 1.5 - t) / DT))), DT)
+	if not sim.creatures().is_empty():
+		search_from = -1.0
+		_update_rings()
+		speed_idx = 0
+		had_creature = true
+		next_creature()
+		campaign_toast("Found one", "Paused on it. K keeps it; space plays on.", Color(1.0, 0.82, 0.4))
+	elif sim.t_days() - search_from > SEARCH_DAYS:
+		search_from = -1.0
+		campaign_toast("No creature in %d days" % int(SEARCH_DAYS), "This run may not make one soon: N starts a new run with different dice.", Color(0.8, 0.85, 0.95))
+
+## A creature appeared on its own: stop the clock on it once, so it is not missed.
+func _announce_creature() -> void:
+	var now := not creatures.is_empty()
+	if now and not had_creature and not garden and speed_idx > 0 and campaign and not campaign.is_done(6):
+		speed_idx = 0
+		next_creature()
+		campaign_toast("A creature!", "Gold ring: a crawling body with 3+ jobs. Paused on it: K keeps it, space plays on.", Color(1.0, 0.82, 0.4))
+	had_creature = now
+
+func campaign_toast(title: String, body: String, col: Color) -> void:
+	if campaign:
+		campaign.toast.emit(title, body, col)
+
 ## Fly to the next creature and select it.
 func next_creature() -> void:
 	if creatures.is_empty():
 		if campaign:
-			campaign.toast.emit("No creature right now", "They come and go, mostly around midday when light switches cells' jobs. Speed up time (4, 5) and watch for gold rings.", Color(0.8, 0.85, 0.95))
+			campaign.toast.emit("No creature right now", "They come and go, mostly around midday when light switches cells' jobs. Shift+G searches: the reef runs fast and stops on the next one.", Color(0.8, 0.85, 0.95))
 		return
 	creature_at = (creature_at + 1) % creatures.size()
 	selected = creatures[creature_at]
@@ -1185,7 +1234,13 @@ func _unhandled_input(e: InputEvent) -> void:
 						new_run()
 			KEY_G:
 				if not e.echo:
-					next_creature()
+					if e.shift_pressed:
+						if search_from >= 0.0:
+							search_from = -1.0
+						else:
+							start_search()
+					else:
+						next_creature()
 			KEY_S:
 				if not e.echo:
 					skin_all = not skin_all
@@ -1226,17 +1281,14 @@ func goal_progress() -> Dictionary:
 			var nm: String = names.get(int(a.split_lineage), "lineage %d" % a.split_lineage)
 			now = "%s: %s vs %s, %.2f%% apart" % [nm, isl[int(a.split_a)].name, isl[int(a.split_b)].name, max(dv, 0.0) * 100.0]
 			who = "%s, on %s and %s" % [nm, isl[int(a.split_a)].name, isl[int(a.split_b)].name]
-		var day := sim.t_days()
-		if dv >= ARCH_GOAL:
-			if arch_since < 0.0:
-				arch_since = day
-		else:
-			arch_since = -1.0
-		var held: float = day - arch_since if arch_since >= 0.0 else 0.0
+		# the sim checks the split once a day, fast-forward included: no gaps to jump
+		var goal: float = a.get("goal", ARCH_GOAL)
+		var hold: float = a.get("hold", ARCH_HOLD)
+		var held: float = a.get("held", 0.0)
 		if held > 0.0:
-			now += ", held %d of %d days" % [int(held), int(ARCH_HOLD)]
-		var p: float = 0.6 * clamp(dv / ARCH_GOAL, 0.0, 1.0) + 0.4 * clamp(held / ARCH_HOLD, 0.0, 1.0)
-		return {"p": p, "done": held >= ARCH_HOLD, "args": [], "now": now, "who": who}
+			now += ", held %d of %d days" % [int(held), int(hold)]
+		var p: float = 0.6 * clamp(dv / goal, 0.0, 1.0) + 0.4 * clamp(held / hold, 0.0, 1.0)
+		return {"p": p, "done": held >= hold, "args": [], "now": now, "who": who}
 	if garden:
 		var who: String = names.get(int(g.won_lineage), "lineage %d" % g.won_lineage)
 		var lead: String = names.get(int(g.best_lineage), "none yet")
@@ -1253,28 +1305,28 @@ func hud_text() -> String:
 		return "[color=#f88]%sreef_seed.json or rates0.json missing: run primordium reef-seed[/color]" % ElementsSim.data_dir()
 	if stats.is_empty():
 		return ""
-	var t := "[b]%s[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\ncrawling: %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
-		"Your world" if garden else ("Archipelago: " + _island_name() if arch else ("Expedition " + _date_text(expedition) if expedition > 0 else "Reef, run %d" % (campaign.state.run if campaign else 1))), env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
-		stats.adrift, stats.spores, stats.tears, stats.bites, stats.bit_error * 100.0]
-	if not by_lineage:
-		t += "[color=#9ab]tint (C for lineage): [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nshimmering with a green rim: a crawling body\nred flash: a bite[/color]\n"
+	var title: String = "Your world" if garden else ("Archipelago: " + _island_name() if arch else ("Expedition " + _date_text(expedition) if expedition > 0 else "Reef, run %d" % (campaign.state.run if campaign else 1)))
+	var t := "[b][font_size=20]%s[/font_size][/b]  [color=#9ab]day %d[/color]\n" % [title, int(env.get("t_days", 0.0))]
+	# the four numbers worth a glance, as tiles
+	t += "[table=4]"
+	for c in [["cells", stats.cells], ["bodies", stats.bodies], ["biggest", stats.biggest], ["lineages", stats.lineages]]:
+		t += "[cell padding=0,0,14,0][center][font_size=22][b]%s[/b][/font_size]\n[color=#8ab][font_size=12]%s[/font_size][/color][/center][/cell]" % [_short(c[1]), c[0]]
+	t += "[/table]\n"
+	var now := _now_line()
+	if now != "":
+		t += "[color=#dde]%s[/color]\n" % now
 	if arch:
 		t += _arch_text()
-	if garden or arch:
-		t += "lineages alive %d; largest: " % stats.lineages
-	else:
-		t += "lineages alive %d of %d founders; largest: " % [stats.lineages, stats.founders]
-	var parts := []
-	for v in stats.top_lineages:
-		parts.append("%s %.0f%%" % [names.get(int(v.x), "#%d" % int(v.x)), v.y * 100.0])
-	t += ", ".join(PackedStringArray(parts)) + "\n"
+	# what the colours mean, as swatches, while they apply
 	if by_lineage:
-		t += "[color=#9ab]tint: lineage (C for jobs)[/color]\n"
-	if stats.unsure > 0:
-		t += "[color=#f9c]%d cells where the coast's table is thin[/color]\n" % stats.unsure
-	t += "[b]Discoveries[/b]\n"
-	for d in stats.discoveries:
-		t += "[color=#cbf]" + d + "[/color]\n"
+		t += "[color=#9ab]colour: lineage (C for jobs)[/color]\n"
+	else:
+		t += "[font_size=12][color=#40ccd9]■[/color] copy [color=#59cc4d]■[/color] feed [color=#f2e0b8]■[/color] skin [color=#bf3852]■[/color] shade [color=#ffbf33]■[/color] glue  [color=#789]C lineage[/color][/font_size]\n"
+	var parts := []
+	for v in stats.top_lineages.slice(0, 3):
+		parts.append("%s %.0f%%" % [names.get(int(v.x), "#%d" % int(v.x)), v.y * 100.0])
+	if not parts.is_empty():
+		t += "[color=#9ab]largest: %s[/color]\n" % ", ".join(PackedStringArray(parts))
 	if garden and stats.cells == 0:
 		t += "[color=#f9c]Nothing alive here. Keep creatures at the reef (K) to release them.[/color]\n"
 	if arch and stats.cells == 0:
@@ -1282,8 +1334,44 @@ func hud_text() -> String:
 			t += "[color=#f9c]Nothing alive here. Keep a creature at the reef (K) and it lands on the Lagoon.[/color]\n"
 		elif sim.focus() > 0:
 			t += "[color=#f9c]Nothing here yet: spores have to drift in from another island (stronger currents, L, carry more).[/color]\n"
-	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % [", N new archipelago" if arch else ("" if garden else ", N new run\nShift+N today's expedition (the same reef for everyone today)"), "\nL environment levers" if garden else ("\nI next island, L currents" if arch else "")]
+	if stats.unsure > 0:
+		t += "[color=#f9c]%d cells where the coast's table is thin[/color]\n" % stats.unsure
+	# the rest on demand (hud.gd: D details, ? keys)
+	t += "[details]"
+	t += "crawling %d bodies (%d many-celled)   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [stats.crawlers, stats.crawlers_multi, stats.tallest, stats.generation, stats.adrift, stats.spores, stats.tears, stats.bites, stats.bit_error * 100.0]
+	if not garden and not arch:
+		t += "%d of %d founders' lineages alive\n" % [stats.lineages, stats.founders]
+	t += "[color=#9ab]glowing on the surface: spores and torn pieces adrift; green rim: a crawling body; red flash: a bite[/color]\n"
+	if not stats.discoveries.is_empty():
+		t += "[b]Discoveries[/b]\n"
+		for d in stats.discoveries:
+			t += "[color=#cbf]" + d + "[/color]\n"
+	t += "[/details]"
+	t += "[keys]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), Shift+G search for one, K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/keys]" % [", N new archipelago" if arch else ("" if garden else ", N new run\nShift+N today's expedition (the same reef for everyone today)"), "\nL environment levers" if garden else ("\nI next island, L currents" if arch else "")]
 	return t
+
+## The one thing worth saying about the reef right now.
+func _now_line() -> String:
+	if search_from >= 0.0:
+		return "[color=#ffd166]searching for a creature... %d days so far[/color]" % int(sim.t_days() - search_from)
+	if creatures.size() > 0 and not garden:
+		return "[color=#ffd166]%d creature%s here now: G to find one, K to keep it[/color]" % [creatures.size(), "" if creatures.size() == 1 else "s"]
+	if not garden and not arch and campaign and not campaign.is_done(6):
+		return "no creature right now: Shift+G searches for one"
+	if stats.crawlers_multi > 0:
+		return "%d many-celled bodies are crawling" % stats.crawlers_multi
+	if stats.multicellular > 0:
+		return "%d bodies have grown past one cell" % stats.multicellular
+	if stats.cells > 0:
+		return "single cells settling on the rock"
+	return ""
+
+static func _short(n: int) -> String:
+	if n >= 9950:
+		return "%.0fk" % (n / 1000.0)
+	if n >= 1000:
+		return "%.1fk" % (n / 1000.0)
+	return str(n)
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.
 func _draw_profile() -> void:
@@ -1427,3 +1515,36 @@ func _draw_chart() -> void:
 	var over: float = ys.back() - area.end.y if not ys.is_empty() else 0.0
 	for i in labels.size():
 		chart.draw_string(font, Vector2(area.end.x + 6, ys[i] - max(over, 0.0)), "%.3f" % labels[i][1], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, labels[i][2])
+
+## The recipe changed: this world starts again in the new sea. The reef runs again, the
+## archipelago starts over with the kept creatures, your world comes back from its save.
+func rebuild_world() -> bool:
+	if not ok or sim.busy():
+		return false
+	if arch:
+		arch_seed -= 1
+		_new_archipelago()
+	elif garden:
+		if restored:
+			save_garden()
+		ok = sim.start_garden(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), 7)
+		names.clear()
+		mine.clear()
+		genera.clear()
+		unplaced.clear()
+		restored = false
+		history = PackedFloat32Array()
+		lever_marks.clear()
+		for id in skins:
+			skins[id].queue_free()
+		skins.clear()
+		selected = -1
+		organism = {}
+		if ok:
+			sim.step(1, DT)
+			if active and campaign:
+				_populate()
+	else:
+		expedition = 0
+		_restart(campaign.state.run if campaign else 1)
+	return true

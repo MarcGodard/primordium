@@ -471,3 +471,10 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_A:
 				auto = not auto
 				sim.set_auto(auto)
+
+## The recipe changed: the beach starts again with the new sea.
+func rebuild_world() -> bool:
+	selected = -1
+	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1, auto)
+	levers.refresh()
+	return true

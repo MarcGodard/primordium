@@ -11,10 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CosmosParams {
     pub seed: u64,
     /// Days per orbit. Short (vs Earth 365) so local runs see several seasons.
     pub year_days: f64,
+    /// Mean orbit radius against this world's default (AU-like): sunlight falls as 1/r^2,
+    /// warming and UV with it.
+    pub orbit: f64,
     pub eccentricity: f64,
     /// Axial tilt, radians. Drives seasons.
     pub obliquity: f64,
@@ -58,6 +62,7 @@ impl Default for CosmosParams {
         Self {
             seed: 1,
             year_days: 96.0,
+            orbit: 1.0,
             eccentricity: 0.08,
             obliquity: 0.42,
             latitude: 0.55,
@@ -180,7 +185,8 @@ impl Cosmos {
         let flare = self.events(t, 1.0, flare_prob, 0.04, 1, 0xF1A2);
 
         let cloud = (self.noise(t, 0.7, 11) * 0.6 + self.noise(t, 4.0, 13) * 0.4).powf(1.5);
-        let irradiance = 1.0 / (orbit_distance * orbit_distance);
+        let r = p.orbit * orbit_distance;
+        let irradiance = 1.0 / (r * r);
         let sun = sun_height.max(0.0);
         let visible = irradiance * sun * (1.0 - 0.75 * cloud);
         // UV: thinner air path near zenith, flares spike it, clouds cut less of it

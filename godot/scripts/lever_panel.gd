@@ -4,6 +4,8 @@
 extends PanelContainer
 
 var levers: Array = []
+## Slider reach in doublings each way (2: x1/4 .. x4). Set before `setup`.
+var span := 2.0
 var apply: Callable
 var read: Callable
 var sliders := {}
@@ -38,8 +40,8 @@ func setup(title: String, defs: Array, apply_fn: Callable, read_fn: Callable, no
 		l.mouse_filter = Control.MOUSE_FILTER_PASS
 		row.add_child(l)
 		var sl := HSlider.new()
-		sl.min_value = -2.0
-		sl.max_value = 2.0
+		sl.min_value = -span
+		sl.max_value = span
 		sl.step = 0.25
 		sl.custom_minimum_size = Vector2(180, 0)
 		sl.tooltip_text = lv[2]

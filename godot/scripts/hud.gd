@@ -105,13 +105,89 @@ func _ready() -> void:
 	add_child(top)
 	top.add_child(explain_panel)
 
+## Right panel: a view's [details]..[/details] and [keys]..[/keys] blocks (or its trailing grey
+## key list) show only when toggled, so the panel reads at a glance.
+var details := false
+var keys := false
+
+func _fold(t: String) -> String:
+	var d0 := t.find("[details]")
+	var d1 := t.find("[/details]")
+	if d0 >= 0 and d1 > d0:
+		t = t.substr(0, d0) + (t.substr(d0 + 9, d1 - d0 - 9) if details else "") + t.substr(d1 + 10)
+	var k0 := t.find("[keys]")
+	var k1 := t.find("[/keys]")
+	var key_text := ""
+	if k0 >= 0 and k1 > k0:
+		key_text = t.substr(k0 + 6, k1 - k0 - 6)
+		t = t.substr(0, k0) + t.substr(k1 + 7)
+	else:
+		# older views end with their key list in grey
+		var g := t.rfind("\n[color=#789]")
+		if g >= 0 and t.ends_with("[/color]"):
+			key_text = t.substr(g + 13, t.length() - g - 13 - 8)
+			t = t.substr(0, g)
+	if not details:
+		# discovery lists (a header then purple lines) shrink to a count
+		var out := PackedStringArray()
+		var n := -1
+		for line in t.split("\n"):
+			if line.begins_with("[b]Discoveries[/b]"):
+				n = 0
+				continue
+			if n >= 0 and line.begins_with("[color=#cbf]"):
+				n += 1
+				continue
+			if n > 0:
+				out.append("[color=#cbf]%d discover%s (D)[/color]" % [n, "y" if n == 1 else "ies"])
+			n = -1
+			out.append(line)
+		if n > 0:
+			out.append("[color=#cbf]%d discover%s (D)[/color]" % [n, "y" if n == 1 else "ies"])
+		t = "\n".join(out)
+	t = t.strip_edges(false, true)
+	if t == "":
+		return ""
+	if keys and key_text != "":
+		t += "\n\n[color=#789]" + key_text + "[/color]"
+	t += "\n[color=#678][font_size=12]%s   %s   H guide[/font_size][/color]" % ["? hide keys" if keys else "? keys", "D less" if details else "D details"]
+	return t
+
 func _unhandled_input(e: InputEvent) -> void:
+	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_D:
+		details = not details
+		get_viewport().set_input_as_handled()
+		return
+	if e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_SLASH:
+		keys = not keys
+		get_viewport().set_input_as_handled()
+		return
 	if e is InputEventKey and e.pressed and e.keycode in [KEY_H, KEY_F1]:
 		explaining = not explaining
 		get_viewport().set_input_as_handled()
 	elif e is InputEventKey and e.pressed and e.keycode == KEY_ESCAPE and explaining:
 		explaining = false
 		get_viewport().set_input_as_handled()
+
+## The choices below that this world was built from, when any differ from the default.
+static func _built_from() -> String:
+	var parts := []
+	var m: PackedFloat64Array = ElementsSim.recipe()
+	var names: PackedStringArray = ElementsSim.element_names()
+	for i in m.size():
+		if abs(m[i] - 1.0) > 0.01 and i + 1 < names.size():
+			parts.append("%s x%s" % [names[i + 1], _num(m[i])])
+	var p: PackedFloat64Array = ElementsSim.planet()
+	var pn := ["orbit", "tilt", "moons", "flares"]
+	for i in min(p.size(), pn.size()):
+		if abs(p[i] - 1.0) > 0.01:
+			parts.append("%s x%s" % [pn[i], _num(p[i])])
+	if parts.is_empty():
+		return ""
+	return "[color=#ffd080]built from: %s[/color]\n" % ", ".join(PackedStringArray(parts))
+
+static func _num(v: float) -> String:
+	return ("%.2f" % v).trim_suffix("0").trim_suffix("0").trim_suffix(".")
 
 func _process(_d: float) -> void:
 	if view == null:
@@ -125,7 +201,7 @@ func _process(_d: float) -> void:
 	left_panel.visible = not e.is_empty()
 	if e.is_empty():
 		if view.has_method("hud_text"):
-			right.text = view.hud_text()
+			right.text = _fold(view.hud_text())
 		return
 	var day := int(floor(e.t_days))
 	var mins := int(e.day_phase * 1440.0)
@@ -139,7 +215,7 @@ func _process(_d: float) -> void:
 	label.text = "[b]PRIMORDIUM[/b]  [color=#8ab]%s[/color]\n" % view.SCALE_NAME + \
 		"Day %d  %02d:%02d   year %d, %s\n" % [day, mins / 60, mins % 60, int(e.year), season] + \
 		"%.1f K   tide %.2f %s   cloud %.0f%%\n" % [e.temperature_k, e.tide_level, tide_dir, e.cloud * 100.0] + \
-		"speed x%d   ledger drift %d\n" % [view.speed(), e.ledger_drift] + alerts + "[color=#8ab]H: what am I looking at?[/color]"
+		"speed x%d   ledger drift %d\n" % [view.speed(), e.ledger_drift] + _built_from() + alerts + "[color=#8ab]H: what am I looking at?[/color]"
 	bars.visible.value = clamp(e.visible, 0.0, 1.0)
 	bars.uv.value = clamp(e.uv / 2.0, 0.0, 1.0)
 	bars.radio.value = clamp(e.radio / 2.0, 0.0, 1.0)
@@ -149,7 +225,7 @@ func _process(_d: float) -> void:
 	orrery.queue_redraw()
 
 	if view.has_method("hud_text"):
-		right.text = view.hud_text()
+		right.text = _fold(view.hud_text())
 		return
 	var c: Dictionary = view.census
 	var t := "[b]Census[/b]\n"
@@ -162,15 +238,17 @@ func _process(_d: float) -> void:
 			s.name, s.z, s.bonds, s.valence, s.excite, "yes" if s.weak else "no", s.molecule, s.molecule_size]
 	var h: Dictionary = view.hybrid
 	if not h.is_empty():
-		t += "\n[b]Resolution[/b] %s\n" % ("auto (A)" if view.auto else "manual (A)")
 		if not h.has_rates:
 			t += "[color=#f88]no %srates0.json: run primordium train[/color]\n" % ElementsSim.data_dir()
+		t += "[details]"
+		t += "\n[b]Resolution[/b] %s\n" % ("auto (A)" if view.auto else "manual (A)")
 		t += "detail atoms %d   lifts %d   restricts %d\n" % [h.active_atoms, h.lifts, h.restricts]
 		t += "[b]Discoveries[/b] %d\n" % h.discoveries
 		for d in view.discoveries:
 			t += "[color=#cbf]" + d + "[/color]\n"
-	t += "\n[color=#789]Tab: switch scale\nwheel zoom (zoom far in for atom shells)\nright-drag pan, left-click inspect\nspace pause, 1-5 speed, A auto-resolution, R reseed[/color]"
-	right.text = t
+		t += "[/details]"
+	t += "\n[color=#789]Tab: switch scale\nwheel zoom (zoom far in for atom shells)\nright-drag pan, left-click inspect\nspace pause, 1-5 speed, A auto-resolution, R reseed\nL your sun and moons (the sky of every scale above)[/color]"
+	right.text = _fold(t)
 
 func _draw_orrery() -> void:
 	var e: Dictionary = view.env

@@ -1,6 +1,6 @@
 //! Scale-1 bridge: tide pool of polymers. Layout (where chains drift) is viewer-only state.
 use godot::prelude::*;
-use primordium_core::cosmos::{Cosmos, CosmosParams};
+use primordium_core::cosmos::Cosmos;
 use primordium_core::element::NAMES;
 use primordium_core::kinetics::{BONDABLE, N_PAIRS, pair_members};
 use primordium_core::polymer::{self, LETTER_NAMES, LETTERS, seq_string};
@@ -77,12 +77,42 @@ impl PoolSim {
     fn start(&mut self, rates_path: GString, seed: i64) -> bool {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
-        let cosmos = Cosmos::new(CosmosParams { seed: seed as u64, ..Default::default() });
+        let cosmos = Cosmos::new(crate::elements_sim::cosmos(seed as u64));
         let mut pp = PoolParams::default();
         crate::elements_sim::recipe().apply_pool(&mut pp);
         self.pool = Some(Pool::new(pp, cosmos, rates, seed as u64));
         self.layout.clear();
         true
+    }
+
+    /// Environment levers, multipliers on the default pool (x1/4..x4, height x0.6..x1.6): "height"
+    /// how high on the beach the pool sits (the tide floods it less often: longer dry spells, where
+    /// chains copy), "size" its volume (a small pool concentrates the same monomers). Matter is
+    /// untouched. False when unknown.
+    #[func]
+    fn set_lever(&mut self, name: GString, mult: f64) -> bool {
+        let Some(p) = self.pool.as_mut() else { return false };
+        let d = PoolParams::default();
+        match name.to_string().as_str() {
+            "height" => p.ctx.p.elevation = d.elevation * mult.clamp(0.6, 1.6),
+            "size" => {
+                let v = d.cells * mult.clamp(0.25, 4.0);
+                p.ctx.p.cells = v;
+                p.c.cells = v;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    #[func]
+    fn levers(&self) -> VarDictionary {
+        let mut out = VarDictionary::new();
+        let Some(p) = self.pool.as_ref() else { return out };
+        let d = PoolParams::default();
+        out.set("height", p.ctx.p.elevation / d.elevation);
+        out.set("size", p.c.cells / d.cells);
+        out
     }
 
     #[func]

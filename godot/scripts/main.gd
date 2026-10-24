@@ -53,6 +53,8 @@ func _ready() -> void:
 	view = views[0]
 	for v in views:
 		v.activate(false)
+		# recipe version this view's world was built from (campaign.set_recipe / set_planet)
+		v.set_meta("built", campaign.recipe_version())
 	hud = load("res://scripts/hud.gd").new()
 	hud.view = view
 	add_child(hud)
@@ -114,12 +116,35 @@ func _ready() -> void:
 					if kv3.size() == 2:
 						view.sim.set_lever(kv3[0], float(kv3[1]))
 					view.levers.refresh()
+				if view.get("planet_panel") != null:
+					view.planet_panel.visible = true
+					var kp: PackedStringArray = kv[1].split(":")
+					if kp.size() == 2:
+						view._apply_planet(kp[0], float(kp[1]))
+						view.rebuild_world()
+						view.set_meta("built", campaign.recipe_version())
+					view.planet_panel.refresh()
 				if view.get("lever_panel") != null:
 					view.lever_panel.visible = true
 					var kv2: PackedStringArray = kv[1].split(":")
 					if kv2.size() == 2:
 						view._set_lever(kv2[0], float(kv2[1]))
 					view._show_levers()
+			"recipe":
+				# Z:MULT,Z:MULT element abundance multipliers
+				var m: Array = Array(ElementsSim.recipe())
+				for part in kv[1].split(","):
+					var zm := part.split(":")
+					if zm.size() == 2 and int(zm[0]) >= 1 and int(zm[0]) <= m.size():
+						m[int(zm[0]) - 1] = float(zm[1])
+				campaign.set_recipe(m)
+				if view.has_method("rebuild_world") and view.rebuild_world():
+					view.set_meta("built", campaign.recipe_version())
+				if view.get("recipe_panel"):
+					view.recipe_panel.refresh()
+			"search":
+				if view.has_method("start_search"):
+					view.start_search()
 			"island":
 				if view.has_method("_set_island"):
 					view._set_island(int(kv[1]))
@@ -169,6 +194,11 @@ func _ready() -> void:
 ## Show scale k now, no transition.
 func switch_to(k: int) -> void:
 	view = views[posmod(k, views.size())]
+	# a world built from an older recipe starts again from the new one
+	var vi := views.find(view)
+	if vi > 0 and view.get_meta("built", 0) != campaign.recipe_version() and view.has_method("rebuild_world") and view.rebuild_world():
+		view.set_meta("built", campaign.recipe_version())
+		show_toast(hub.SCALES[vi][0] + " rebuilt", "From your new recipe and sky: the world below changed, so this one started over.", Color(1.0, 0.8, 0.45))
 	in_hub = false
 	hub.activate(false)
 	for v in views:

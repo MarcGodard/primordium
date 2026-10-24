@@ -441,8 +441,17 @@ impl Reef {
     /// holds). No room: the matter lands loose on the tile. Returns the new body's id.
     fn plant(&mut self, genome: Seq, mut mass: [i64; N_LETTERS], tile: usize, clade: u32, rng: &mut Rng) -> Option<u64> {
         let need = counts(&genome);
+        // a sea too thin to pay for the genome (the world recipe) plants nothing
+        if (0..N_LETTERS).any(|l| self.ocean[l] < need[l]) || self.ocean_ka < need.iter().sum::<i64>() {
+            return None;
+        }
         for l in 0..N_LETTERS {
             mass[l] = mass[l].min(self.ocean[l] - need[l]).max(0);
+        }
+        if self.ocean_ka < need.iter().sum::<i64>() + mass.iter().sum::<i64>() {
+            mass = [0; N_LETTERS];
+        }
+        for l in 0..N_LETTERS {
             self.ocean[l] -= need[l] + mass[l];
         }
         let total: i64 = need.iter().sum::<i64>() + mass.iter().sum::<i64>();

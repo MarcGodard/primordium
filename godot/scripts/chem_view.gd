@@ -57,6 +57,17 @@ var hybrid := {}
 var discoveries: Array = []
 var overlay: Node2D
 var auto := true
+var campaign: Node
+## Your sun and moons (L): set here, the sky of every scale above (ElementsSim.cosmos).
+const PLANET := [
+	["orbit", "Orbit", "How far the planet circles its star. Closer: more light, warmer, more UV. Sunlight falls with the square of the distance."],
+	["tilt", "Axial tilt", "How far the planet leans. More tilt: stronger seasons, hot summers and cold winters."],
+	["tides", "Moons' pull", "How strong the tides are. Big tides wet and dry the shore every day: the cycle that lets chains copy."],
+	["flares", "Star flares", "How often the star flares. Flares are bursts of UV and cosmic rays: more mutations, more damage."],
+]
+var planet_panel: PanelContainer
+## Seconds until the beach restarts under the new sky (a slider drag settles first).
+var replant := -1.0
 ## Zoom (px per cell) above which on-screen bands pin to detail: you see real atoms where you look.
 const PIN_ZOOM := 14.0
 
@@ -112,6 +123,22 @@ func _ready() -> void:
 	overlay = Node2D.new()
 	overlay.draw.connect(_draw_overlay)
 	layer.add_child(overlay)
+	var ui := CanvasLayer.new()
+	ui.layer = 2
+	add_child(ui)
+	planet_panel = load("res://scripts/lever_panel.gd").new()
+	planet_panel.span = 1.0
+	planet_panel.setup("Your sun and moons (L to hide)", PLANET, _apply_planet, func() -> Dictionary:
+		var m: PackedFloat64Array = ElementsSim.planet()
+		var d := {}
+		for i in PLANET.size():
+			d[PLANET[i][0]] = m[i]
+		return d,
+		"Every scale above lives under this sky: its temperature, UV, seasons and tides. Changing it starts this beach again; worlds above rebuild when you next visit them.")
+	planet_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	planet_panel.offset_left = -180
+	planet_panel.offset_top = 124
+	ui.add_child(planet_panel)
 
 	var rates := ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json")
 	if sim.load_rates(rates):
@@ -134,7 +161,32 @@ func px_per_cell() -> float:
 func speed() -> int:
 	return SPEEDS[speed_idx]
 
+func _apply_planet(key: String, mult: float) -> bool:
+	var was: PackedFloat64Array = ElementsSim.planet()
+	var m: Array = Array(was)
+	for i in PLANET.size():
+		if PLANET[i][0] == key:
+			m[i] = mult
+	# the sim clamps each setting to its range: a slider stop past it changes nothing
+	ElementsSim.set_planet(PackedFloat64Array(m))
+	var now: PackedFloat64Array = ElementsSim.planet()
+	if now == was:
+		planet_panel.refresh()
+		return true
+	if campaign:
+		campaign.set_planet(Array(now))
+	replant = 0.6
+	return true
+
 func _process(delta: float) -> void:
+	if replant > 0.0:
+		replant -= delta
+		if replant <= 0.0:
+			rebuild_world()
+			# this beach is now built from the new sky: no second rebuild on the next visit
+			if campaign:
+				set_meta("built", campaign.recipe_version())
+			planet_panel.refresh()
 	if speed() > 0:
 		sim.step(speed())
 	_refresh()
@@ -273,6 +325,18 @@ func _unhandled_input(e: InputEvent) -> void:
 			KEY_R:
 				sim.reset(randi() % 100000, sim.grid_size().x, sim.grid_size().y)
 				mm.instance_count = sim.atom_count()
+			KEY_L:
+				if not e.echo:
+					planet_panel.visible = not planet_panel.visible
+					planet_panel.refresh()
 
 func warm(n: int) -> void:
 	sim.step(n)
+
+## The recipe changed: a new beach of atoms in the new mix.
+func rebuild_world() -> bool:
+	selected = Vector2i(-1, -1)
+	replant = -1.0
+	sim.reset(1, sim.grid_size().x, sim.grid_size().y)
+	mm.instance_count = sim.atom_count()
+	return true

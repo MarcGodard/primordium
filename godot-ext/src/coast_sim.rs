@@ -1,7 +1,6 @@
 //! Scale-4 bridge: a coastline of beaches. Sites run north to south; each is a scale-3 world.
 use godot::prelude::*;
 use primordium_core::coast::{Coast, CoastParams};
-use primordium_core::cosmos::CosmosParams;
 use primordium_core::hybrid::Mode;
 use primordium_core::surrogate::RateTable;
 use std::collections::VecDeque;
@@ -45,7 +44,7 @@ impl CoastSim {
             Some({
                 let mut cp = CoastParams { auto: true, ..Default::default() };
                 crate::elements_sim::recipe().apply_coast(&mut cp);
-                Coast::new(cp, CosmosParams { seed: seed as u64, ..Default::default() }, rates, seed as u64)
+                Coast::new(cp, crate::elements_sim::cosmos(seed as u64), rates, seed as u64)
             });
         self.history.clear();
         true

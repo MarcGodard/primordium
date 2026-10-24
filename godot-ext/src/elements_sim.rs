@@ -12,6 +12,28 @@ pub fn recipe() -> Recipe {
     Recipe::new(&*RECIPE.read().unwrap())
 }
 
+/// Your sun and moons, as multipliers on the default sky: orbit radius, axial tilt, tide
+/// strength, star flares. Set at the chemistry scale; every scale's sky is built from it.
+static PLANET: RwLock<[f64; 4]> = RwLock::new([1.0; 4]);
+
+/// The sky every sim samples, for a run seeded `seed`.
+pub fn cosmos(seed: u64) -> primordium_core::cosmos::CosmosParams {
+    let m = *PLANET.read().unwrap();
+    let d = primordium_core::cosmos::CosmosParams::default();
+    primordium_core::cosmos::CosmosParams {
+        seed,
+        orbit: d.orbit * m[0],
+        obliquity: d.obliquity * m[1],
+        tide_amps: d.tide_amps.map(|a| a * m[2]),
+        flare_rate_max: d.flare_rate_max * m[3],
+        ..d
+    }
+}
+
+/// Allowed range per planet multiplier: a closer or farther orbit than this boils or freezes
+/// the beach outside anything the learned tables have seen.
+const PLANET_RANGE: [(f64, f64); 4] = [(0.85, 1.2), (0.1, 2.0), (0.25, 3.0), (0.1, 4.0)];
+
 #[derive(GodotClass)]
 #[class(base=Node, init)]
 pub struct ElementsSim {
@@ -90,6 +112,20 @@ impl ElementsSim {
         *RECIPE.write().unwrap() = r.mult;
     }
 
+    /// Set your sun and moons (orbit, tilt, tides, flares multipliers; see `cosmos`). Scales
+    /// started from now on use it.
+    #[func]
+    fn set_planet(mult: PackedFloat64Array) {
+        let v = mult.as_slice();
+        let m: [f64; 4] = std::array::from_fn(|i| v.get(i).copied().unwrap_or(1.0).clamp(PLANET_RANGE[i].0, PLANET_RANGE[i].1));
+        *PLANET.write().unwrap() = m;
+    }
+
+    #[func]
+    fn planet() -> PackedFloat64Array {
+        PackedFloat64Array::from(PLANET.read().unwrap().as_slice())
+    }
+
     #[func]
     fn recipe() -> PackedFloat64Array {
         PackedFloat64Array::from(recipe().mult.as_slice())
@@ -103,6 +139,12 @@ impl ElementsSim {
         let mut v: Vec<f64> = r.sea().to_vec();
         v.push(r.backbone());
         PackedFloat64Array::from(v.as_slice())
+    }
+
+    /// Z of the food letter: the one every cell eats (the genetic code's food letter).
+    #[func]
+    fn food_z() -> i64 {
+        primordium_core::polymer::LETTERS[primordium_core::cell::genetic_code().food as usize] as i64
     }
 
     /// Each element's share of all atoms under the recipe (index Z - 1).
