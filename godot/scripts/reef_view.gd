@@ -100,8 +100,8 @@ var expedition := 0
 var unplaced := []
 var save_timer := 0.0
 var restored := false
-const RATES := "res://../data/rates0.json"
-const SEED := "res://../data/reef_seed.json"
+var RATES: String = "res://../" + ElementsSim.data_dir() + "rates0.json"
+var SEED: String = "res://../" + ElementsSim.data_dir() + "reef_seed.json"
 ## Spores per release: one alone usually dies young.
 const RELEASE_SPORES := 12
 ## Fast-forward: T runs this many days on a worker thread, Shift+T five times as many.
@@ -910,7 +910,7 @@ func goal_progress() -> Dictionary:
 
 func hud_text() -> String:
 	if not ok:
-		return "[color=#f88]data/reef_seed.json or rates0.json missing: run primordium reef-seed[/color]"
+		return "[color=#f88]%sreef_seed.json or rates0.json missing: run primordium reef-seed[/color]" % ElementsSim.data_dir()
 	if stats.is_empty():
 		return ""
 	var t := "[b]%s[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\ncrawling: %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [

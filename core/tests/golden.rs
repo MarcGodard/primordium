@@ -2,6 +2,8 @@
 //! Guards refactors that must not change behaviour (docs/bigger-table.md: the [2, 6] world stays
 //! bit for bit). A change that is meant to alter trajectories updates the pins on purpose:
 //! `GOLDEN_PRINT=1 cargo test --release --test golden -- --nocapture` prints the new values.
+// The pins are trajectories of the [2, 6] world; another table has its own (none yet).
+#![cfg(not(feature = "shells-266"))]
 use primordium_core::cell::{CellParams, World};
 use primordium_core::chem::{ChemParams, ChemWorld};
 use primordium_core::coast::{Coast, CoastParams};
@@ -25,7 +27,7 @@ fn check(name: &str, got: u64, want: u64) {
 }
 
 fn rates() -> RateTable {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/");
+    let dir = format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), primordium_core::element::data_dir());
     serde_json::from_str(&std::fs::read_to_string(format!("{dir}rates0.json")).unwrap()).unwrap()
 }
 
@@ -78,7 +80,7 @@ fn coast_golden() {
 
 #[test]
 fn reef_golden() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/");
+    let dir = format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), primordium_core::element::data_dir());
     let seed: ReefSeed = serde_json::from_str(&std::fs::read_to_string(format!("{dir}reef_seed.json")).unwrap()).unwrap();
     let rp = ReefParams { width: 10, depth: 10, founders: 60, ..Default::default() };
     let mut r = Reef::new(rp, CosmosParams::default(), rates(), &seed, 2);
@@ -86,5 +88,5 @@ fn reef_golden() {
         r.step(0.02);
     }
     let bodies: Vec<String> = r.organisms.iter().map(|o| format!("{} {:?} {:?}", o.id, o.genome, o.cells.iter().map(|c| (c.pos, c.mass)).collect::<Vec<_>>())).collect();
-    check("reef", fp(&bodies.join("|")), 0x476f34844fbca587);
+    check("reef", fp(&bodies.join("|")), 0xcfece02aa680d3ad);
 }

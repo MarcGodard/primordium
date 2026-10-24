@@ -3,6 +3,9 @@ name = "primordium"
 edition.workspace = true
 version.workspace = true
 
+[features]
+shells-266 = ["primordium-core/shells-266"]
+
 [dependencies]
 primordium-core = { path = "../core" }
 serde_json = "1"

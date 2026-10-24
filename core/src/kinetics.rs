@@ -59,11 +59,19 @@ pub fn new_table() -> RateTable {
     )
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BandState {
     pub cells: f64,
     pub free: [i64; NB],
+    #[serde(with = "crate::arrays")]
     pub bonds: [i64; N_PAIRS],
+}
+
+// by hand: arrays past 32 have no derived Default
+impl Default for BandState {
+    fn default() -> Self {
+        Self { cells: 0.0, free: [0; NB], bonds: [0; N_PAIRS] }
+    }
 }
 
 impl BandState {
@@ -183,7 +191,8 @@ mod tests {
         for ch in 0..N_CHANNELS {
             t.record(&x, ch, 1.0, 10.0);
         }
-        let mut s = BandState { cells: 1000.0, free: [100, 20, 30, 80, 60, 40], bonds: [0; N_PAIRS] };
+        let free = std::array::from_fn(|i| [100, 20, 30, 80, 60, 40][i % 6]);
+        let mut s = BandState { cells: 1000.0, free, bonds: [0; N_PAIRS] };
         let slots = |s: &BandState| s.free.iter().sum::<i64>() + 2 * s.total_bonds();
         let before = slots(&s);
         let mut rng = Rng::new(3);

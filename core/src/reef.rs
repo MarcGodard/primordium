@@ -675,12 +675,16 @@ impl Reef {
             }
             let synth = o.cells.iter().map(|c| c.expr[1] as f64).sum::<f64>() / o.cells.len() as f64;
             let per = self.rp.uptake * faces / self.rp.tile_cells * dt;
-            let cap = self.rp.store_cap * o.cells.len() as f64;
+            // room for one genome copy on top of the working store: without it a body whose
+            // genome needs more of a letter than the cap could never divide (long genomes, and
+            // every genome of a bigger table, where codons are longer)
+            let need = counts(&o.genome);
+            let cap: [f64; N_LETTERS] = std::array::from_fn(|l| self.rp.store_cap * o.cells.len() as f64 + need[l] as f64);
             let p = &mut self.tiles[t];
             let o = &mut self.organisms[k];
             for l in 0..N_LETTERS {
                 // a saturated body stops taking a letter in: no hoarding what it cannot use
-                let per = per * (1.0 - o.store[l] as f64 / cap).max(0.0);
+                let per = per * (1.0 - o.store[l] as f64 / cap[l]).max(0.0);
                 let n = round_flux(per * p.free[l] as f64, rng).clamp(0, p.free[l]);
                 p.free[l] -= n;
                 o.store[l] += n;
@@ -1290,7 +1294,7 @@ mod tests {
     use super::*;
 
     fn load() -> (RateTable, ReefSeed) {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/");
+        let dir = format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), crate::element::data_dir());
         let rates = serde_json::from_str(&std::fs::read_to_string(format!("{dir}rates0.json")).unwrap()).unwrap();
         let seed = serde_json::from_str(&std::fs::read_to_string(format!("{dir}reef_seed.json")).unwrap()).unwrap();
         (rates, seed)

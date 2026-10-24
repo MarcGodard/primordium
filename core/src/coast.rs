@@ -284,7 +284,7 @@ mod tests {
     use super::*;
 
     fn rates() -> RateTable {
-        serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/rates0.json")).unwrap()).unwrap()
+        serde_json::from_str(&std::fs::read_to_string(format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), crate::element::data_file("rates0.json"))).unwrap()).unwrap()
     }
 
     #[test]

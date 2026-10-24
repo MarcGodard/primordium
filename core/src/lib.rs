@@ -1,3 +1,4 @@
+pub mod arrays;
 pub mod cell;
 pub mod chem;
 pub mod coast;

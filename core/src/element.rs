@@ -11,9 +11,22 @@ use serde::Serialize;
 /// Shell capacities: the one number set that defines the periodic table. Adding a shell (say
 /// `[2, 6, 6]`) grows the table; element count, bondable set, backbone atom and side-group
 /// letters below all follow from it at compile time. `primordium elements --shells=2,6,6`
-/// previews a table before switching. Scales 1+ still assume the 5-letter alphabet this
-/// table gives (see the check in `polymer.rs`).
+/// previews a table before switching; the `shells-266` feature builds the whole sim on that
+/// table (data in its own folder, `data_dir`).
+#[cfg(not(feature = "shells-266"))]
 pub const SHELLS: [u8; 2] = [2, 6];
+#[cfg(feature = "shells-266")]
+pub const SHELLS: [u8; 3] = [2, 6, 6];
+
+/// Where this table's learned data lives, relative to the repo root: `data/` for [2, 6], a
+/// folder per table otherwise (`data/shells-2-6-6/`), so tables never read each other's files.
+pub fn data_dir() -> String {
+    if SHELLS[..] == [2, 6] { "data/".into() } else { format!("data/shells-{}/", SHELLS.map(|s| s.to_string()).join("-")) }
+}
+
+pub fn data_file(name: &str) -> String {
+    data_dir() + name
+}
 pub const N_ELEMENTS: usize = shell_total(&SHELLS);
 pub const NAMES: [&str; N_ELEMENTS] = names();
 
@@ -253,6 +266,8 @@ mod tests {
         assert_eq!(v, vec![1, 0, 1, 2, 3, 2, 1, 0]);
     }
 
+    // pins below are values of the [2, 6] world
+    #[cfg(not(feature = "shells-266"))]
     #[test]
     fn derived_constants_match_the_shell_rule() {
         assert_eq!(N_ELEMENTS, 8);
@@ -265,6 +280,8 @@ mod tests {
         assert_eq!(v, vec![1, 2, 3, 2, 1, 0]);
     }
 
+    // pins below are values of the [2, 6] world
+    #[cfg(not(feature = "shells-266"))]
     #[test]
     fn universe_reads_our_table_as_the_sim_does() {
         let u = Universe::new(&SHELLS);

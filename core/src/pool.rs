@@ -54,7 +54,7 @@ impl Default for PoolParams {
     fn default() -> Self {
         Self {
             elevation: 0.56,
-            monomers: [1500, 1500, 900, 900, 1500],
+            monomers: per_letter(1500, 900),
             cells: 20000.0,
             sweeps_per_day: 400.0,
             copy_rate: 6.0,
@@ -62,7 +62,7 @@ impl Default for PoolParams {
             fold_protect: 0.7,
             max_len: 40,
             fold_below: 0.9,
-            raw: [600, 600, 400, 400, 600],
+            raw: per_letter(600, 400),
             raw_ka: 2600,
             id_base: 0,
         }
@@ -779,4 +779,10 @@ mod tests {
         let error = s.mutations as f64 / s.copied_letters as f64;
         assert!(error < 0.6, "copy error {error}");
     }
+}
+
+/// Per-letter amounts by valence: one for single-bond letters, one for the rest (in [2, 6]: Hy,
+/// Li, Fl single; Bo, Ox double).
+fn per_letter(single: i64, other: i64) -> [i64; N_LETTERS] {
+    std::array::from_fn(|k| if crate::element::element(LETTERS[k]).valence == 1 { single } else { other })
 }

@@ -164,7 +164,7 @@ func _process(_d: float) -> void:
 	if not h.is_empty():
 		t += "\n[b]Resolution[/b] %s\n" % ("auto (A)" if view.auto else "manual (A)")
 		if not h.has_rates:
-			t += "[color=#f88]no data/rates0.json: run primordium train[/color]\n"
+			t += "[color=#f88]no %srates0.json: run primordium train[/color]\n" % ElementsSim.data_dir()
 		t += "detail atoms %d   lifts %d   restricts %d\n" % [h.active_atoms, h.lifts, h.restricts]
 		t += "[b]Discoveries[/b] %d\n" % h.discoveries
 		for d in view.discoveries:

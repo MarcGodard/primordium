@@ -760,6 +760,8 @@ pub struct Census {
 #[cfg(test)]
 mod tests {
     /// Derived formula order reproduces the hand-written one for [2, 6]: Ka Bo Ox Li Fl Hy Ne Ar.
+    // pins below are values of the [2, 6] world
+    #[cfg(not(feature = "shells-266"))]
     #[test]
     fn formula_order_is_hill_like() {
         assert_eq!(formula(&[1; N_ELEMENTS]), "KaBoOxLiFlHyNeAr");

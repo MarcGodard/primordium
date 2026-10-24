@@ -1,6 +1,7 @@
 //! Headless runner. `primordium chem --days=4 --seed=1 --every=0.25`
 use primordium_core::chem::{ChemParams, ChemWorld};
 use primordium_core::cosmos::CosmosParams;
+use primordium_core::element::data_file;
 use std::time::Instant;
 
 fn arg<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> T {
@@ -121,8 +122,8 @@ fn train(args: &[String]) {
     let table = hybrid::train(&mut w, days, |f| eprint!("\rtraining {:.0}%", f * 100.0));
     eprintln!();
     println!("trained {days} days in {:.1}s, bin coverage {:.1}%", start.elapsed().as_secs_f64(), table.coverage() * 100.0);
-    std::fs::create_dir_all("data").unwrap();
-    std::fs::write("data/rates0.json", serde_json::to_string(&table).unwrap()).unwrap();
+    std::fs::create_dir_all(primordium_core::element::data_dir()).unwrap();
+    std::fs::write(data_file("rates0.json"), serde_json::to_string(&table).unwrap()).unwrap();
 }
 
 /// Shadow mode: detailed vs all-surrogate copies of one world, compared on band bond counts.
@@ -132,7 +133,7 @@ fn shadow(args: &[String]) {
     let days: f64 = arg(args, "days", 4.0);
     let start_day: f64 = arg(args, "start", 1.0);
     let seed: u64 = arg(args, "seed", 1);
-    let table: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let table: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
     let mut a = ChemWorld::new(ChemParams::default(), CosmosParams { seed, ..Default::default() }, seed);
     while a.t_days < start_day {
         a.sweep();
@@ -219,7 +220,7 @@ fn pool(args: &[String]) {
     let seed: u64 = arg(args, "seed", 1);
     let dt: f64 = arg(args, "dt", 0.01);
     let every: f64 = arg(args, "every", 2.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
     let mut p = Pool::new(PoolParams::default(), Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
     let start = Instant::now();
     let steps = (days / dt) as u64;
@@ -375,7 +376,7 @@ fn pond(args: &[String]) {
     let dt: f64 = arg(args, "dt", 0.01);
     let every: f64 = arg(args, "every", 5.0);
     let auto: bool = arg(args, "auto", false);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
     let mut p =
         Pond::new(PoolParams::default(), PondParams { auto, ..Default::default() }, Cosmos::new(CosmosParams { seed, ..Default::default() }), rates, seed);
     let start = Instant::now();
@@ -430,7 +431,7 @@ fn pond_probe(args: &[String]) {
     use primordium_core::protocell::{Pond, PondParams};
     use primordium_core::surrogate::RateTable;
     let days: f64 = arg(args, "days", 20.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).unwrap()).unwrap();
     let mut p = Pond::new(PoolParams::default(), PondParams::default(), Cosmos::new(CosmosParams::default()), rates, 1);
     for _ in 0..(days / 0.01) as u64 {
         p.step(0.01);
@@ -488,7 +489,7 @@ fn selection(args: &[String]) {
     use std::collections::HashMap;
     let warm: f64 = arg(args, "warm", 30.0);
     let window: f64 = arg(args, "window", 4.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).unwrap()).unwrap();
     let mut p = Pond::new(PoolParams::default(), PondParams::default(), Cosmos::new(CosmosParams::default()), rates, 1);
     while p.t_days < warm {
         p.step(0.01);
@@ -540,7 +541,7 @@ fn pond_shadow(args: &[String]) {
     use primordium_core::surrogate::{RateTable, agreement};
     let warm: f64 = arg(args, "warm", 30.0);
     let days: f64 = arg(args, "days", 20.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).unwrap()).unwrap();
     let mut a = Pond::new(PoolParams::default(), PondParams::default(), Cosmos::new(CosmosParams::default()), rates, 1);
     while a.t_days < warm {
         a.step(0.01);
@@ -617,7 +618,7 @@ fn cells(args: &[String]) {
     let every: f64 = arg(args, "every", 5.0);
     let auto: bool = arg(args, "auto", true);
     let founders: usize = arg(args, "founders", 200);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).unwrap()).unwrap();
     let mut w = World::new(
         PoolParams::default(),
         CellParams { auto, ..Default::default() },
@@ -687,7 +688,7 @@ fn cell_selection(args: &[String]) {
     use std::collections::HashMap;
     let warm: f64 = arg(args, "warm", 60.0);
     let window: f64 = arg(args, "window", 10.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).unwrap()).unwrap();
     let mut w = World::new(PoolParams::default(), CellParams { auto: false, ..Default::default() }, Cosmos::new(CosmosParams::default()), rates, 1, 200);
     while w.t_days < warm {
         w.step(0.02);
@@ -745,7 +746,7 @@ fn cell_shadow(args: &[String]) {
     use primordium_core::surrogate::{RateTable, agreement};
     let warm: f64 = arg(args, "warm", 40.0);
     let days: f64 = arg(args, "days", 30.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").unwrap()).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).unwrap()).unwrap();
     let mut a = World::new(PoolParams::default(), CellParams { auto: false, ..Default::default() }, Cosmos::new(CosmosParams::default()), rates, 1, 200);
     while a.t_days < warm {
         a.step(0.02);
@@ -819,7 +820,7 @@ fn coast(args: &[String]) {
     let every: f64 = arg(args, "every", 50.0);
     let sites: usize = arg(args, "sites", 12);
     let seed: u64 = arg(args, "seed", 1);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
     let mut c = Coast::new(CoastParams { sites, ..Default::default() }, CosmosParams { seed, ..Default::default() }, rates, seed);
     let lineage_after: f64 = arg(args, "lineage-after", f64::INFINITY);
     let start = Instant::now();
@@ -907,7 +908,7 @@ fn coast_shadow(args: &[String]) {
     let warm: f64 = arg(args, "warm", 60.0);
     let days: f64 = arg(args, "days", 40.0);
     let sites: usize = arg(args, "sites", 12);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
     let mut a = Coast::new(CoastParams { sites, ..Default::default() }, CosmosParams::default(), rates, 1);
     let t0 = Instant::now();
     while a.t_days < warm {
@@ -1095,8 +1096,8 @@ fn reef_seed(args: &[String]) {
     let days: f64 = arg(args, "days", 200.0);
     let seed: u64 = arg(args, "seed", 1);
     let n: usize = arg(args, "founders", 96);
-    let out: String = arg(args, "out", "data/reef_seed.json".to_string());
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
+    let out: String = arg(args, "out", data_file("reef_seed.json"));
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
     let mut c = Coast::new(CoastParams::default(), CosmosParams { seed, ..Default::default() }, rates, seed);
     let start = Instant::now();
     while c.t_days < days {
@@ -1140,8 +1141,8 @@ fn reef(args: &[String]) {
     let days: f64 = arg(args, "days", 60.0);
     let every: f64 = arg(args, "every", 5.0);
     let seed: u64 = arg(args, "seed", 1);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
-    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(data_file("reef_seed.json")).expect("run reef-seed first")).unwrap();
     let start = Instant::now();
     let rp = ReefParams { graze_min: arg(args, "graze-min", ReefParams::default().graze_min), ..Default::default() };
     let mut r = Reef::new(rp, CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
@@ -1265,8 +1266,8 @@ fn reef_shadow(args: &[String]) {
     use primordium_core::surrogate::{RateTable, agreement};
     let warm: f64 = arg(args, "warm", 200.0);
     let days: f64 = arg(args, "days", 60.0);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
-    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(data_file("reef_seed.json")).expect("run reef-seed first")).unwrap();
     let start = Instant::now();
     let mut a = Reef::new(ReefParams::default(), CosmosParams::default(), rates, &rs, 1);
     while a.t_days < warm {
@@ -1301,8 +1302,8 @@ fn reef_goal(args: &[String]) {
     use primordium_core::surrogate::RateTable;
     let days: f64 = arg(args, "days", 2000.0);
     let seed: u64 = arg(args, "seed", 1);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
-    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(data_file("reef_seed.json")).expect("run reef-seed first")).unwrap();
     let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates, &rs, seed);
     let goal = CreatureGoal::default();
     let mut tr = Tracker::default();
@@ -1362,11 +1363,11 @@ fn garden(args: &[String]) {
     let days: f64 = arg(args, "days", 1000.0);
     let seed: u64 = arg(args, "seed", 3);
     let keep: usize = arg(args, "keep", 6);
-    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string("data/rates0.json").expect("run train first")).unwrap();
-    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string("data/reef_seed.json").expect("run reef-seed first")).unwrap();
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(data_file("reef_seed.json")).expect("run reef-seed first")).unwrap();
     let goal = CreatureGoal::default();
     let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates.clone(), &rs, seed);
-    let mut kept: Vec<(u32, Vec<u8>, [i64; 5], usize, usize)> = Vec::new();
+    let mut kept: Vec<(u32, Vec<u8>, [i64; primordium_core::polymer::N_LETTERS], usize, usize)> = Vec::new();
     let mut noon = 0.5;
     while kept.len() < keep && r.t_days < 3000.0 {
         r.step(0.02);

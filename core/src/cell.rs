@@ -1741,6 +1741,8 @@ impl World {
 mod tests {
     /// The derived code is the one the [2, 6] world was written with: codons 0-4 the letters in
     /// order, 5 a synonym for Li (the food letter), 6-7 stops; Li and Fl the heritable pair.
+    // pins below are values of the [2, 6] world
+    #[cfg(not(feature = "shells-266"))]
     #[test]
     fn derived_code_matches_the_original() {
         let gc = genetic_code();
@@ -1754,9 +1756,11 @@ mod tests {
     use crate::cosmos::CosmosParams;
 
     fn rates() -> RateTable {
-        serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../data/rates0.json")).unwrap()).unwrap()
+        serde_json::from_str(&std::fs::read_to_string(format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), crate::element::data_file("rates0.json"))).unwrap()).unwrap()
     }
 
+    // pins below are values of the [2, 6] world
+    #[cfg(not(feature = "shells-266"))]
     #[test]
     fn code_is_heritable_and_genes_parse() {
         let ctx = Ctx::new(PoolParams::default(), crate::kinetics::new_table(), 1);

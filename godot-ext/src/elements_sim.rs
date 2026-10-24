@@ -95,6 +95,12 @@ impl ElementsSim {
         GString::from(&(0..primordium_core::polymer::N_LETTERS as u8).map(primordium_core::polymer::letter_char).collect::<String>())
     }
 
+    /// This table's data folder relative to the repo root ("data/" for [2, 6]).
+    #[func]
+    fn data_dir() -> GString {
+        GString::from(&primordium_core::element::data_dir())
+    }
+
     /// Elements in this world's table.
     #[func]
     fn n_elements() -> i64 {

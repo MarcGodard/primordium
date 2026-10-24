@@ -49,7 +49,7 @@ func _ready() -> void:
 	palette = load("res://scripts/chem_view.gd").palette()
 	sim = PondSim.new()
 	add_child(sim)
-	ok = sim.start(ProjectSettings.globalize_path("res://../data/rates0.json"), 1, auto)
+	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1, auto)
 	var area: Vector2 = sim.area()
 	world = Node2D.new()
 	world.scale = Vector2(CELL, CELL)
@@ -188,7 +188,7 @@ func goal_progress() -> Dictionary:
 
 func hud_text() -> String:
 	if not ok:
-		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"
+		return "[color=#f88]%srates0.json missing: run primordium train[/color]" % ElementsSim.data_dir()
 	var s := stats
 	if s.is_empty():
 		return ""

@@ -55,7 +55,7 @@ var beach3: Node3D
 func _ready() -> void:
 	sim = CellSim.new()
 	add_child(sim)
-	ok = sim.start(ProjectSettings.globalize_path("res://../data/rates0.json"), 1, auto)
+	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1, auto)
 	world = Node2D.new()
 	world.scale = Vector2(CELL, CELL)
 	add_child(world)
@@ -283,7 +283,7 @@ func goal_progress() -> Dictionary:
 
 func hud_text() -> String:
 	if not ok:
-		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"
+		return "[color=#f88]%srates0.json missing: run primordium train[/color]" % ElementsSim.data_dir()
 	var s := stats
 	if s.is_empty():
 		return ""

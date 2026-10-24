@@ -113,7 +113,7 @@ func _ready() -> void:
 	overlay.draw.connect(_draw_overlay)
 	layer.add_child(overlay)
 
-	var rates := ProjectSettings.globalize_path("res://../data/rates0.json")
+	var rates := ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json")
 	if sim.load_rates(rates):
 		sim.set_auto(auto)
 	_refresh()

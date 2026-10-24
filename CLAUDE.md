@@ -22,6 +22,10 @@ Multiscale artificial-life sim: invented chemistry up through the cell, each sca
 - Viewer: `cargo build --release -p primordium-godot` then `godot --path godot`. The `.gdextension` loads `target/release`.
 - Captures (window opens briefly, exits itself): `godot --path godot --resolution 1600x960 -- --shot=../out/x.png --warm=500 --frames=15 [--zoom=Z --focus=X,Y]`. Output goes in `out/` (ignored). Starts in the hub; `--scale=K` opens view K first (0 elements .. 6 reef, before `--warm`), `--warp=K` plays the transition (frames of the warp only: content flags still act on the hub's first view), `--explain=1` opens the guide, `--codex=1` the codex, `--explore=1` opens every world, `--pick=1`, `--keep=1` (reef: keep the picked body), `--run=N` (reef: restart as run N), `--hunt=STEPS` (reef: run until a creature exists and select it), `--ff=DAYS` (reef: fast-forward and show the report), `--levers=1` or `--levers=waves:0.25` (garden: lever panel), `--welcome=1` and `--graduate=K` (show those cards), `--expedition=1` (reef: today's expedition), `--skins=1` (reef: skins on every body) and `--lineage=1` are view-specific. Flags act in order, so `--scale=6 --warm=N --pick=1 --keep=1 --scale=7 --warm=M` tests the garden. Captures never write the campaign save.
 
+## Other periodic tables
+
+- `--features shells-266` (on `primordium`, `primordium-godot`) builds the 14-element world. Use its own target dir (`CARGO_TARGET_DIR=target/t266`) so it never overwrites the default build the viewer loads. Its data lives in `data/shells-2-6-6/` (`element::data_dir`); tests that pin [2, 6] values and `core/tests/golden.rs` run on the default build only.
+
 ## Progress
 
 `PROGRESS.md` is the source of truth for milestones done vs open. Update it when landing a milestone.

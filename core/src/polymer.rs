@@ -35,10 +35,7 @@ const fn letter_names() -> [&'static str; N_LETTERS] {
     out
 }
 
-// Scales 1-5 are written for this table's 5 letters: the genetic code (`cell::CODE`, 3-bit
-// codons onto 5 letters), the Li/Fl heritable pair (`cell.rs`, `lineage.rs`) and per-letter
-// tables. A bigger table compiles up to here; generalising those is the next step.
-const _: () = assert!(N_LETTERS == 5, "scales 1+ assume 5 side-group letters: generalise cell::CODE and the Li/Fl roles first");
+// Scales 1+ need a binary heritable alphabet: `cell::canonical` (via `genetic_code`) asserts it.
 
 pub type Seq = Vec<u8>;
 

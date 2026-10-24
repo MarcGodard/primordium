@@ -55,7 +55,7 @@ var n_sites := 0
 func _ready() -> void:
 	sim = CoastSim.new()
 	add_child(sim)
-	ok = sim.start(ProjectSettings.globalize_path("res://../data/rates0.json"), 1)
+	ok = sim.start(ProjectSettings.globalize_path("res://../" + ElementsSim.data_dir() + "rates0.json"), 1)
 	n_sites = sim.site_count()
 	# wide screens (ultrawide) take the coast in two columns, north half on the left
 	var vs0 := get_viewport_rect().size
@@ -307,7 +307,7 @@ func goal_progress() -> Dictionary:
 
 func hud_text() -> String:
 	if not ok:
-		return "[color=#f88]data/rates0.json missing: run primordium train[/color]"
+		return "[color=#f88]%srates0.json missing: run primordium train[/color]" % ElementsSim.data_dir()
 	if stats.is_empty():
 		return ""
 	var t := "[b]Coast[/b] %d sites, north at top\n" % n_sites + "[color=#9ab]Earth-sized planet (radius %.0f km): sites %.0f km apart, current %.1f m/s[/color]\n" % [stats.radius_km, stats.spacing_km, stats.current_m_s] + "cells %d   migrations %d\n[b]Resolution[/b] %s   lineage sites %d   lifts %d\n" % [
