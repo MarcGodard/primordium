@@ -92,3 +92,22 @@ The project's own rule applies: a scale above runs as the learned behaviour of t
 4. Recipe and sky readouts: each scale shows its numbers against the default world.
 5. Archipelago at world size with surrogate islands.
 6. Run summaries and challenge recipes.
+
+## Status, 2026-10-24
+
+Done since this review:
+
+- **Difficulty is the periodic table.** Normal (2, 6), Hard (2, 6, 6), Very hard (2, 6, 6, 6) and Octets (2, 8, 8, each link a letter plus an Hy cap), switched in game; each keeps its own campaign.
+- **Recipe readout.** The elements screen shows each element's real share of atoms and what life's letters get against the usual sea (the multipliers are renormalised).
+- **Failure at the lower scales.** Polymers, protocells and cells have day budgets (30, 45, 200 sim days, about twice the default world). Out of time, a card names the likely cause from the recipe and offers Try again or Back to Elements.
+- **Carry-up coast to reef and archipelago** (the player's coast survivors found them).
+- **Chemistry in 3D.** Chains fold on the cubic lattice; traits combine as chemistry does (catalysts add rate boosts, cover overlaps), shade follows which genes are on. Reef creatures arrive on day 71-120 in all test runs.
+- **Pacing and visuals.** Strobe smoothing, a powers-of-ten zoom between scales, on-screen buttons for every key.
+
+Still open, in order:
+
+1. Budgets and failure for the coast, reef and archipelago (the reef: founders too weak to make a creature, go back to the coast).
+2. Per-table calibration: Hard is not yet harder than Normal above the cells; difficulty should rise with the table at every scale.
+3. Carry-up further down (cells to coast, protocells to cells, polymers to protocells, chemistry to polymers).
+4. Archipelago at world size with surrogate islands.
+5. Run summaries and challenge recipes.
