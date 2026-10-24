@@ -257,6 +257,18 @@ func _emblem(k: int) -> Node3D:
 	lbl.outline_size = 8
 	lbl.outline_modulate = Color(0, 0, 0, 0.8)
 	root.add_child(lbl)
+	# a locked world shows only this in its bubble
+	var q := Label3D.new()
+	q.text = "?"
+	q.name = "Locked"
+	q.font_size = 160
+	q.pixel_size = 0.009
+	q.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	q.modulate = Color(0.75, 0.8, 0.9, 0.8)
+	q.outline_size = 10
+	q.outline_modulate = Color(0, 0, 0, 0.6)
+	q.visible = false
+	root.add_child(q)
 	return root
 
 func _build_overlay() -> void:
@@ -351,8 +363,9 @@ func _process(delta: float) -> void:
 		orbs[k].scale = orbs[k].scale.lerp(Vector3.ONE * target_s, min(1.0, delta * 8.0))
 		var hm: StandardMaterial3D = orbs[k].get_node("Halo").material_override
 		var open: bool = campaign == null or campaign.is_open(k)
-		hm.albedo_color.a = (0.2 if k == hovered else 0.07) if open else 0.02
-		body.visible = open or fmod(t + k, 3.0) < 0.12
+		hm.albedo_color.a = (0.2 if k == hovered else 0.07) if open else (0.08 if k == hovered else 0.04)
+		body.visible = open
+		orbs[k].get_node("Locked").visible = not open
 		var lbl: Label3D = orbs[k].get_node("Label")
 		lbl.modulate = Color(SCALES[k][2], 0.95) if open else Color(0.5, 0.52, 0.58, 0.7)
 		lbl.text = label(k) if open else label(k) + "  (locked)"
