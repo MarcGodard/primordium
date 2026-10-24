@@ -1,3 +1,4 @@
+pub mod archipelago;
 pub mod arrays;
 pub mod cell;
 pub mod chem;
@@ -12,6 +13,7 @@ pub mod lineage;
 pub mod polymer;
 pub mod pool;
 pub mod protocell;
+pub mod recipe;
 pub mod reef;
 pub mod rng;
 pub mod surrogate;

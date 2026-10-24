@@ -78,7 +78,9 @@ impl PoolSim {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
         let cosmos = Cosmos::new(CosmosParams { seed: seed as u64, ..Default::default() });
-        self.pool = Some(Pool::new(PoolParams::default(), cosmos, rates, seed as u64));
+        let mut pp = PoolParams::default();
+        crate::elements_sim::recipe().apply_pool(&mut pp);
+        self.pool = Some(Pool::new(pp, cosmos, rates, seed as u64));
         self.layout.clear();
         true
     }

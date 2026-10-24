@@ -42,7 +42,7 @@ fn seam(ay: u16, by: u16) -> bool {
 impl ChemSim {
     #[func]
     fn reset(&mut self, seed: i64, width: i64, height: i64) {
-        let p = ChemParams { width: width as u16, height: height as u16, ..Default::default() };
+        let p = ChemParams { width: width as u16, height: height as u16, composition: crate::elements_sim::recipe().composition(), ..Default::default() };
         self.world = ChemWorld::new(p, CosmosParams { seed: seed as u64, ..Default::default() }, seed as u64);
     }
 

@@ -4,6 +4,7 @@
 use crate::cell_sim::role;
 use godot::prelude::*;
 use primordium_core::cell::Signal;
+use primordium_core::archipelago::{ArchParams, Archipelago, default_islands};
 use primordium_core::cosmos::CosmosParams;
 use primordium_core::goal::{CreatureGoal, Tracker, jobs};
 use primordium_core::polymer::{N_LETTERS, seq_string};
@@ -110,9 +111,48 @@ impl Snapshot {
     }
 }
 
+/// One reef, or an archipelago of them (the view shows one island at a time: `focus`).
+enum Shore {
+    One(Reef),
+    Many(Archipelago),
+}
+
+impl Shore {
+    fn reef(&self, k: usize) -> &Reef {
+        match self {
+            Shore::One(r) => r,
+            Shore::Many(a) => &a.islands[k.min(a.islands.len() - 1)],
+        }
+    }
+
+    fn reef_mut(&mut self, k: usize) -> &mut Reef {
+        match self {
+            Shore::One(r) => r,
+            Shore::Many(a) => {
+                let n = a.islands.len() - 1;
+                &mut a.islands[k.min(n)]
+            }
+        }
+    }
+
+    fn step(&mut self, dt: f64) {
+        match self {
+            Shore::One(r) => r.step(dt),
+            Shore::Many(a) => a.step(dt),
+        }
+    }
+
+    fn matter(&self) -> ([i64; N_LETTERS], i64) {
+        match self {
+            Shore::One(r) => r.matter(),
+            Shore::Many(a) => a.matter(),
+        }
+    }
+}
+
 /// The reef and everything sampled from it, moved to a worker thread while fast-forwarding.
 struct Run {
-    reef: Reef,
+    shore: Shore,
     history: VecDeque<[f32; 11]>,
     tracker: Tracker,
     next_noon: f64,
@@ -137,7 +177,9 @@ struct FastForward {
 #[derive(GodotClass)]
 #[class(base=Node, init)]
 pub struct ReefSim {
-    reef: Option<Reef>,
+    shore: Option<Shore>,
+    /// Island the view shows (archipelago only).
+    focus: usize,
     /// Matter at start, per letter and Ka: the HUD shows any drift from it.
     start: ([i64; N_LETTERS], i64),
     /// Sampled each day: t, cells, bodies, mean body size of multicellular bodies, tallest, then
@@ -153,6 +195,15 @@ pub struct ReefSim {
 }
 
 impl ReefSim {
+    fn r(&self) -> Option<&Reef> {
+        self.shore.as_ref().map(|s| s.reef(self.focus))
+    }
+
+    fn r_mut(&mut self) -> Option<&mut Reef> {
+        let k = self.focus;
+        self.shore.as_mut().map(|s| s.reef_mut(k))
+    }
+
     /// Rock height in world units at lattice point (x, y): elevations interpolated between tile
     /// centres, so the terrain mesh and the cells standing on it agree.
     fn surface(r: &Reef, x: f64, y: f64) -> f64 {
@@ -174,12 +225,12 @@ impl ReefSim {
     }
 
     fn sample(&mut self) {
-        let Some(r) = self.reef.as_ref() else { return };
+        let Some(r) = self.shore.as_ref().map(|s| s.reef(self.focus)) else { return };
         push_history(r, &mut self.history);
     }
 
     fn sample_goal(&mut self) {
-        let Some(r) = self.reef.as_ref() else { return };
+        let Some(r) = self.shore.as_ref().map(|s| s.reef(self.focus)) else { return };
         noon_sample(r, &self.goal, &mut self.tracker, &mut self.next_noon);
     }
 
@@ -192,11 +243,20 @@ impl ReefSim {
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
         let Ok(text) = std::fs::read_to_string(seed_path.to_string()) else { return false };
         let Ok(rs) = serde_json::from_str::<ReefSeed>(&text) else { return false };
-        let d = ReefParams::default();
-        let rp = ReefParams { founders: founders.unwrap_or(d.founders), ..d };
-        let r = Reef::new(rp, CosmosParams { seed: seed as u64, ..Default::default() }, rates, &rs, seed as u64);
-        self.start = r.matter();
-        self.reef = Some(r);
+        let cosmos = CosmosParams { seed: seed as u64, ..Default::default() };
+        let shore = if founders == Some(usize::MAX) {
+            let mut base = ReefParams::default();
+            crate::elements_sim::recipe().apply_reef(&mut base);
+            Shore::Many(Archipelago::new(ArchParams::default(), default_islands(), base, cosmos, rates, &rs, seed as u64))
+        } else {
+            let d = ReefParams::default();
+            let mut rp = ReefParams { founders: founders.unwrap_or(d.founders), ..d };
+            crate::elements_sim::recipe().apply_reef(&mut rp);
+            Shore::One(Reef::new(rp, cosmos, rates, &rs, seed as u64))
+        };
+        self.start = shore.matter();
+        self.shore = Some(shore);
+        self.focus = 0;
         self.history.clear();
         self.tracker = Tracker::default();
         self.next_noon = 0.5;
@@ -221,13 +281,81 @@ impl ReefSim {
     /// spores on the lower shore. Returns its new lineage number, or -1 when refused.
     #[func]
     fn release(&mut self, genome: PackedByteArray, mass: PackedInt64Array, n: i64) -> i64 {
-        let Some(r) = self.reef.as_mut() else { return -1 };
         let mut m = [0i64; N_LETTERS];
         for (k, v) in mass.as_slice().iter().take(N_LETTERS).enumerate() {
             m[k] = *v;
         }
-        // the ocean pays, so the ledger's baseline holds
-        r.release(genome.as_slice(), m, (0.0, 0.5), n.max(1) as usize).map_or(-1, |(c, _)| c as i64)
+        // the ocean pays, so the ledger's baseline holds; on an archipelago, onto the shown island
+        let focus = self.focus;
+        match self.shore.as_mut() {
+            Some(Shore::One(r)) => r.release(genome.as_slice(), m, (0.0, 0.5), n.max(1) as usize),
+            Some(Shore::Many(a)) => a.release(focus, genome.as_slice(), m, n.max(1) as usize),
+            None => None,
+        }
+        .map_or(-1, |(c, _)| c as i64)
+    }
+
+    /// An archipelago with no life yet (see `default_islands`): `release` puts creatures on the
+    /// island in view, `set_focus` changes it.
+    #[func]
+    fn start_archipelago(&mut self, rates_path: GString, seed_path: GString, seed: i64) -> bool {
+        self.begin(rates_path, seed_path, seed, Some(usize::MAX))
+    }
+
+    /// Show island `k` (archipelago only); every per-reef query answers for it. The daily history
+    /// restarts, since it described the other island.
+    #[func]
+    fn set_focus(&mut self, k: i64) -> bool {
+        let n = match self.shore.as_ref() {
+            Some(Shore::Many(a)) => a.islands.len() as i64,
+            _ => return false,
+        };
+        if k < 0 || k >= n || k as usize == self.focus {
+            return false;
+        }
+        self.focus = k as usize;
+        self.history.clear();
+        true
+    }
+
+    #[func]
+    fn focus(&self) -> i64 {
+        self.focus as i64
+    }
+
+    /// Archipelago state (empty on a single reef or while busy): `islands` as [{name, waves, uv,
+    /// food, cells, lineages: [lineage, cells] pairs}], `crossings` flattened n x n [from][to],
+    /// and the lineage grown furthest apart: `split_lineage`, `split_a`, `split_b`, `divergence`
+    /// (net share of genome letters differing between the two islands; -1 lineage before any).
+    #[func]
+    fn archipelago(&self) -> VarDictionary {
+        let mut d = VarDictionary::new();
+        let Some(Shore::Many(a)) = self.shore.as_ref() else { return d };
+        let mut isl = VarArray::new();
+        for (spec, r) in a.specs.iter().zip(&a.islands) {
+            let mut e = VarDictionary::new();
+            e.set("name", spec.name);
+            e.set("waves", spec.waves);
+            e.set("uv", spec.uv);
+            e.set("food", spec.food);
+            e.set("cells", r.cells() as i64);
+            let mut lin = PackedInt64Array::new();
+            for (c, n) in r.clades() {
+                lin.push(c as i64);
+                lin.push(n as i64);
+            }
+            e.set("lineages", &lin);
+            isl.push(&e.to_variant());
+        }
+        d.set("islands", &isl);
+        let cross: PackedInt64Array = a.crossings.iter().flatten().map(|&v| v as i64).collect();
+        d.set("crossings", &cross);
+        let best = a.best_split(30);
+        d.set("split_lineage", best.map_or(-1, |b| b.0 as i64));
+        d.set("split_a", best.map_or(-1, |b| b.1 as i64));
+        d.set("split_b", best.map_or(-1, |b| b.2 as i64));
+        d.set("divergence", best.map_or(0.0, |b| b.3));
+        d
     }
 
     /// The creature goal and how close the reef is: lineages qualifying now, the lineage with
@@ -241,7 +369,7 @@ impl ReefSim {
         d.set("min_jobs", g.min_jobs as i64);
         d.set("window_days", g.window_days);
         d.set("need_days", g.need_days as i64);
-        let Some(r) = self.reef.as_ref() else { return d };
+        let Some(r) = self.r() else { return d };
         d.set("qualifying", r.organisms.iter().filter(|o| g.body_ok(o)).count() as i64);
         let (bl, bd) = self.tracker.best().map_or((-1, 0), |(c, n)| (c as i64, n as i64));
         d.set("best_lineage", bl);
@@ -264,25 +392,27 @@ impl ReefSim {
         if self.ff.is_some() || days <= 0.0 || dt <= 0.0 {
             return false;
         }
-        let Some(reef) = self.reef.take() else { return false };
-        let mut run = Run { reef, history: std::mem::take(&mut self.history), tracker: std::mem::take(&mut self.tracker), next_noon: self.next_noon };
+        let Some(shore) = self.shore.take() else { return false };
+        let focus = self.focus;
+        let mut run = Run { shore, history: std::mem::take(&mut self.history), tracker: std::mem::take(&mut self.tracker), next_noon: self.next_noon };
         let goal = self.goal.clone();
         let done = Arc::new(AtomicU64::new(0));
         let progress = done.clone();
         let handle = std::thread::spawn(move || {
-            let before = Snapshot::of(&run.reef);
-            let end = run.reef.t_days + days;
+            let before = Snapshot::of(run.shore.reef(focus));
+            let end = run.shore.reef(focus).t_days + days;
             let (mut peak, mut cdays) = (0, 0);
-            while run.reef.t_days < end {
-                run.reef.step(dt);
-                push_history(&run.reef, &mut run.history);
-                if let Some(n) = noon_sample(&run.reef, &goal, &mut run.tracker, &mut run.next_noon) {
+            while run.shore.reef(focus).t_days < end {
+                run.shore.step(dt);
+                let r = run.shore.reef(focus);
+                push_history(r, &mut run.history);
+                if let Some(n) = noon_sample(r, &goal, &mut run.tracker, &mut run.next_noon) {
                     peak = peak.max(n);
                     cdays += (n > 0) as usize;
                 }
-                progress.store(((days - (end - run.reef.t_days)) * 1000.0) as u64, Ordering::Relaxed);
+                progress.store(((days - (end - r.t_days)) * 1000.0) as u64, Ordering::Relaxed);
             }
-            let after = Snapshot::of(&run.reef);
+            let after = Snapshot::of(run.shore.reef(focus));
             FfDone { run, before, after, peak_creatures: peak, creature_days: cdays }
         });
         self.ff = Some(FastForward { handle, done, days });
@@ -336,7 +466,7 @@ impl ReefSim {
         d.set("peak_creatures", out.peak_creatures as i64);
         d.set("creature_days", out.creature_days as i64);
         let run = out.run;
-        self.reef = Some(run.reef);
+        self.shore = Some(run.shore);
         self.history = run.history;
         self.tracker = run.tracker;
         self.next_noon = run.next_noon;
@@ -346,11 +476,20 @@ impl ReefSim {
     /// Environment levers for the player's world: a multiplier on one reef rate, against its
     /// default. "waves" drag, "grazers" bite rate, "food" uptake through open faces, "uv" UV death.
     /// Rates only, never amounts: matter stays closed. Clamped to 1/4..4. False when unknown or busy.
+    /// On an archipelago only "currents": the chance a drifter crosses to another island.
     #[func]
     fn set_lever(&mut self, name: GString, mult: f64) -> bool {
-        let Some(r) = self.reef.as_mut() else { return false };
-        let d = ReefParams::default();
         let m = mult.clamp(0.25, 4.0);
+        // an archipelago's islands keep their own shores: its one lever is the current between them
+        if let Some(Shore::Many(a)) = self.shore.as_mut() {
+            if name.to_string() != "currents" {
+                return false;
+            }
+            a.ap.crossing = ArchParams::default().crossing * m;
+            return true;
+        }
+        let Some(r) = self.r_mut() else { return false };
+        let d = ReefParams::default();
         match name.to_string().as_str() {
             "waves" => r.rp.drag = d.drag * m,
             "grazers" => r.rp.graze_rate = d.graze_rate * m,
@@ -365,7 +504,11 @@ impl ReefSim {
     #[func]
     fn levers(&self) -> VarDictionary {
         let mut out = VarDictionary::new();
-        let Some(r) = self.reef.as_ref() else { return out };
+        if let Some(Shore::Many(a)) = self.shore.as_ref() {
+            out.set("currents", a.ap.crossing / ArchParams::default().crossing);
+            return out;
+        }
+        let Some(r) = self.r() else { return out };
         let d = ReefParams::default();
         out.set("waves", r.rp.drag / d.drag);
         out.set("grazers", r.rp.graze_rate / d.graze_rate);
@@ -383,7 +526,7 @@ impl ReefSim {
     /// skin); empty when gone.
     #[func]
     fn body_points(&self, id: i64) -> PackedVector3Array {
-        let Some(r) = self.reef.as_ref() else { return PackedVector3Array::new() };
+        let Some(r) = self.r() else { return PackedVector3Array::new() };
         // adrift bodies are drawn floating (cell_buffer), not at their lattice places: no skin
         let Some(o) = r.organisms.iter().find(|o| o.id as i64 == id && o.settled()) else { return PackedVector3Array::new() };
         o.cells.iter().take(SHAPE_MAX).map(|c| Self::world_pos(r, c.pos)).collect()
@@ -392,14 +535,14 @@ impl ReefSim {
     /// `organism()["shape"]` without the rest: the reef's skins rebuild many per tick.
     #[func]
     fn body_shape(&self, id: i64) -> PackedFloat32Array {
-        let Some(r) = self.reef.as_ref() else { return PackedFloat32Array::new() };
+        let Some(r) = self.r() else { return PackedFloat32Array::new() };
         r.organisms.iter().find(|o| o.id as i64 == id).map_or(PackedFloat32Array::new(), shape_of)
     }
 
     /// Settled bodies of at least `min_cells`, biggest first.
     #[func]
     fn body_ids(&self, min_cells: i64) -> PackedInt64Array {
-        let Some(r) = self.reef.as_ref() else { return PackedInt64Array::new() };
+        let Some(r) = self.r() else { return PackedInt64Array::new() };
         let mut v: Vec<&Organism> = r.organisms.iter().filter(|o| o.settled() && o.cells.len() as i64 >= min_cells).collect();
         v.sort_by_key(|o| std::cmp::Reverse(o.cells.len()));
         v.iter().map(|o| o.id as i64).collect()
@@ -408,7 +551,7 @@ impl ReefSim {
     /// Bodies meeting the creature goal right now, as ids (markers and "next creature").
     #[func]
     fn creatures(&self) -> PackedInt64Array {
-        let Some(r) = self.reef.as_ref() else { return PackedInt64Array::new() };
+        let Some(r) = self.r() else { return PackedInt64Array::new() };
         r.organisms.iter().filter(|o| self.goal.body_ok(o)).map(|o| o.id as i64).collect()
     }
 
@@ -417,7 +560,7 @@ impl ReefSim {
     #[func]
     fn lineages(&self, max: i64) -> VarArray {
         let mut arr = VarArray::new();
-        let Some(r) = self.reef.as_ref() else { return arr };
+        let Some(r) = self.r() else { return arr };
         for (clade, n) in r.clades().into_iter().take(max.max(0) as usize) {
             // a lineage alive only as drifting spores still counts
             let Some(o) = r.organisms.iter().filter(|o| o.clade == clade && !o.cells.is_empty()).max_by_key(|o| (o.settled(), o.cells.len())) else { continue };
@@ -434,8 +577,8 @@ impl ReefSim {
     #[func]
     fn step(&mut self, steps: i64, dt: f64) {
         for _ in 0..steps {
-            let Some(r) = self.reef.as_mut() else { return };
-            r.step(dt);
+            let Some(s) = self.shore.as_mut() else { return };
+            s.step(dt);
             self.sample();
             self.sample_goal();
         }
@@ -443,13 +586,13 @@ impl ReefSim {
 
     #[func]
     fn t_days(&self) -> f64 {
-        self.reef.as_ref().map_or(0.0, |r| r.t_days)
+        self.r().map_or(0.0, |r| r.t_days)
     }
 
     /// (width, depth) in lattice units.
     #[func]
     fn extent(&self) -> Vector2 {
-        self.reef.as_ref().map_or(Vector2::ZERO, |r| Vector2::new((r.rp.width as i32 * TILE) as f32, (r.rp.depth as i32 * TILE) as f32))
+        self.r().map_or(Vector2::ZERO, |r| Vector2::new((r.rp.width as i32 * TILE) as f32, (r.rp.depth as i32 * TILE) as f32))
     }
 
     #[func]
@@ -460,7 +603,7 @@ impl ReefSim {
     /// Rock heights on a grid of (w+1) x (d+1) lattice corners, row by row up the beach.
     #[func]
     fn heights(&self) -> PackedFloat32Array {
-        let Some(r) = self.reef.as_ref() else { return PackedFloat32Array::new() };
+        let Some(r) = self.r() else { return PackedFloat32Array::new() };
         let (w, d) = (r.rp.width as i32 * TILE, r.rp.depth as i32 * TILE);
         let mut v = Vec::with_capacity(((w + 1) * (d + 1)) as usize);
         for y in 0..=d {
@@ -474,7 +617,7 @@ impl ReefSim {
     /// Water surface height, world units.
     #[func]
     fn water_level(&self) -> f64 {
-        self.reef.as_ref().map_or(0.0, |r| r.env.tide_level * VSCALE)
+        self.r().map_or(0.0, |r| r.env.tide_level * VSCALE)
     }
 
     /// MultiMesh buffer (transform 12, colour 4, custom 4 per instance) for every cell. Colour =
@@ -482,7 +625,7 @@ impl ReefSim {
     /// selected (1), adrift (0.5) or crawling (0.1-0.3 by speed), height in the body + 64 x lineage. Drifters float at the water surface.
     #[func]
     fn cell_buffer(&self, selected: i64) -> PackedFloat32Array {
-        let Some(r) = self.reef.as_ref() else { return PackedFloat32Array::new() };
+        let Some(r) = self.r() else { return PackedFloat32Array::new() };
         let mut v = Vec::with_capacity(r.cells() * 20);
         let water = r.env.tide_level * VSCALE;
         for o in &r.organisms {
@@ -521,7 +664,7 @@ impl ReefSim {
     /// Nearest organism whose cell the ray passes within half a cell of; -1 for none.
     #[func]
     fn pick(&self, from: Vector3, dir: Vector3) -> i64 {
-        let Some(r) = self.reef.as_ref() else { return -1 };
+        let Some(r) = self.r() else { return -1 };
         let dir = dir.normalized();
         let mut best = (f32::MAX, -1i64);
         for o in r.organisms.iter().filter(|o| o.settled()) {
@@ -539,14 +682,14 @@ impl ReefSim {
     /// The settled organism with the most cells; -1 for none.
     #[func]
     fn biggest(&self) -> i64 {
-        let Some(r) = self.reef.as_ref() else { return -1 };
+        let Some(r) = self.r() else { return -1 };
         r.organisms.iter().filter(|o| o.settled()).max_by_key(|o| o.cells.len()).map_or(-1, |o| o.id as i64)
     }
 
     /// Centre of an organism's body, world units.
     #[func]
     fn organism_center(&self, id: i64) -> Vector3 {
-        let Some(r) = self.reef.as_ref() else { return Vector3::ZERO };
+        let Some(r) = self.r() else { return Vector3::ZERO };
         let Some(o) = r.organisms.iter().find(|o| o.id as i64 == id && o.settled()) else { return Vector3::ZERO };
         let sum = o.cells.iter().fold(Vector3::ZERO, |a, c| a + Self::world_pos(r, c.pos));
         sum / o.cells.len().max(1) as f32
@@ -557,7 +700,7 @@ impl ReefSim {
     #[func]
     fn organism(&mut self, id: i64) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(r) = self.reef.as_ref() else { return d };
+        let Some(r) = self.r() else { return d };
         let Some(o) = r.organisms.iter().find(|o| o.id as i64 == id) else { return d };
         d.set("id", o.id as i64);
         d.set("cells", o.cells.len() as i64);
@@ -617,7 +760,7 @@ impl ReefSim {
     /// Bites of the last `days`: position (world) and age in days, flattened as x, y, z, age.
     #[func]
     fn bites(&self, days: f64) -> PackedFloat32Array {
-        let Some(r) = self.reef.as_ref() else { return PackedFloat32Array::new() };
+        let Some(r) = self.r() else { return PackedFloat32Array::new() };
         let mut v = Vec::new();
         for &(t, _, p) in r.meals.iter().rev() {
             if r.t_days - t > days {
@@ -633,7 +776,7 @@ impl ReefSim {
     #[func]
     fn env(&self) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(r) = self.reef.as_ref() else { return d };
+        let Some(r) = self.r() else { return d };
         let e = &r.env;
         for (key, v) in [
             ("t_days", e.t_days),
@@ -661,7 +804,7 @@ impl ReefSim {
         d.set("declination", cp.obliquity * (std::f64::consts::TAU * e.year_phase).sin());
         d.set("moon0_phase", (e.t_days / cp.moon_periods[0]).fract());
         d.set("moon1_phase", (e.t_days / cp.moon_periods[1]).fract());
-        let (m, ka) = r.matter();
+        let (m, ka) = self.shore.as_ref().map_or(([0; N_LETTERS], 0), |s| s.matter());
         let drift: i64 = m.iter().zip(self.start.0).map(|(a, b)| (a - b).abs()).sum::<i64>() + (ka - self.start.1).abs();
         d.set("ledger_drift", drift);
         d
@@ -670,7 +813,7 @@ impl ReefSim {
     #[func]
     fn stats(&self) -> VarDictionary {
         let mut d = VarDictionary::new();
-        let Some(r) = self.reef.as_ref() else { return d };
+        let Some(r) = self.r() else { return d };
         let settled: Vec<&Organism> = r.organisms.iter().filter(|o| o.settled()).collect();
         let st = &r.stats;
         d.set("cells", r.cells() as i64);

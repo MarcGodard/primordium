@@ -40,9 +40,11 @@ func _ready() -> void:
 	campaign = load("res://scripts/campaign.gd").new()
 	add_child(campaign)
 	# the garden is a second reef, empty until the player releases kept creatures into it
-	for path in ["res://scripts/periodic_view.gd", "res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd", "res://scripts/cell_view.gd", "res://scripts/coast_view.gd", "res://scripts/reef_view.gd", "res://scripts/reef_view.gd"]:
+	for path in ["res://scripts/periodic_view.gd", "res://scripts/chem_view.gd", "res://scripts/pool_view.gd", "res://scripts/pond_view.gd", "res://scripts/cell_view.gd", "res://scripts/coast_view.gd", "res://scripts/reef_view.gd", "res://scripts/reef_view.gd", "res://scripts/reef_view.gd"]:
 		var v: Node = load(path).new()
 		if views.size() == 7:
+			v.arch = true
+		if views.size() == 8:
 			v.garden = true
 		if "campaign" in v:
 			v.campaign = campaign
@@ -118,6 +120,9 @@ func _ready() -> void:
 					if kv2.size() == 2:
 						view._set_lever(kv2[0], float(kv2[1]))
 					view._show_levers()
+			"island":
+				if view.has_method("_set_island"):
+					view._set_island(int(kv[1]))
 			"traits":
 				if "chart_traits" in view:
 					view.chart_traits = kv[1] == "1"
@@ -207,7 +212,7 @@ func travel(k: int) -> void:
 	if k == from:
 		return
 	if k >= 0 and not campaign.is_open(k) and shot == "":
-		var why: String = "Keep a creature at the reef (K) to open your world." if k == 7 else "Reach the goal of %s first: %s." % [hub.SCALES[k - 1][0], campaign.goal_title(k - 1)]
+		var why: String = "Split one lineage into two kinds on the islands to open your world." if k == 8 else "Reach the goal of %s first: %s." % [hub.SCALES[k - 1][0], campaign.goal_title(k - 1)]
 		show_toast("Locked: " + hub.SCALES[k][0], why, Color(0.7, 0.75, 0.85))
 		return
 	if shot != "" and not show_warp:

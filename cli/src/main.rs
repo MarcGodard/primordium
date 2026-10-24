@@ -35,6 +35,7 @@ fn main() {
         "reef-shadow" => reef_shadow(&args),
         "reef-goal" => reef_goal(&args),
         "garden" => garden(&args),
+        "archipelago" => archipelago(&args),
         _ => eprintln!("usage: primordium chem [--days=N] [--seed=N] [--every=D]"),
     }
 }
@@ -1392,6 +1393,12 @@ fn garden(args: &[String]) {
         uv_death: d.uv_death * arg(args, "uv", 1.0),
         ..d
     };
+    let mut gp = gp;
+    let recipe = recipe_arg(args);
+    if !recipe.is_default() {
+        recipe.apply_reef(&mut gp);
+        println!("recipe sea by letter {:?}, backbone {:.2}", recipe.sea().map(|v| (v * 100.0).round() / 100.0), recipe.backbone());
+    }
     let mut g = Reef::new(gp, CosmosParams { seed: seed + 100, ..Default::default() }, rates, &rs, seed + 100);
     let m0 = g.matter();
     for k in &kept {
@@ -1445,4 +1452,82 @@ fn garden(args: &[String]) {
             qd.clear();
         }
     }
+}
+
+/// Archipelago calibration: keep one creature from a reef, release it on island `--home`, watch
+/// its lineage cross to the other islands and grow apart (`--crossing`, `--days`).
+fn archipelago(args: &[String]) {
+    use primordium_core::archipelago::{ArchParams, Archipelago, default_islands};
+    use primordium_core::goal::{CreatureGoal, jobs};
+    use primordium_core::reef::{Reef, ReefParams, ReefSeed};
+    use primordium_core::surrogate::RateTable;
+    let days: f64 = arg(args, "days", 1000.0);
+    let seed: u64 = arg(args, "seed", 3);
+    let home: usize = arg(args, "home", 0);
+    let rates: RateTable = serde_json::from_str(&std::fs::read_to_string(data_file("rates0.json")).expect("run train first")).unwrap();
+    let rs: ReefSeed = serde_json::from_str(&std::fs::read_to_string(data_file("reef_seed.json")).expect("run reef-seed first")).unwrap();
+    let goal = CreatureGoal::default();
+    let mut r = Reef::new(ReefParams::default(), CosmosParams { seed, ..Default::default() }, rates.clone(), &rs, seed);
+    let mut kept = None;
+    let mut noon = 0.5;
+    while kept.is_none() && r.t_days < 3000.0 {
+        r.step(0.02);
+        if r.t_days < noon {
+            continue;
+        }
+        noon += 1.0;
+        if let Some(o) = r.organisms.iter().find(|o| goal.body_ok(o)) {
+            println!("day {:.0}: kept a body of {} cells, {} jobs", r.t_days, o.cells.len(), jobs(o, goal.split));
+            kept = Some((o.genome.clone(), o.cells[0].mass));
+        }
+    }
+    let Some((genome, mass)) = kept else { return println!("no creature in 3000 days") };
+    let ap = ArchParams { crossing: arg(args, "crossing", ArchParams::default().crossing), ..Default::default() };
+    let mut base = ReefParams::default();
+    recipe_arg(args).apply_reef(&mut base);
+    let mut a = Archipelago::new(ap, default_islands(), base, CosmosParams { seed: seed + 100, ..Default::default() }, rates, &rs, seed + 100);
+    let m0 = a.matter();
+    let got = a.release(home, &genome, mass, 12);
+    println!("released on {} as {:?}", a.specs[home].name, got);
+    let Some((clade, _)) = got else { return };
+    let mut next = 50.0;
+    // --calm=DAY:CROSSING: change the currents mid-run (open to settle, then calm to isolate)
+    let calm: Option<(f64, f64)> = args.iter().find_map(|a| a.strip_prefix("--calm=")).and_then(|v| v.split_once(':')).and_then(|(d, c)| Some((d.parse().ok()?, c.parse().ok()?)));
+    while a.t_days() < days {
+        a.step(0.02);
+        if let Some((d, c)) = calm {
+            if a.t_days() >= d && a.ap.crossing != c {
+                a.ap.crossing = c;
+                println!("day {:.0}: currents set to {c}", a.t_days());
+            }
+        }
+        if a.t_days() >= next {
+            next += 50.0;
+            let names: Vec<String> = a.specs.iter().map(|s| s.name.to_string()).collect();
+            let cells: Vec<usize> = a.islands.iter().map(|r| r.cells()).collect();
+            let pairs: Vec<String> = (0..3).flat_map(|i| (i + 1..3).map(move |j| (i, j))).map(|(i, j)| format!("{}-{} {}", i, j, a.divergence(clade, i, j, 30).map_or("-".into(), |d| format!("{:.4}", d)))).collect();
+            let heights: Vec<String> = a.islands.iter().map(|r| {
+                let st: Vec<_> = r.organisms.iter().filter(|o| o.settled() && o.clade == clade).collect();
+                format!("{:.2}", st.iter().map(|o| o.height() as f64).sum::<f64>() / st.len().max(1) as f64)
+            }).collect();
+            println!("t={:5.0} {:?} cells {:?} lineage cells {:?} height {:?} | crossings {:?} | divergence {} | ledger {}", a.t_days(), names, cells, a.spread(clade), heights, a.crossings, pairs.join(" "), if a.matter() == m0 { "exact" } else { "DRIFT" });
+        }
+    }
+}
+
+/// `--recipe=Z:MULT,Z:MULT`: element abundance multipliers (the world recipe).
+fn recipe_arg(args: &[String]) -> primordium_core::recipe::Recipe {
+    let mut m = [1.0; primordium_core::element::N_ELEMENTS];
+    if let Some(v) = args.iter().find_map(|a| a.strip_prefix("--recipe=")) {
+        for part in v.split(',') {
+            if let Some((z, x)) = part.split_once(':') {
+                if let (Ok(z), Ok(x)) = (z.parse::<usize>(), x.parse::<f64>()) {
+                    if (1..=m.len()).contains(&z) {
+                        m[z - 1] = x;
+                    }
+                }
+            }
+        }
+    }
+    primordium_core::recipe::Recipe::new(&m)
 }

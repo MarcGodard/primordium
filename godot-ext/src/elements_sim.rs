@@ -1,6 +1,16 @@
 //! Periodic-table bridge: any shell capacities read as a `Universe`, for the elements screen.
 use godot::prelude::*;
-use primordium_core::element::{KT, Role, SHELLS, Universe, bond_energies};
+use primordium_core::element::{KT, N_ELEMENTS, Role, SHELLS, Universe, bond_energies};
+use primordium_core::recipe::Recipe;
+use std::sync::RwLock;
+
+/// The world recipe every sim builds from (element abundance multipliers, index Z - 1). Set by
+/// the elements screen and the campaign save; read when a scale starts.
+static RECIPE: RwLock<[f64; N_ELEMENTS]> = RwLock::new([1.0; N_ELEMENTS]);
+
+pub fn recipe() -> Recipe {
+    Recipe::new(&*RECIPE.read().unwrap())
+}
 
 #[derive(GodotClass)]
 #[class(base=Node, init)]
@@ -70,6 +80,35 @@ impl ElementsSim {
             arr.push(&d.to_variant());
         }
         arr
+    }
+
+    /// Set the world recipe: abundance multiplier per element (index Z - 1, clamped x1/10..x10;
+    /// missing entries x1). Scales started from now on use it.
+    #[func]
+    fn set_recipe(mult: PackedFloat64Array) {
+        let r = Recipe::new(mult.as_slice());
+        *RECIPE.write().unwrap() = r.mult;
+    }
+
+    #[func]
+    fn recipe() -> PackedFloat64Array {
+        PackedFloat64Array::from(recipe().mult.as_slice())
+    }
+
+    /// Each side-group letter's sea strength under the recipe (1 = default), in letter order,
+    /// then the backbone's as the last entry.
+    #[func]
+    fn recipe_sea() -> PackedFloat64Array {
+        let r = recipe();
+        let mut v: Vec<f64> = r.sea().to_vec();
+        v.push(r.backbone());
+        PackedFloat64Array::from(v.as_slice())
+    }
+
+    /// Each element's share of all atoms under the recipe (index Z - 1).
+    #[func]
+    fn recipe_composition() -> PackedFloat64Array {
+        PackedFloat64Array::from(recipe().composition().as_slice())
     }
 
     /// This world's side-group letters as Z, in letter order (residue k is element letters_z()[k]).

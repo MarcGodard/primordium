@@ -42,7 +42,11 @@ impl CoastSim {
         let Ok(text) = std::fs::read_to_string(rates_path.to_string()) else { return false };
         let Ok(rates) = serde_json::from_str::<RateTable>(&text) else { return false };
         self.coast =
-            Some(Coast::new(CoastParams { auto: true, ..Default::default() }, CosmosParams { seed: seed as u64, ..Default::default() }, rates, seed as u64));
+            Some({
+                let mut cp = CoastParams { auto: true, ..Default::default() };
+                crate::elements_sim::recipe().apply_coast(&mut cp);
+                Coast::new(cp, CosmosParams { seed: seed as u64, ..Default::default() }, rates, seed as u64)
+            });
         self.history.clear();
         true
     }

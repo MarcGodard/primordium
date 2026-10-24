@@ -67,6 +67,8 @@ pub struct ReefParams {
     /// Tile water volume in cells: sets concentrations, as a beach patch.
     pub tile_cells: f64,
     pub ocean_raw: f64,
+    /// Per-letter sea strength (CellParams::sea).
+    pub sea: [f64; N_LETTERS],
     pub ocean_ka: f64,
     /// Ocean reservoir, in tiles' worth of ocean-strength water.
     pub ocean_tiles: f64,
@@ -136,6 +138,7 @@ impl Default for ReefParams {
             latitude: 0.35,
             tile_cells: cp.patch_cells,
             ocean_raw: cp.ocean_raw,
+            sea: cp.sea,
             ocean_ka: cp.ocean_ka,
             ocean_tiles: 2000.0,
             flush_rate: cp.flush_rate,
@@ -371,13 +374,13 @@ impl Reef {
                 let elevation = (rp.elev_lo + (rp.elev_hi - rp.elev_lo) * f + rp.roughness * 2.0 * rough).clamp(0.0, 1.0);
                 Patch {
                     elevation,
-                    raw: [(rp.ocean_raw * rp.tile_cells) as i64; N_LETTERS],
+                    raw: std::array::from_fn(|l| (rp.ocean_raw * rp.sea[l] * rp.tile_cells) as i64),
                     raw_ka: (rp.ocean_ka * rp.tile_cells) as i64,
                     free: [0; N_LETTERS],
                 }
             })
             .collect();
-        let ocean = [(rp.ocean_raw * rp.tile_cells * rp.ocean_tiles) as i64; N_LETTERS];
+        let ocean = std::array::from_fn(|l| (rp.ocean_raw * rp.sea[l] * rp.tile_cells * rp.ocean_tiles) as i64);
         let ocean_ka = (rp.ocean_ka * rp.tile_cells * rp.ocean_tiles) as i64;
         let env = cosmos.sample(0.25);
         let mut r = Self {
@@ -502,6 +505,37 @@ impl Reef {
         })
     }
 
+    /// Spores and fragments adrift over the deepest quarter of the shore leave for open water at
+    /// `rate` per day each; the archipelago carries them to another island. Their matter leaves
+    /// with them.
+    pub fn emigrate(&mut self, rate: f64, dt: f64) -> Vec<Organism> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < self.organisms.len() {
+            let o = &self.organisms[i];
+            if !o.settled() && !o.cells.is_empty() && o.drift_tile / self.rp.width < (self.rp.depth / 4).max(1) && self.rng.chance((rate * dt).min(1.0)) {
+                out.push(self.organisms.swap_remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// An arrival from another island: it drifts in over the deepest row for at least `days`,
+    /// then settles like any spore. Keeps its genome, body and lineage; gets an id here.
+    pub fn immigrate(&mut self, mut o: Organism, days: f64) {
+        o.id = self.id();
+        o.drift_tile = self.rng.below(self.rp.width);
+        o.adrift = o.adrift.max(days);
+        self.organisms.push(o);
+    }
+
+    /// A coast genome letter as this reef writes it (its two canonical letters).
+    pub fn canon_letter(&self, l: u8) -> u8 {
+        self.canon[self.interp.bits[l as usize] as usize]
+    }
+
     fn id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id - 1
@@ -576,7 +610,7 @@ impl Reef {
         self.interp.env = self.env;
         self.steps += 1;
         let mut rng = std::mem::replace(&mut self.rng, Rng::new(0));
-        let tide = Tide { flush: self.rp.flush_rate, washout: self.rp.washout_rate, raw: self.rp.ocean_raw * self.rp.tile_cells, ka: self.rp.ocean_ka * self.rp.tile_cells };
+        let tide = Tide { flush: self.rp.flush_rate, washout: self.rp.washout_rate, raw: std::array::from_fn(|l| self.rp.ocean_raw * self.rp.sea[l] * self.rp.tile_cells), ka: self.rp.ocean_ka * self.rp.tile_cells };
         for p in self.tiles.iter_mut() {
             if self.env.tide_level > p.elevation {
                 tide.mix(p, &mut self.ocean, &mut self.ocean_ka, dt, &mut rng);

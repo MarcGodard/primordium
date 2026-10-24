@@ -9,7 +9,7 @@ signal toast(title: String, body: String, color: Color)
 signal graduated(k: int, page: String)
 
 var save_path := "user://campaign.json"
-## Index = view index (0 elements .. 6 reef, 7 garden). Title, what to do, codex page on success.
+## Index = view index (0 elements .. 6 reef, 7 archipelago, 8 garden). Title, what to do, codex page on success.
 const GOALS := [
 	["Meet the atoms of life", "Inspect the backbone atom, a side-group letter and a noble gas (arrows or click), then try another universe's table.",
 		"[b]The atoms of life.[/b] One shell rule makes the whole table. The backbone atom has room for a chain plus a side group, the letters hang off it and carry information, the noble gases bond with nothing. A table with a different shell size makes different chemistry, and maybe none."],
@@ -25,14 +25,17 @@ const GOALS := [
 		"[b]Biogeography.[/b] Each beach has its own climate by latitude. Lineages that drift on the current to a new beach either fit or die, so beaches end up with their own kinds, like islands with their own birds."],
 	["Find a creature", "Find a body of %d+ cells with %d+ different cell jobs that crawls (gold rings, G jumps to one) and keep it with K.",
 		"[b]Multicellular life.[/b] Cells of one body share a genome but switch it differently by where they sit: some hold on, some feed, some shade. A body that divides labour and moves is an animal in all but name. On the open reef they appear now and then and are gone again."],
+	["Two kinds", "On the islands, let one lineage split into two kinds whose genomes differ by 0.8 letters in 100 beyond the variety inside each island, and stay that far apart for 150 days.",
+		"[b]New species.[/b] Spores that reach another island start a population of their own. Each island mutates on its own and its shore keeps different bodies, while too few spores cross to mix them again. Two kinds from one ancestor is how species begin: isolation first, then difference."],
 	["A creature that breeds true", "In your world, one lineage makes creatures on %d of the last %d days. Keep the best again to breed them.",
 		"[b]Breeding true.[/b] A lucky body is not yet a kind of animal. When one lineage keeps producing creatures, generation after generation, the trait is inherited: selection, yours and the reef's, has made a species."],
 ]
-const NEXT := ["Chemistry", "Polymers", "Protocells", "Cells", "Coast", "Reef", "Your world"]
+const NEXT := ["Chemistry", "Polymers", "Protocells", "Cells", "Coast", "Reef", "Archipelago", "Your world"]
 const KEPT_MAX := 60
 const NAMES := ["Ara", "Bel", "Cor", "Dax", "Eon", "Fen", "Gil", "Hux", "Ivo", "Jun", "Kel", "Lum"]
 
-var state := {"unlocked": 0, "done": {}, "codex": [], "kept": [], "garden": [], "run": 1, "explore": false, "named": 0}
+## version 2: the archipelago became view 7 and the garden moved to 8.
+var state := {"unlocked": 0, "done": {}, "codex": [], "kept": [], "garden": [], "run": 1, "explore": false, "named": 0, "version": 2}
 ## Last progress per view index, for the HUD banner and hub cards.
 var progress := {}
 var _timer := 0.0
@@ -66,6 +69,23 @@ func load_state() -> void:
 		# saves from before the name counter: continue past the names already handed out
 		if not d.has("named"):
 			state.named = state.kept.size() + state.codex.size()
+		if int(d.get("version", 1)) < 2:
+			_migrate_v1(d)
+
+## Version 1 had the garden at 7: its goal and codex pages move to 8, and a player who already
+## had a garden keeps it open (the archipelago opens in front of it, not instead of it).
+func _migrate_v1(d: Dictionary) -> void:
+	var done: Dictionary = state.done
+	if done.has("7"):
+		done["8"] = done["7"]
+		done.erase("7")
+	for e in state.codex:
+		if int(e.get("scale", 0)) == 7:
+			e["scale"] = 8
+	if not state.kept.is_empty():
+		state["garden_open"] = true
+	state.version = 2
+	save()
 
 func save() -> void:
 	if not persist:
@@ -78,8 +98,8 @@ func save() -> void:
 func is_open(k: int) -> bool:
 	if state.explore:
 		return true
-	if k == 7:
-		return not state.kept.is_empty()
+	if k == 8:
+		return is_done(7) or state.get("garden_open", false)
 	return k <= int(state.unlocked)
 
 func is_done(k: int) -> bool:

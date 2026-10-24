@@ -1,4 +1,4 @@
-## The hub: the planet in space with the seven scales orbiting it as small worlds, smallest to
+## The hub: the planet in space with the eight scales orbiting it as small worlds, smallest to
 ## largest, numbered as the views number them (-1 elements .. 5 reef), plus the player's own
 ## world (the garden). Locked worlds sit dark until the campaign opens them. Hover a world for
 ## what it is, click to dive in. `chosen(k)` asks main to travel.
@@ -14,9 +14,10 @@ const SCALES := [
 	["Cells", "Genomes, a genetic code, mutation and the first predators.", Color(0.55, 0.95, 0.5)],
 	["Coast", "Twelve beaches along an Earth-sized planet adapt to their climate.", Color(0.4, 0.7, 1.0)],
 	["Reef", "Many-celled bodies in 3D: plants, crawlers, lineages, evolution.", Color(1.0, 0.5, 0.65)],
+	["Archipelago", "Islands linked by drifting spores: one lineage, two shores, two kinds.", Color(0.45, 0.85, 1.0)],
 	["Your world", "Your own reef: the creatures you kept live, compete and keep evolving.", Color(0.75, 1.0, 0.55)],
 ]
-const GARDEN := 7
+const GARDEN := 8
 
 ## Number shown before a world's name; the garden is not a scale.
 static func label(k: int) -> String:
@@ -215,6 +216,13 @@ func _emblem(k: int) -> Node3D:
 				var rr := 0.55 - h * 0.09
 				_ball(body, Vector3(cos(a) * rr, -0.5 + h * 0.27, sin(a) * rr), 0.15, _mat(cols[i % 5], 0.5))
 		7:
+			# three islets in a ring of sea
+			_torus(body, 0.85, 0.05, _mat(Color(0.3, 0.7, 0.95), 1.2), Vector3(1.4, 0, 0))
+			for j in 3:
+				var at := Vector3(cos(j * 2.094) * 0.5, -0.1, sin(j * 2.094) * 0.5)
+				_ball(body, at, 0.28, _mat(Color(0.85, 0.78, 0.55), 0.2))
+				_ball(body, at + Vector3(0, 0.22, 0), 0.1, _mat(Color.from_hsv(0.3 + j * 0.25, 0.6, 1.0), 0.9))
+		8:
 			# a few bodies of different lineages on one small rock
 			_ball(body, Vector3(0, -0.55, 0), 0.6, _mat(Color(0.35, 0.3, 0.28), 0.1))
 			for j in 4:
@@ -369,7 +377,7 @@ func _hover(mp: Vector2) -> void:
 	hovered = best
 	var explore: bool = campaign != null and campaign.state.explore
 	var done: int = campaign.state.done.size() if campaign else 0
-	foot.text = "click a world (keys 1-8)   ·   J codex   ·   E %s   ·   in any scale: M back here, Tab / Shift+Tab next scale, H guide" % ("explore mode: all worlds open" if explore else ("explore mode" if campaign and campaign.finished() else "campaign: %d of %d goals" % [done, campaign.GOALS.size()]))
+	foot.text = "click a world (keys 1-9)   ·   J codex   ·   E %s   ·   in any scale: M back here, Tab / Shift+Tab next scale, H guide" % ("explore mode: all worlds open" if explore else ("explore mode" if campaign and campaign.finished() else "campaign: %d of %d goals" % [done, campaign.GOALS.size()]))
 	if best >= 0:
 		var open: bool = campaign == null or campaign.is_open(best)
 		card.text = ("Scale %d  ·  %s" % [best - 1, SCALES[best][0]]) if best != GARDEN else SCALES[best][0]
@@ -380,18 +388,18 @@ func _hover(mp: Vector2) -> void:
 				g = "   Goal: " + campaign.goal_title(best) + (" (done)" if campaign.is_done(best) else "")
 			card_sub.text = SCALES[best][1] + g
 		elif best == GARDEN:
-			card_sub.text = "Locked. Keep a creature at the reef (K) and it opens here."
+			card_sub.text = "Locked. Split one lineage into two kinds on the islands and it opens here."
 		else:
 			card_sub.text = "Locked. Reach the %s goal first: %s." % [SCALES[best - 1][0], campaign.goal_title(best - 1)]
 	else:
 		card.text = ""
-		card_sub.text = "Seven scales of one world, from the atom to the reef, and a world of your own."
+		card_sub.text = "Eight scales of one world, from the atom to the islands, and a world of your own."
 
 func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT and hovered >= 0:
 		chosen.emit(hovered)
 		get_viewport().set_input_as_handled()
-	elif e is InputEventKey and e.pressed and e.keycode >= KEY_1 and e.keycode <= KEY_8:
+	elif e is InputEventKey and e.pressed and e.keycode >= KEY_1 and e.keycode <= KEY_9:
 		chosen.emit(e.keycode - KEY_1)
 		get_viewport().set_input_as_handled()
 	elif e is InputEventKey and e.pressed and not e.echo and e.keycode == KEY_E and campaign:

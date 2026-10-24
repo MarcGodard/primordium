@@ -51,6 +51,9 @@ pub struct PondParams {
     pub restrict_above: f64,
     /// Ocean raw-atom concentration per cell (side atoms per letter, then Ka). The tide's food.
     pub ocean_raw: f64,
+    /// Per-letter sea strength (CellParams::sea).
+    #[serde(with = "crate::arrays")]
+    pub sea: [f64; N_LETTERS],
     pub ocean_ka: f64,
     /// Per day while flooded: fraction of the pond's raw-atom gap to the ocean closed.
     pub flush_rate: f64,
@@ -81,6 +84,7 @@ impl Default for PondParams {
             lift_below: 0.5,
             restrict_above: 0.85,
             ocean_raw: 0.05,
+            sea: [1.0; N_LETTERS],
             ocean_ka: 0.25,
             flush_rate: 1.5,
             membrane_turnover: 0.02,
@@ -192,7 +196,7 @@ impl Pond {
         let env = cosmos.sample(0.25);
         let outside = Contents { free: p.monomers, raw: p.raw, raw_ka: p.raw_ka, cells: p.cells, ..Default::default() };
         // ocean holds far more than the pond ever will: a buffer, not infinite
-        let ocean = [(pp.ocean_raw * outside.cells * 200.0) as i64; N_LETTERS];
+        let ocean = std::array::from_fn(|l| (pp.ocean_raw * pp.sea[l] * outside.cells * 200.0) as i64);
         let ocean_ka = (pp.ocean_ka * outside.cells * 200.0) as i64;
         Self {
             ctx: Ctx::new(p, rates, seed),
@@ -397,7 +401,7 @@ impl Pond {
         let cells = self.outside.cells;
         let k = (self.pp.flush_rate * dt).min(1.0);
         for l in 0..N_LETTERS {
-            let gap = self.pp.ocean_raw * cells - self.outside.raw[l] as f64;
+            let gap = self.pp.ocean_raw * self.pp.sea[l] * cells - self.outside.raw[l] as f64;
             let n = round_flux(gap * k, rng).clamp(-self.outside.raw[l], self.ocean[l]);
             self.outside.raw[l] += n;
             self.ocean[l] -= n;

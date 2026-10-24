@@ -24,6 +24,9 @@ pub struct CoastParams {
     pub current_m_s: f64,
     pub cells_per_site: usize,
     pub founders_per_site: usize,
+    /// Every site's sea: the world recipe (CellParams::sea, and x `ocean_ka`).
+    pub sea: [f64; crate::polymer::N_LETTERS],
+    pub sea_ka: f64,
     /// Sites switch between detail and lineage mode on their own (by lineage-table confidence).
     pub auto: bool,
     pub lift_below: f64,
@@ -45,6 +48,8 @@ impl Default for CoastParams {
             current_m_s: 0.3,
             cells_per_site: 200,
             founders_per_site: 40,
+            sea: [1.0; crate::polymer::N_LETTERS],
+            sea_ka: 1.0,
             auto: false,
             lift_below: 0.5,
             restrict_above: 0.85,
@@ -102,7 +107,8 @@ impl Coast {
                 let mut c = cosmos.clone();
                 c.latitude = latitude;
                 c.tide_amps = c.tide_amps.map(|a| a * tide_scale);
-                let cell = CellParams { max_cells: cp.cells_per_site, ..Default::default() };
+                let d = CellParams::default();
+                let cell = CellParams { max_cells: cp.cells_per_site, sea: cp.sea, ocean_ka: d.ocean_ka * cp.sea_ka, ..d };
                 let world = World::new(
                     PoolParams::default(),
                     cell,

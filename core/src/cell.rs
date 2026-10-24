@@ -112,6 +112,10 @@ pub struct CellParams {
     /// Patch volume in cells: sets raw-atom concentrations.
     pub patch_cells: f64,
     pub ocean_raw: f64,
+    /// Ocean strength per letter, x `ocean_raw`: the world recipe's element abundances (a scarce
+    /// element is a thin letter in every sea above it). 1 = the default table's sea.
+    #[serde(with = "crate::arrays")]
+    pub sea: [f64; N_LETTERS],
     pub ocean_ka: f64,
     pub flush_rate: f64,
     pub washout_rate: f64,
@@ -170,6 +174,7 @@ impl Default for CellParams {
             elev_hi: 0.75,
             patch_cells: 4000.0,
             ocean_raw: 0.1,
+            sea: [1.0; N_LETTERS],
             ocean_ka: 0.5,
             flush_rate: 1.5,
             washout_rate: 0.15,
@@ -582,7 +587,8 @@ pub struct World {
 pub(crate) struct Tide {
     pub flush: f64,
     pub washout: f64,
-    pub raw: f64,
+    /// Raw atoms per letter the tide pulls each patch toward.
+    pub raw: [f64; N_LETTERS],
     pub ka: f64,
 }
 
@@ -591,7 +597,7 @@ impl Tide {
         let k = (self.flush * dt).min(1.0);
         let w = (self.washout * dt).min(1.0);
         for l in 0..N_LETTERS {
-            let n = round_flux((self.raw - p.raw[l] as f64) * k, rng).clamp(-p.raw[l], ocean[l]);
+            let n = round_flux((self.raw[l] - p.raw[l] as f64) * k, rng).clamp(-p.raw[l], ocean[l]);
             p.raw[l] += n;
             ocean[l] -= n;
             let out = round_flux(p.free[l] as f64 * w, rng).clamp(0, p.free[l]);
@@ -704,11 +710,11 @@ impl World {
         let patches: Vec<Patch> = (0..cp.patches)
             .map(|k| {
                 let elevation = cp.elev_lo + (cp.elev_hi - cp.elev_lo) * k as f64 / (cp.patches - 1).max(1) as f64;
-                let raw = [(cp.ocean_raw * cp.patch_cells) as i64; N_LETTERS];
+                let raw = std::array::from_fn(|l| (cp.ocean_raw * cp.sea[l] * cp.patch_cells) as i64);
                 Patch { elevation, raw, raw_ka: (cp.ocean_ka * cp.patch_cells) as i64, free: [0; N_LETTERS] }
             })
             .collect();
-        let ocean = [(cp.ocean_raw * cp.patch_cells * 400.0) as i64; N_LETTERS];
+        let ocean = std::array::from_fn(|l| (cp.ocean_raw * cp.sea[l] * cp.patch_cells * 400.0) as i64);
         let ocean_ka = (cp.ocean_ka * cp.patch_cells * 400.0) as i64;
         let mut w = Self {
             ctx,
@@ -1637,7 +1643,7 @@ impl World {
 
     /// High water mixes each flooded patch with the ocean; monomers wash out and fall apart.
     pub(crate) fn tides(&mut self, dt: f64, rng: &mut Rng) {
-        let tide = Tide { flush: self.cp.flush_rate, washout: self.cp.washout_rate, raw: self.cp.ocean_raw * self.cp.patch_cells, ka: self.cp.ocean_ka * self.cp.patch_cells };
+        let tide = Tide { flush: self.cp.flush_rate, washout: self.cp.washout_rate, raw: std::array::from_fn(|l| self.cp.ocean_raw * self.cp.sea[l] * self.cp.patch_cells), ka: self.cp.ocean_ka * self.cp.patch_cells };
         for p in self.patches.iter_mut() {
             if self.env.tide_level > p.elevation {
                 tide.mix(p, &mut self.ocean, &mut self.ocean_ka, dt, rng);

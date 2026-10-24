@@ -86,6 +86,37 @@ var active := false
 var by_lineage := false
 ## Garden: the player's own reef, no founders; kept creatures are released into it.
 var garden := false
+## The archipelago (scale 6): islands with their own shores, one shown at a time.
+var arch := false
+## Last `sim.archipelago()` (refreshed with the stats).
+var arch_state := {}
+## Kept creatures already put on the islands this session, by name.
+var arch_released := {}
+## Seed of the current archipelago (N starts the next).
+var arch_seed := 11
+var terrain_mi: MeshInstance3D
+## Net genome divergence between two islands that counts as two kinds; campaign GOALS[7] says
+## the same number in words. Calibrated with `primordium archipelago` over 6 seeds: mostly a
+## founder effect when an island is first reached (islands settle in ~200-400 days at default
+## currents and sit at 0.7-1.0% for hundreds of days).
+const ARCH_GOAL := 0.008
+## Days the split must hold: a founder effect under strong currents jumps past ARCH_GOAL for a
+## while, then gene flow erodes it (x4 currents: 1.3% at day 300, 0.5% by day 400).
+const ARCH_HOLD := 150.0
+## Sim day the split last rose past ARCH_GOAL and has stayed there since (-1: not now).
+var arch_since := -1.0
+const ARCH_LEVERS := [
+	["currents", "Currents", "How often a drifting spore is carried to another island. Strong currents mix the islands; weak ones leave them isolated."],
+]
+const ARCH_EXPLAIN := """[b]Scale 6: an archipelago[/b]
+
+[b]What you see.[/b] Three small islands under one sky, each with its own shore: a calm [b]Lagoon[/b], a surf-beaten [b]Surf Point[/b], and the sunlit, shallow [b]Sun Flats[/b]. You see one at a time (I for the next island). The creatures you kept start on the Lagoon.
+
+[b]What happens.[/b] Spores that drift off an island's deep edge are sometimes carried by the current to another island. A few arrivals start a new population: the [b]founder effect[/b]. From then on each island's population mutates on its own and its shore selects different bodies: calm water lets them grow tall, surf keeps them low.
+
+[b]Goal.[/b] One lineage ends up as two kinds on two islands: their genomes differ by %.1f%% beyond the variety inside each island, and stay that far apart for %d days. That is how new species begin ([b]allopatric speciation[/b]), like Darwin's finches.
+
+[b]Try.[/b] L opens the Currents lever. Strong currents carry so many spores that the islands stay one population ([b]gene flow[/b]); weak ones let them split. A plan that works: strong currents until every island has settlers, then weak ones. Which island is reached first, and by whom, is luck (N: a new archipelago). T fast-forwards.""" % [ARCH_GOAL * 100.0, int(ARCH_HOLD)]
 var campaign: Node
 ## Garden lineage number -> creature name.
 var names := {}
@@ -142,6 +173,9 @@ func _ready() -> void:
 	if garden:
 		SCALE_NAME = "your world"
 		ok = sim.start_garden(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), 7)
+	elif arch:
+		SCALE_NAME = "scale 6: archipelago"
+		ok = sim.start_archipelago(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), arch_seed)
 	else:
 		ok = sim.start(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), campaign.state.run if campaign else 1)
 	extent = sim.extent()
@@ -158,7 +192,7 @@ func _ready() -> void:
 	_build_overlay()
 	ff = load("res://scripts/ff_panel.gd").new()
 	add_child(ff)
-	if garden:
+	if garden or arch:
 		_build_levers()
 	if ok:
 		sim.step(1, DT)
@@ -217,12 +251,16 @@ func _build_terrain() -> void:
 	arrays[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	rock_mat = ShaderMaterial.new()
-	rock_mat.shader = load("res://shaders/rock.gdshader")
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	mi.material_override = rock_mat
-	add_child(mi)
+	if rock_mat == null:
+		rock_mat = ShaderMaterial.new()
+		rock_mat.shader = load("res://shaders/rock.gdshader")
+	# an island switch builds the next island's rock in its place
+	if terrain_mi:
+		terrain_mi.queue_free()
+	terrain_mi = MeshInstance3D.new()
+	terrain_mi.mesh = mesh
+	terrain_mi.material_override = rock_mat
+	add_child(terrain_mi)
 
 ## [heights, row profile, w, d, lowest]: what `_ground` needs, kept for the camera.
 var ground := []
@@ -429,9 +467,9 @@ func _build_overlay() -> void:
 ## Lever panel (garden only), under the goal banner: the body panel owns the left column.
 func _build_levers() -> void:
 	lever_panel = load("res://scripts/lever_panel.gd").new()
-	lever_panel.setup("Your world's environment (L to hide)", LEVERS, _apply_lever,
+	lever_panel.setup("Between the islands (L to hide)" if arch else "Your world's environment (L to hide)", ARCH_LEVERS if arch else LEVERS, _apply_lever,
 		func() -> Dictionary: return sim.levers() if ok and not sim.busy() else {},
-		"Each is a real rate in the model, x1/4 to x4. Run an experiment: change one, press T, read the report.")
+		"The currents' strength is a real rate in the model, x1/4 to x4." if arch else "Each is a real rate in the model, x1/4 to x4. Run an experiment: change one, press T, read the report.")
 	lever_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	lever_panel.offset_left = -180
 	lever_panel.offset_top = 124
@@ -447,16 +485,17 @@ func _apply_lever(key: String, mult: float) -> bool:
 	var now: float = sim.levers().get(key, 1.0)
 	if abs(now - was) > 0.001:
 		_mark_lever(key, now)
-	if campaign:
+	if campaign and garden:
 		campaign.state["levers"] = sim.levers()
-	wave_mult = sim.levers().get("waves", 1.0)
+	if garden:
+		wave_mult = sim.levers().get("waves", 1.0)
 	return true
 
 ## One marker per lever per day: a slider dragged through several stops keeps only where it ended.
 func _mark_lever(key: String, mult: float) -> void:
 	var day := sim.t_days()
 	var name: String = key
-	for lv in LEVERS:
+	for lv in LEVERS + ARCH_LEVERS:
 		if lv[0] == key:
 			name = lv[1].to_lower()
 	var text := "%s x%s" % [name, ("%.2f" % mult).trim_suffix("0").trim_suffix("0").trim_suffix(".")]
@@ -474,7 +513,8 @@ func _set_lever(key: String, mult: float) -> void:
 func _show_levers() -> void:
 	if lever_panel == null or not ok or sim.busy():
 		return
-	wave_mult = sim.levers().get("waves", 1.0)
+	if garden:
+		wave_mult = sim.levers().get("waves", 1.0)
 	lever_panel.refresh()
 
 func _lock_levers(on: bool) -> void:
@@ -489,7 +529,7 @@ func _restore_levers() -> void:
 
 ## Non-default levers, for report titles.
 func _lever_note() -> String:
-	if not garden or lever_panel == null or not ok or sim.busy():
+	if not (garden or arch) or lever_panel == null or not ok or sim.busy():
 		return ""
 	return lever_panel.note()
 
@@ -512,6 +552,87 @@ func activate(on: bool) -> void:
 			_populate()
 		else:
 			save_garden()
+	if arch and ok and on and not sim.busy():
+		if arch_state.is_empty():
+			arch_state = sim.archipelago()
+			var isl: Array = arch_state.get("islands", [])
+			if sim.focus() < isl.size():
+				wave_mult = float(isl[sim.focus()].waves)
+		if campaign:
+			_arch_release()
+
+## Archipelago: kept creatures not yet out here land on the Lagoon (island 0), each its own
+## lineage. The view moves to the Lagoon to show them arrive.
+func _arch_release() -> void:
+	var landed := []
+	# the six kept most recently: more lineages than that only crowd the Lagoon
+	for k in campaign.state.kept.slice(-6):
+		if arch_released.has(k.name):
+			continue
+		if sim.focus() != 0:
+			_set_island(0)
+		var c: int = sim.release(PackedByteArray(k.genome), PackedInt64Array(k.mass), RELEASE_SPORES)
+		if c >= 0:
+			arch_released[k.name] = true
+			names[c] = k.name
+			landed.append(k.name)
+	if not landed.is_empty():
+		campaign.toast.emit("On the Lagoon: " + ", ".join(PackedStringArray(landed)), "Spores that drift off the deep edge may reach the other islands (I to look).", Color(0.5, 0.85, 1.0))
+
+## Show island k: its rock, its sea state, and a fresh chart (the history was the other island's).
+func _set_island(k: int) -> void:
+	if not sim.set_focus(k):
+		return
+	selected = -1
+	organism = {}
+	creatures = PackedInt64Array()
+	rings_mm.instance_count = 0
+	for id in skins:
+		skins[id].queue_free()
+	skins.clear()
+	history = PackedFloat32Array()
+	lever_marks.clear()
+	_build_terrain()
+	var isl: Array = sim.archipelago().get("islands", [])
+	if k < isl.size():
+		wave_mult = float(isl[k].waves)
+	timer = 0.0
+
+func _island_name() -> String:
+	var isl: Array = arch_state.get("islands", [])
+	var k: int = sim.focus()
+	return isl[k].name if k < isl.size() else "the islands"
+
+## Archipelago HUD: every island's shore and population, the one in view marked.
+func _arch_text() -> String:
+	var isl: Array = arch_state.get("islands", [])
+	if isl.is_empty():
+		return ""
+	var n := isl.size()
+	var cross: PackedInt64Array = arch_state.get("crossings", PackedInt64Array())
+	var t := "[b]Islands[/b] (I next)\n"
+	for k in n:
+		var e: Dictionary = isl[k]
+		var arrived := 0
+		for f in n:
+			if f * n + k < cross.size():
+				arrived += cross[f * n + k]
+		var top := ""
+		var lin: PackedInt64Array = e.lineages
+		if lin.size() >= 2:
+			top = ", mostly " + names.get(int(lin[0]), "#%d" % lin[0])
+		t += "%s[b]%s[/b] waves x%s uv x%s: %d cells%s, %d spores arrived\n" % ["> " if k == sim.focus() else "   ", e.name, _mult(e.waves), _mult(e.uv), e.cells, top, arrived]
+	return t
+
+static func _mult(v: float) -> String:
+	return ("%.2f" % v).trim_suffix("0").trim_suffix("0").trim_suffix(".")
+
+func next_island() -> void:
+	if not arch or not ok or sim.busy():
+		return
+	var n: int = sim.archipelago().get("islands", []).size()
+	if n > 0:
+		_set_island((sim.focus() + 1) % n)
 
 ## Garden: bring back what lived here last session, then release creatures kept since.
 func _populate() -> void:
@@ -644,7 +765,7 @@ func _ff_done(r: Dictionary) -> void:
 		if campaign:
 			campaign.toast.emit("The reef crashed while fast-forwarding", "Restart the viewer; your world's last save is intact.", Color(0.95, 0.5, 0.5))
 		return
-	if garden:
+	if garden or arch:
 		_lock_levers(false)
 		_show_levers()
 	var text := _ff_report(r)
@@ -694,12 +815,14 @@ func keep_selected() -> void:
 	if name == "":
 		return
 	var what := "a creature" if organism.creature else "%d cells, %d jobs" % [organism.cells, organism.jobs]
-	campaign.toast.emit("Kept " + name + " (" + what + ")", "It will be released in your world (8 in the hub). Keep several and see who survives.", Color(0.75, 1.0, 0.55))
+	campaign.toast.emit("Kept " + name + " (" + what + ")", "It lands on the islands of the archipelago, and later in your world. Keep several and see who survives.", Color(0.75, 1.0, 0.55))
 
 ## Where a body on this reef comes from, for kept creatures and the HUD.
 func where() -> String:
 	if garden:
 		return "your world"
+	if arch:
+		return "the archipelago (%s)" % _island_name()
 	if expedition > 0:
 		return "the expedition of %s" % _date_text(expedition)
 	return "reef run %d" % (campaign.state.run if campaign else 1)
@@ -709,7 +832,7 @@ static func _date_text(d: int) -> String:
 
 ## Today's expedition: a reef seeded by the date, the same for everyone who plays today.
 func start_expedition() -> void:
-	if campaign == null or garden or sim.busy():
+	if campaign == null or garden or arch or sim.busy():
 		return
 	# UTC: one day's reef for every player, wherever they are
 	var t := Time.get_date_dict_from_system(true)
@@ -735,19 +858,49 @@ func _restart(run_seed: int) -> void:
 
 ## A fresh reef from the same founders with new dice: another try at a creature.
 func new_run() -> void:
-	if campaign == null or garden or sim.busy():
+	if campaign and arch and not sim.busy():
+		_new_archipelago()
+		return
+	if campaign == null or garden or arch or sim.busy():
 		return
 	var run: int = campaign.new_run()
 	expedition = 0
 	_restart(run)
 	campaign.toast.emit("Run %d" % run, "A new reef from the same founders. Different dice, different history.", Color(1.0, 0.5, 0.65))
 
+## Archipelago: the same islands with new dice, the kept creatures landing on the Lagoon again.
+## Which island is reached first, and by whom, is luck: that luck is the founder effect.
+func _new_archipelago() -> void:
+	arch_seed += 1
+	for id in skins:
+		skins[id].queue_free()
+	skins.clear()
+	var currents: float = sim.levers().get("currents", 1.0)
+	ok = sim.start_archipelago(ProjectSettings.globalize_path(RATES), ProjectSettings.globalize_path(SEED), arch_seed)
+	if not ok:
+		return
+	sim.set_lever("currents", currents)
+	selected = -1
+	organism = {}
+	names.clear()
+	arch_released.clear()
+	arch_since = -1.0
+	arch_state = {}
+	history = PackedFloat32Array()
+	lever_marks.clear()
+	_build_terrain()
+	sim.step(1, DT)
+	arch_state = sim.archipelago()
+	wave_mult = float(arch_state.islands[0].waves)
+	_arch_release()
+	_show_levers()
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and active:
 		save_garden()
 
 func explain_text() -> String:
-	return GARDEN_EXPLAIN if garden else EXPLAIN
+	return GARDEN_EXPLAIN if garden else (ARCH_EXPLAIN if arch else EXPLAIN)
 
 func speed() -> int:
 	return SPEEDS[speed_idx]
@@ -815,6 +968,8 @@ func _process(delta: float) -> void:
 				save_timer = 30.0
 				save_garden()
 		stats = sim.stats()
+		if arch:
+			arch_state = sim.archipelago()
 		history = sim.history()
 		var rows := history.size() / 11
 		if rows > 0:
@@ -1039,8 +1194,11 @@ func _unhandled_input(e: InputEvent) -> void:
 				if not e.echo:
 					var days: float = FF_DAYS * (5.0 if e.shift_pressed else 1.0)
 					start_ff(days, "Fast-forward: %d days%s" % [int(days), _lever_note()])
+			KEY_I:
+				if not e.echo:
+					next_island()
 			KEY_L:
-				if garden and not e.echo:
+				if (garden or arch) and not e.echo:
 					lever_panel.visible = not lever_panel.visible
 					_show_levers()
 			KEY_ESCAPE:
@@ -1056,6 +1214,29 @@ func goal_progress() -> Dictionary:
 		return {}
 	var near_c: int = g.get("near_cells", 0)
 	var near_j: int = g.get("near_jobs", 0)
+	if arch:
+		var a: Dictionary = arch_state
+		if a.is_empty():
+			return {}
+		var dv: float = a.get("divergence", 0.0)
+		var isl: Array = a.get("islands", [])
+		var now := "no lineage on two islands yet: stronger currents (L) carry more spores across"
+		var who := ""
+		if int(a.get("split_lineage", -1)) >= 0 and int(a.split_a) < isl.size() and int(a.split_b) < isl.size():
+			var nm: String = names.get(int(a.split_lineage), "lineage %d" % a.split_lineage)
+			now = "%s: %s vs %s, %.2f%% apart" % [nm, isl[int(a.split_a)].name, isl[int(a.split_b)].name, max(dv, 0.0) * 100.0]
+			who = "%s, on %s and %s" % [nm, isl[int(a.split_a)].name, isl[int(a.split_b)].name]
+		var day := sim.t_days()
+		if dv >= ARCH_GOAL:
+			if arch_since < 0.0:
+				arch_since = day
+		else:
+			arch_since = -1.0
+		var held: float = day - arch_since if arch_since >= 0.0 else 0.0
+		if held > 0.0:
+			now += ", held %d of %d days" % [int(held), int(ARCH_HOLD)]
+		var p: float = 0.6 * clamp(dv / ARCH_GOAL, 0.0, 1.0) + 0.4 * clamp(held / ARCH_HOLD, 0.0, 1.0)
+		return {"p": p, "done": held >= ARCH_HOLD, "args": [], "now": now, "who": who}
 	if garden:
 		var who: String = names.get(int(g.won_lineage), "lineage %d" % g.won_lineage)
 		var lead: String = names.get(int(g.best_lineage), "none yet")
@@ -1073,11 +1254,13 @@ func hud_text() -> String:
 	if stats.is_empty():
 		return ""
 	var t := "[b]%s[/b]  day %.0f\ncells %d in %d bodies (%d multicellular)\ncrawling: %d bodies (%d multicellular)\nbiggest %d cells   tallest %d   generation %d\nadrift %d   spores %d   tears %d   bites %d\nspore bit error %.2f%%\n" % [
-		"Your world" if garden else ("Expedition " + _date_text(expedition) if expedition > 0 else "Reef, run %d" % (campaign.state.run if campaign else 1)), env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
+		"Your world" if garden else ("Archipelago: " + _island_name() if arch else ("Expedition " + _date_text(expedition) if expedition > 0 else "Reef, run %d" % (campaign.state.run if campaign else 1))), env.get("t_days", 0.0), stats.cells, stats.bodies, stats.multicellular, stats.crawlers, stats.crawlers_multi, stats.biggest, stats.tallest, stats.generation,
 		stats.adrift, stats.spores, stats.tears, stats.bites, stats.bit_error * 100.0]
 	if not by_lineage:
 		t += "[color=#9ab]tint (C for lineage): [color=#40ccd9]polymerase[/color] [color=#59cc4d]metabolism[/color] [color=#f2e0b8]membrane[/color] [color=#bf3852]pigment[/color] [color=#ffbf33]glue[/color]\nglowing on the surface: spores and torn pieces adrift\nshimmering with a green rim: a crawling body\nred flash: a bite[/color]\n"
-	if garden:
+	if arch:
+		t += _arch_text()
+	if garden or arch:
 		t += "lineages alive %d; largest: " % stats.lineages
 	else:
 		t += "lineages alive %d of %d founders; largest: " % [stats.lineages, stats.founders]
@@ -1094,7 +1277,12 @@ func hud_text() -> String:
 		t += "[color=#cbf]" + d + "[/color]\n"
 	if garden and stats.cells == 0:
 		t += "[color=#f9c]Nothing alive here. Keep creatures at the reef (K) to release them.[/color]\n"
-	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % ["" if garden else ", N new run\nShift+N today's expedition (the same reef for everyone today)", "\nL environment levers" if garden else ""]
+	if arch and stats.cells == 0:
+		if campaign and campaign.state.kept.is_empty():
+			t += "[color=#f9c]Nothing alive here. Keep a creature at the reef (K) and it lands on the Lagoon.[/color]\n"
+		elif sim.focus() > 0:
+			t += "[color=#f9c]Nothing here yet: spores have to drift in from another island (stronger currents, L, carry more).[/color]\n"
+	t += "\n[color=#789]Tab: switch scale, J codex\nright-drag orbit, shift/middle-drag pan, wheel zoom\nleft-click a body, F fly to it, B biggest, Esc clear\nG next creature (gold ring), K keep the selected body%s\nS smooth skins on every body\nT fast-forward 100 days (Shift+T 500) with a report%s\nO auto-orbit, C lineage colours, space pause, 1-5 speed[/color]" % [", N new archipelago" if arch else ("" if garden else ", N new run\nShift+N today's expedition (the same reef for everyone today)"), "\nL environment levers" if garden else ("\nI next island, L currents" if arch else "")]
 	return t
 
 ## Selected body: its make-up layer by layer (rock at the bottom) and its genes' switches.
